@@ -1,7 +1,7 @@
 import { useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
-import { Download, Play, Pause, BarChart3 } from "lucide-react"
+import { Download, Play, Pause, BarChart3, FileJson, Activity } from "lucide-react"
 import { formatTime } from "@/lib/utils"
 
 interface Props {
@@ -14,13 +14,22 @@ interface Props {
   onPlayingChange: (p: boolean) => void
   vcMetricsLoading?: boolean
   vcMetricsReady?: boolean
+  canTriggerVcMetrics?: boolean
+  onTriggerVcMetrics?: () => void
   onShowVcMetrics?: () => void
+  vcQualityLoading?: boolean
+  vcQualityReady?: boolean
+  canTriggerVcQuality?: boolean
+  onTriggerVcQuality?: () => void
+  onShowVcQuality?: () => void
+  onDownloadVcQuality?: () => void
 }
 
 export function DownloadBar({
   userWavUrl, personaplexWavUrl, mergedWavUrl, originalUserWavUrl,
   onDownloadTranscript, onPlayTimeChange, onPlayingChange,
-  vcMetricsLoading, vcMetricsReady, onShowVcMetrics,
+  vcMetricsLoading, vcMetricsReady, canTriggerVcMetrics, onTriggerVcMetrics, onShowVcMetrics,
+  vcQualityLoading, vcQualityReady, canTriggerVcQuality, onTriggerVcQuality, onShowVcQuality, onDownloadVcQuality,
 }: Props) {
   const [playing, setPlaying] = useState(false)
   const [playTime, setPlayTime] = useState(0)
@@ -69,9 +78,34 @@ export function DownloadBar({
               <Spinner className="size-3" /> Analyzing voice…
             </span>
           )}
+          {!vcMetricsLoading && !vcMetricsReady && canTriggerVcMetrics && onTriggerVcMetrics && (
+            <Button variant="outline" size="xs" onClick={onTriggerVcMetrics} className="border-purple-500/50 text-purple-300 hover:bg-purple-500/10">
+              <BarChart3 /> Analyze voice change
+            </Button>
+          )}
           {vcMetricsReady && !vcMetricsLoading && (
             <Button variant="outline" size="xs" onClick={onShowVcMetrics} className="border-purple-500/50 text-purple-300 hover:bg-purple-500/10">
               <BarChart3 /> Voice change metrics
+            </Button>
+          )}
+          {vcQualityLoading && (
+            <span className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+              <Spinner className="size-3" /> Scoring VC quality…
+            </span>
+          )}
+          {!vcQualityLoading && !vcQualityReady && canTriggerVcQuality && onTriggerVcQuality && (
+            <Button variant="outline" size="xs" onClick={onTriggerVcQuality} className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10">
+              <Activity /> Analyze VC quality
+            </Button>
+          )}
+          {vcQualityReady && !vcQualityLoading && onShowVcQuality && (
+            <Button variant="outline" size="xs" onClick={onShowVcQuality} className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10">
+              <Activity /> VC quality
+            </Button>
+          )}
+          {vcQualityReady && !vcQualityLoading && onDownloadVcQuality && (
+            <Button variant="outline" size="xs" onClick={onDownloadVcQuality} className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10">
+              <FileJson /> VC quality (JSON)
             </Button>
           )}
           <Button variant="outline" size="xs" onClick={onDownloadTranscript}>

@@ -13,7 +13,7 @@ import shutil
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -30,6 +30,12 @@ STATIC_PATH = Path(os.environ.get("FRONTEND_PATH", _default_static))
 SEED_VC_DIR = REPO_ROOT / "seed-vc"
 INFERENCE_SCRIPT = SEED_VC_DIR / "inference.py"
 RECORDINGS_DIR = REPO_ROOT / "recordings"
+# vc_quality is its own uv project under services/vc_quality (own venv with
+# Whisper + WavLM + DNSMOS + UTMOS). Override with VC_QUAL_DIR. We subprocess
+# it so its heavy models don't load into app-api's GPU (which already holds
+# PersonaPlex weights).
+VC_QUAL_DIR = Path(os.environ.get("VC_QUAL_DIR", REPO_ROOT / "services" / "vc_quality"))
+VC_QUAL_SCRIPT = VC_QUAL_DIR / "vc_quality.py"
 
 ALLOWED_EXTENSIONS = {"wav", "mp3", "flac", "m4a", "ogg"}
 UPLOAD_FOLDER = tempfile.gettempdir()
@@ -366,6 +372,107 @@ def create_app():
             logger.error(f"Error during metrics comparison: {str(e)}")
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+    @app.post("/api/vc-quality")
+    async def vc_quality(
+        source_audio: UploadFile = File(...),
+        target_audio: UploadFile = File(...),
+        converted_audio: UploadFile = File(...),
+        source_transcript: str = Form(None),
+        segment_mode: str = Form(None),
+    ):
+        """Post-hoc VC-quality eval for one conversation: WER/CER vs source
+        transcript, SECS vs target, F0 PCC/RMSE vs target, DNSMOS+UTMOS
+        naturalness. Optionally per-segment scoring + anomaly flagging when
+        segment_mode is 'fixed' | 'word' | 'vad'. Returns the evaluate_conversion
+        row as JSON."""
+        if not VC_QUAL_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"vc_quality not installed at {VC_QUAL_DIR}. "
+                    f"Set VC_QUAL_DIR or place the vc_qual project at "
+                    f"$WORKSPACE/vc_qual."
+                ),
+            )
+        if segment_mode not in (None, "", "fixed", "word", "vad"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"segment_mode must be one of fixed|word|vad (got {segment_mode!r})",
+            )
+
+        temp_dir = tempfile.mkdtemp(prefix="vcq_")
+        try:
+            paths = {}
+            for key, upload in (("source", source_audio),
+                                ("target", target_audio),
+                                ("converted", converted_audio)):
+                if not upload.filename or not allowed_file(upload.filename):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid {key} audio file",
+                    )
+                p = os.path.join(temp_dir, f"{key}.wav")
+                with open(p, "wb") as f:
+                    f.write(await upload.read())
+                paths[key] = p
+
+            cmd = [
+                "uv", "run", "--project", str(VC_QUAL_DIR),
+                "python", str(VC_QUAL_SCRIPT),
+                "one",
+                "--converted", paths["converted"],
+                "--target", paths["target"],
+                "--source", paths["source"],
+            ]
+            if source_transcript:
+                cmd += ["--source-transcript", source_transcript]
+            if segment_mode:
+                cmd += ["--segment-mode", segment_mode]
+
+            logger.info(f"vc-quality: running {' '.join(cmd[:6])} ...")
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=600)
+            if proc.returncode != 0:
+                logger.error(
+                    f"vc_quality subprocess failed (rc={proc.returncode}): "
+                    f"{proc.stderr[-2000:]}"
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"vc_quality failed: {proc.stderr.strip()[-500:]}",
+                )
+
+            import json as _json
+            stdout = proc.stdout.strip()
+            # vc_quality prints a single JSON object (the row); some lazy-load
+            # warnings may go to stderr but stdout is clean JSON.
+            try:
+                row = _json.loads(stdout)
+            except _json.JSONDecodeError:
+                # If anything leaked onto stdout, recover by parsing the last
+                # JSON object via brace-balance.
+                start = stdout.find("{")
+                if start < 0:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="vc_quality produced no JSON on stdout",
+                    )
+                row = _json.loads(stdout[start:])
+            return JSONResponse(content=row)
+
+        except HTTPException:
+            raise
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail="vc_quality timed out (>600s)",
+            )
+        except Exception as e:
+            logger.error(f"vc-quality endpoint error: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     @app.get("/recordings/{filename}")
     async def serve_recording(filename: str):

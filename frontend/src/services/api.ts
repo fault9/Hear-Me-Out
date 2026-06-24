@@ -83,3 +83,67 @@ export async function compareMetricsData(source: Blob, target: Blob): Promise<Me
   if (!resp.ok) throw new Error(await resp.text())
   return resp.json()
 }
+
+// VC-quality eval: WER/CER vs source transcript, SECS vs target, F0 PCC/RMSE
+// vs target, DNSMOS+UTMOS naturalness. Optionally per-segment scoring with
+// anomaly flagging when segmentMode is "fixed" | "word" | "vad".
+export interface VcQualitySegment {
+  start: number
+  end: number
+  secs?: number | null
+  wer?: number | null
+  utmos?: number | null
+  sig?: number | null
+  bak?: number | null
+  ovrl?: number | null
+  p808_mos?: number | null
+  f0_pcc?: number | null
+  f0_rmse?: number | null
+  vc?: string
+  ref?: string
+}
+
+export interface VcQualityAnomaly {
+  start: number
+  end: number
+  metric: string
+  score: number
+  z: number
+}
+
+export interface VcQualityResult {
+  converted_path: string
+  target_path: string
+  source_path: string | null
+  wer: number | null
+  cer: number | null
+  secs: number | null
+  f0_pcc: number | null
+  f0_rmse: number | null
+  sig: number | null
+  bak: number | null
+  ovrl: number | null
+  p808_mos: number | null
+  utmos: number | null
+  vc_transcript?: string
+  ref_transcript?: string | null
+  ref_kind?: string | null
+  segment_mode?: string
+  segments?: VcQualitySegment[]
+  anomalies?: VcQualityAnomaly[]
+}
+
+export async function vcQuality(
+  source: Blob, target: Blob, converted: Blob,
+  opts?: { sourceTranscript?: string; segmentMode?: "fixed" | "word" | "vad" }
+): Promise<VcQualityResult> {
+  const fd = new FormData()
+  fd.append("source_audio", source, "source.wav")
+  fd.append("target_audio", target, "target.wav")
+  fd.append("converted_audio", converted, "converted.wav")
+  if (opts?.sourceTranscript) fd.append("source_transcript", opts.sourceTranscript)
+  if (opts?.segmentMode) fd.append("segment_mode", opts.segmentMode)
+  const resp = await fetch(`${API_BASE}/api/vc-quality`, { method: "POST", body: fd })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  return resp.json()
+}

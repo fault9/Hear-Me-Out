@@ -8,6 +8,8 @@ import { MessageFeed } from "@/components/conversation/MessageFeed"
 import { DownloadBar } from "@/components/conversation/DownloadBar"
 import { DownloadBarSkeleton } from "@/components/conversation/DownloadBarSkeleton"
 import { VoiceMetricsModal } from "@/components/conversation/VoiceMetricsModal"
+import { VcQualityModal } from "@/components/conversation/VcQualityModal"
+import { VC_QUALITY_DEMO, VC_QUALITY_DEMO_DIARIZED } from "@/lib/vcQualityMock"
 import type { useWebSocket } from "@/hooks/useWebSocket"
 import type { useRecorder } from "@/hooks/useRecorder"
 
@@ -49,11 +51,23 @@ export function ConversationView({ ws, recorder }: Props) {
   const {
     textPrompt, setTextPrompt,
     diarized, userWavUrl, personaplexWavUrl, mergedWavUrl,
-    originalUserWavUrl, vcMetrics, vcMetricsLoading, processing,
+    originalUserWavUrl, vcMetrics, vcMetricsLoading,
+    vcQuality: vcQualityData, vcQualityLoading, downloadVcQuality,
+    triggerVcMetrics, triggerVcQuality,
+    canTriggerVcMetrics, canTriggerVcQuality,
+    processing,
     startConversation, stopConversation, downloadTranscript,
   } = useConversation(ws, recorder, vcPipeline)
 
   const [showVcMetrics, setShowVcMetrics] = useState(false)
+  const [showVcQuality, setShowVcQuality] = useState(false)
+
+  // Dev affordance: open ?demo=vc-quality in the URL to preview the overlay
+  // with realistic mock data (no backend / no conversation needed).
+  const demoVcQuality =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("demo") === "vc-quality"
+  useEffect(() => { if (demoVcQuality) setShowVcQuality(true) }, [demoVcQuality])
   const [playing, setPlaying] = useState(false)
   const [playTime, setPlayTime] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -85,7 +99,15 @@ export function ConversationView({ ws, recorder }: Props) {
           onPlayingChange={setPlaying}
           vcMetricsLoading={vcMetricsLoading}
           vcMetricsReady={!!vcMetrics}
+          canTriggerVcMetrics={canTriggerVcMetrics}
+          onTriggerVcMetrics={triggerVcMetrics}
           onShowVcMetrics={() => setShowVcMetrics(true)}
+          vcQualityLoading={vcQualityLoading}
+          vcQualityReady={!!vcQualityData}
+          canTriggerVcQuality={canTriggerVcQuality}
+          onTriggerVcQuality={triggerVcQuality}
+          onShowVcQuality={() => setShowVcQuality(true)}
+          onDownloadVcQuality={downloadVcQuality}
         />
       )}
 
@@ -152,6 +174,13 @@ export function ConversationView({ ws, recorder }: Props) {
 
       {showVcMetrics && vcMetrics && (
         <VoiceMetricsModal data={vcMetrics} onClose={() => setShowVcMetrics(false)} />
+      )}
+      {showVcQuality && (vcQualityData || demoVcQuality) && (
+        <VcQualityModal
+          data={vcQualityData || VC_QUALITY_DEMO}
+          diarized={vcQualityData ? diarized : VC_QUALITY_DEMO_DIARIZED}
+          onClose={() => setShowVcQuality(false)}
+        />
       )}
     </div>
   )

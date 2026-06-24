@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import { webmToWavBlob } from "@/lib/audio"
-import { transcribeRecording, transcribeWavBlob, compareMetricsData, type MetricsResult } from "@/services/api"
+import { transcribeRecording, transcribeWavBlob, compareMetricsData, vcQuality, type MetricsResult, type VcQualityResult } from "@/services/api"
 import { mergeAudioTracks } from "@/services/audioMerge"
 import { formatTime } from "@/lib/utils"
 import type { useWebSocket } from "@/hooks/useWebSocket"
@@ -31,10 +31,14 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
   const [originalUserWavUrl, setOriginalUserWavUrl] = useState<string | null>(null)
   const [vcMetrics, setVcMetrics] = useState<MetricsResult | null>(null)
   const [vcMetricsLoading, setVcMetricsLoading] = useState(false)
+  // VC-quality (WER/SECS/UTMOS/DNSMOS/F0) — separate from vcMetrics above
+  // (which is LLM-response-comparison). vcQuality is the audio-side quality.
+  const [vcQualityData, setVcQualityData] = useState<VcQualityResult | null>(null)
+  const [vcQualityLoading, setVcQualityLoading] = useState(false)
   // True between conversation end and the results being ready (drives the shimmer).
   const [processing, setProcessing] = useState(false)
 
-  const { vcEnabled, vcTargetId, vcStreaming, startMic, beginSending, stopVCStream: vcStop, getOriginalUserWav } = vcPipeline
+  const { vcEnabled, vcTargetId, vcTargetUrl, vcStreaming, startMic, beginSending, stopVCStream: vcStop, getOriginalUserWav } = vcPipeline
   const { isRecording, start: startRecorder } = recorder
   const sendingBegun = useRef(false)
 
@@ -52,6 +56,8 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     setOriginalUserWavUrl(null)
     setVcMetrics(null)
     setVcMetricsLoading(false)
+    setVcQualityData(null)
+    setVcQualityLoading(false)
     setProcessing(false)
     if (vcEnabled && vcTargetId) {
       // VC mode: acquire mic first to learn the sample rate, then connect to the
@@ -119,19 +125,15 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         }
         setDiarized([...vcTurns, ...pplxTurns].sort((a, b) => a.start - b.start))
 
-        // Voice-change metrics AFTER diarization finishes, so its GPU models
-        // never run concurrently with the transcription above (the shared GPU
-        // also holds PersonaPlex 7B — concurrency caused CUDA OOM).
-        if (originalWav) {
-          setVcMetricsLoading(true)
-          compareMetricsData(originalWav, vcWav)
-            .then(setVcMetrics)
-            .catch(() => setVcMetrics(null))
-            .finally(() => setVcMetricsLoading(false))
-        }
+        // Voice-change metrics and VC-quality eval are now MANUAL — triggered
+        // by the matching DownloadBar button instead of auto-firing here.
+        // (Audiobox aesthetics inside compareMetricsData and the WavLM/UTMOS
+        // models inside vcQuality are heavy + sometimes flaky, so making them
+        // opt-in keeps the post-conversation path predictable.) The trigger
+        // functions below pull the WAV bytes back from blob URLs on demand.
       })()
     }
-  }, [recorder, ws, vcStreaming, vcStop, getOriginalUserWav])
+  }, [recorder, ws, vcStreaming, vcStop, getOriginalUserWav, vcTargetUrl])
 
   // VC mode: once the proxy relays PersonaPlex's handshake, open the gate so mic
   // PCM starts flowing. (Mic was already acquired in startConversation.)
@@ -220,6 +222,54 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     a.click()
   }, [diarized])
 
+  const downloadVcQuality = useCallback(() => {
+    if (!vcQualityData) return
+    const blob = new Blob([JSON.stringify(vcQualityData, null, 2)],
+                          { type: "application/json" })
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(blob)
+    a.download = `vc_quality_${new Date().toISOString().replace(/[:.]/g, "-")}.json`
+    a.click()
+  }, [vcQualityData])
+
+  // Manual triggers. The post-conversation flow stashes the original/converted
+  // user voice (and target file) as blob URLs; these handlers pull the bytes
+  // back on demand and run the heavy backend analysis only when asked.
+  const triggerVcMetrics = useCallback(async () => {
+    if (!originalUserWavUrl || !userWavUrl) return
+    if (vcMetrics || vcMetricsLoading) return
+    setVcMetricsLoading(true)
+    try {
+      const [orig, conv] = await Promise.all([
+        fetch(originalUserWavUrl).then(r => r.blob()),
+        fetch(userWavUrl).then(r => r.blob()),
+      ])
+      setVcMetrics(await compareMetricsData(orig, conv))
+    } catch {
+      setVcMetrics(null)
+    } finally {
+      setVcMetricsLoading(false)
+    }
+  }, [originalUserWavUrl, userWavUrl, vcMetrics, vcMetricsLoading])
+
+  const triggerVcQuality = useCallback(async () => {
+    if (!originalUserWavUrl || !userWavUrl || !vcTargetUrl) return
+    if (vcQualityData || vcQualityLoading) return
+    setVcQualityLoading(true)
+    try {
+      const [orig, conv, tgt] = await Promise.all([
+        fetch(originalUserWavUrl).then(r => r.blob()),
+        fetch(userWavUrl).then(r => r.blob()),
+        fetch(vcTargetUrl).then(r => r.blob()),
+      ])
+      setVcQualityData(await vcQuality(orig, tgt, conv, { segmentMode: "fixed" }))
+    } catch {
+      setVcQualityData(null)
+    } finally {
+      setVcQualityLoading(false)
+    }
+  }, [originalUserWavUrl, userWavUrl, vcTargetUrl, vcQualityData, vcQualityLoading])
+
   return {
     textPrompt,
     setTextPrompt,
@@ -230,6 +280,13 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     originalUserWavUrl,
     vcMetrics,
     vcMetricsLoading,
+    vcQuality: vcQualityData,
+    vcQualityLoading,
+    downloadVcQuality,
+    triggerVcMetrics,
+    triggerVcQuality,
+    canTriggerVcMetrics: !!(originalUserWavUrl && userWavUrl),
+    canTriggerVcQuality: !!(originalUserWavUrl && userWavUrl && vcTargetUrl),
     processing,
     startConversation,
     stopConversation,

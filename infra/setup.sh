@@ -162,6 +162,7 @@ phase_sync() {
   echo "uv sync: app_api ..."      ; ( cd "$SERVICES/app_api"     && uv sync )
   echo "uv sync: meanvc ..."       ; ( cd "$SERVICES/meanvc"      && uv sync )
   echo "uv sync: personaplex (pulls moshi from git) ..." ; ( cd "$SERVICES/personaplex" && uv sync )
+  echo "uv sync: vc_quality (post-hoc eval) ..." ; ( cd "$SERVICES/vc_quality" && uv sync )
   if $INSTALL_XVC; then
     echo "uv sync: xvc (py3.10, torch 2.5.1) ..." ; ( cd "$SERVICES/xvc" && uv sync )
   fi
