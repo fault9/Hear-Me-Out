@@ -413,18 +413,35 @@ def create_app():
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
     @app.post("/api/vc-quality")
+    # Keys clients can pass to skip a heavy metric block. Names match the
+    # vc_quality.py --no-* flags (mapped below).
+    _SKIPPABLE_METRICS = {
+        "intelligibility": "--no-intelligibility",
+        "secs": "--no-speaker-similarity",
+        "naturalness": "--no-naturalness",
+        "prosody": "--no-prosody",
+    }
+
     async def vc_quality(
         source_audio: UploadFile = File(...),
         target_audio: UploadFile = File(...),
         converted_audio: UploadFile = File(...),
         source_transcript: str = Form(None),
         segment_mode: str = Form(None),
+        segment_win: float = Form(5.0),
+        segment_hop: float = Form(5.0),
+        skip_metrics: str = Form(""),
     ):
         """Post-hoc VC-quality eval for one conversation: WER/CER vs source
         transcript, SECS vs target, F0 PCC/RMSE vs target, DNSMOS+UTMOS
         naturalness. Optionally per-segment scoring + anomaly flagging when
-        segment_mode is 'fixed' | 'word' | 'vad'. Returns the evaluate_conversion
-        row as JSON."""
+        segment_mode is 'fixed' | 'word' | 'vad'. Pass skip_metrics as a
+        comma-separated list of intelligibility|secs|naturalness|prosody to
+        skip those blocks (useful for fast CPU runs — SECS via WavLM-large
+        is the heaviest). segment_win/segment_hop tune fixed-window resolution;
+        defaults of 5.0/5.0 give ~5x fewer windows than the 2.0/1.0 baseline
+        the CLI uses, which matters a lot on CPU. Returns the
+        evaluate_conversion row as JSON."""
         if not VC_QUAL_SCRIPT.exists():
             raise HTTPException(
                 status_code=503,
@@ -468,6 +485,23 @@ def create_app():
                 cmd += ["--source-transcript", source_transcript]
             if segment_mode:
                 cmd += ["--segment-mode", segment_mode]
+                cmd += ["--segment-win", str(segment_win)]
+                cmd += ["--segment-hop", str(segment_hop)]
+
+            skip_list = [
+                s.strip().lower() for s in (skip_metrics or "").split(",") if s.strip()
+            ]
+            unknown = [s for s in skip_list if s not in _SKIPPABLE_METRICS]
+            if unknown:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"unknown skip_metrics: {unknown}. "
+                        f"Allowed: {sorted(_SKIPPABLE_METRICS)}"
+                    ),
+                )
+            for s in skip_list:
+                cmd.append(_SKIPPABLE_METRICS[s])
 
             logger.info(f"vc-quality: running {' '.join(cmd[:6])} ...")
             proc = subprocess.run(cmd, capture_output=True, text=True,

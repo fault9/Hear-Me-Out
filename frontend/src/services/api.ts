@@ -151,9 +151,22 @@ export interface VcQualityResult {
   anomalies?: VcQualityAnomaly[]
 }
 
+// Names match the backend's _SKIPPABLE_METRICS keys. "secs" is the biggest
+// CPU win to skip (WavLM-large forward pass per segment).
+export type VcQualityMetric = "intelligibility" | "secs" | "naturalness" | "prosody"
+
 export async function vcQuality(
   source: Blob, target: Blob, converted: Blob,
-  opts?: { sourceTranscript?: string; segmentMode?: "fixed" | "word" | "vad" }
+  opts?: {
+    sourceTranscript?: string
+    segmentMode?: "fixed" | "word" | "vad"
+    // Fixed-window resolution. Default is 5s window / 5s hop (non-overlapping)
+    // which gives ~5x fewer WavLM forward passes than the CLI's 2s/1s default —
+    // critical on CPU where SECS dominates wall time.
+    segmentWin?: number
+    segmentHop?: number
+    skipMetrics?: VcQualityMetric[]
+  },
 ): Promise<VcQualityResult> {
   const fd = new FormData()
   fd.append("source_audio", source, "source.wav")
@@ -161,6 +174,9 @@ export async function vcQuality(
   fd.append("converted_audio", converted, "converted.wav")
   if (opts?.sourceTranscript) fd.append("source_transcript", opts.sourceTranscript)
   if (opts?.segmentMode) fd.append("segment_mode", opts.segmentMode)
+  if (opts?.segmentWin != null) fd.append("segment_win", String(opts.segmentWin))
+  if (opts?.segmentHop != null) fd.append("segment_hop", String(opts.segmentHop))
+  if (opts?.skipMetrics?.length) fd.append("skip_metrics", opts.skipMetrics.join(","))
   const resp = await fetch(`${API_BASE}/api/vc-quality`, { method: "POST", body: fd })
   if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
   return resp.json()

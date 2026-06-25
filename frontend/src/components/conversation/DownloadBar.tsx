@@ -1,8 +1,20 @@
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
-import { Download, Play, Pause, BarChart3, FileJson, Activity } from "lucide-react"
+import { Download, Play, Pause, BarChart3, FileJson, Activity, ChevronDown } from "lucide-react"
 import { formatTime } from "@/lib/utils"
+import type { VcQualityMetric } from "@/services/api"
+
+// Metric checkboxes in the "Analyze VC quality" dropdown. SECS is the
+// heaviest (WavLM-large forward pass per segment); skipping it is the single
+// biggest CPU-time win on long conversations, so we make the speed cost
+// visible in the label.
+const METRIC_CHOICES: { key: VcQualityMetric; label: string; hint: string }[] = [
+  { key: "intelligibility", label: "Intelligibility (WER, CER)",            hint: "Whisper" },
+  { key: "secs",            label: "Speaker similarity (SECS)",             hint: "WavLM-large — slow" },
+  { key: "naturalness",     label: "Naturalness (UTMOS, DNSMOS)",           hint: "two MOS predictors" },
+  { key: "prosody",         label: "Prosody (F0 PCC, F0 RMSE)",             hint: "librosa pyin" },
+]
 
 interface Props {
   userWavUrl: string | null
@@ -20,7 +32,7 @@ interface Props {
   vcQualityLoading?: boolean
   vcQualityReady?: boolean
   canTriggerVcQuality?: boolean
-  onTriggerVcQuality?: () => void
+  onTriggerVcQuality?: (skipMetrics: VcQualityMetric[]) => void
   onShowVcQuality?: () => void
   onDownloadVcQuality?: () => void
 }
@@ -35,6 +47,38 @@ export function DownloadBar({
   const [playTime, setPlayTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  // Dropdown state for the "Analyze VC quality" button.
+  // Default: SECS is OFF — it's the WavLM forward-pass-per-segment hog that
+  // was timing out on long conversations. Opt back in when you want it.
+  const [vcQualityMenuOpen, setVcQualityMenuOpen] = useState(false)
+  const [enabledMetrics, setEnabledMetrics] = useState<Record<VcQualityMetric, boolean>>({
+    intelligibility: true,
+    secs: false,
+    naturalness: true,
+    prosody: true,
+  })
+  const vcQualityMenuRef = useRef<HTMLDivElement | null>(null)
+
+  // Close the dropdown when clicking outside.
+  useEffect(() => {
+    if (!vcQualityMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (vcQualityMenuRef.current && !vcQualityMenuRef.current.contains(e.target as Node)) {
+        setVcQualityMenuOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", onDown)
+    return () => document.removeEventListener("mousedown", onDown)
+  }, [vcQualityMenuOpen])
+
+  const handleRunVcQuality = () => {
+    const skip = (Object.entries(enabledMetrics) as [VcQualityMetric, boolean][])
+      .filter(([, on]) => !on)
+      .map(([k]) => k)
+    setVcQualityMenuOpen(false)
+    onTriggerVcQuality?.(skip)
+  }
 
   const updatePlaying = (p: boolean) => { setPlaying(p); onPlayingChange(p) }
   const updatePlayTime = (t: number) => { setPlayTime(t); onPlayTimeChange(t) }
@@ -94,9 +138,69 @@ export function DownloadBar({
             </span>
           )}
           {!vcQualityLoading && !vcQualityReady && canTriggerVcQuality && onTriggerVcQuality && (
-            <Button variant="outline" size="xs" onClick={onTriggerVcQuality} className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10">
-              <Activity /> Analyze VC quality
-            </Button>
+            <div ref={vcQualityMenuRef} className="relative">
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => setVcQualityMenuOpen((v) => !v)}
+                aria-haspopup="true"
+                aria-expanded={vcQualityMenuOpen}
+                className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10"
+              >
+                <Activity /> Analyze VC quality <ChevronDown className="ml-0.5 size-3" />
+              </Button>
+              {vcQualityMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 z-30 mt-1 w-72 rounded-lg border bg-card shadow-xl p-3 space-y-2"
+                >
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Metrics to compute
+                  </div>
+                  <div className="space-y-1.5">
+                    {METRIC_CHOICES.map((m) => (
+                      <label
+                        key={m.key}
+                        className="flex items-start gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 size-3.5 accent-emerald-500"
+                          checked={enabledMetrics[m.key]}
+                          onChange={() =>
+                            setEnabledMetrics((prev) => ({ ...prev, [m.key]: !prev[m.key] }))
+                          }
+                        />
+                        <span className="flex-1 leading-tight">
+                          <span className="font-medium">{m.label}</span>
+                          <span className="block text-[10px] text-muted-foreground">{m.hint}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      className="text-[10px] text-muted-foreground hover:text-foreground"
+                      onClick={() =>
+                        setEnabledMetrics({
+                          intelligibility: true, secs: true, naturalness: true, prosody: true,
+                        })
+                      }
+                    >
+                      Enable all
+                    </button>
+                    <Button
+                      variant="default"
+                      size="xs"
+                      onClick={handleRunVcQuality}
+                      className="bg-emerald-600 text-white hover:bg-emerald-500"
+                    >
+                      Run analysis
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           {vcQualityReady && !vcQualityLoading && onShowVcQuality && (
             <Button variant="outline" size="xs" onClick={onShowVcQuality} className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10">

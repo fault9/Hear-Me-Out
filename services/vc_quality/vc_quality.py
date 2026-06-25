@@ -927,6 +927,9 @@ def _merge_segment_scores(
 
 def evaluate_conversion(converted_path, target_path,
                         source_transcript=None, source_path=None,
+                        compute_intelligibility=True,
+                        compute_speaker_similarity=True,
+                        compute_prosody=True,
                         compute_naturalness=True,
                         sv_ckpt_path=None, sv_root=None,
                         metadata=None,
@@ -975,20 +978,23 @@ def evaluate_conversion(converted_path, target_path,
         "source_path": source_path,
     }
 
-    intel = _intelligibility_eval(conv, source_transcript, src, segments)
-    sim = _speaker_similarity_eval(conv, tgt, sv_ckpt_path, sv_root, segments)
-    pros = _prosody_eval(conv, tgt, segments)
+    # Each metric block is opt-in. Skipping the heavy ones (especially SECS
+    # via WavLM-large) is the right move when running on CPU against long
+    # conversations — otherwise the per-segment forward pass dominates wall time.
+    wer_segs = secs_segs = f0_segs = nat_segs = None
 
-    # Pull segment-specific keys out so we can fold them at the end.
-    wer_segs = intel.pop("wer_segments", None)
-    secs_segs = sim.pop("secs_segments", None)
-    f0_segs = pros.pop("f0_segments", None)
-    nat_segs = None
-
-    row.update(intel)
-    row.update(sim)
-    row.update(pros)
-
+    if compute_intelligibility:
+        intel = _intelligibility_eval(conv, source_transcript, src, segments)
+        wer_segs = intel.pop("wer_segments", None)
+        row.update(intel)
+    if compute_speaker_similarity:
+        sim = _speaker_similarity_eval(conv, tgt, sv_ckpt_path, sv_root, segments)
+        secs_segs = sim.pop("secs_segments", None)
+        row.update(sim)
+    if compute_prosody:
+        pros = _prosody_eval(conv, tgt, segments)
+        f0_segs = pros.pop("f0_segments", None)
+        row.update(pros)
     if compute_naturalness:
         nat = _naturalness_eval(conv, segments)
         nat_segs = nat.pop("naturalness_segments", None)
@@ -1062,7 +1068,14 @@ if __name__ == "__main__":
     one.add_argument("--target", required=True)
     one.add_argument("--source")
     one.add_argument("--source-transcript")
-    one.add_argument("--no-naturalness", action="store_true")
+    one.add_argument("--no-intelligibility", action="store_true",
+                     help="skip WER/CER (faster Whisper-free run)")
+    one.add_argument("--no-speaker-similarity", action="store_true",
+                     help="skip SECS (skips the WavLM-large pass — biggest CPU win)")
+    one.add_argument("--no-naturalness", action="store_true",
+                     help="skip DNSMOS + UTMOS")
+    one.add_argument("--no-prosody", action="store_true",
+                     help="skip F0 PCC/RMSE")
     one.add_argument("--segment-mode", choices=["fixed", "word", "vad"],
                      default=None,
                      help="enable per-segment scoring + anomaly flagging")
@@ -1084,6 +1097,9 @@ if __name__ == "__main__":
             target_path=args.target,
             source_transcript=args.source_transcript,
             source_path=args.source,
+            compute_intelligibility=not args.no_intelligibility,
+            compute_speaker_similarity=not args.no_speaker_similarity,
+            compute_prosody=not args.no_prosody,
             compute_naturalness=not args.no_naturalness,
             segment_mode=args.segment_mode,
             segment_win=args.segment_win,

@@ -8,6 +8,7 @@ import {
   type MetricsResult,
   type TranscriptionResult,
   type TranscriptionSegment,
+  type VcQualityMetric,
   type VcQualityResult,
 } from "@/services/api"
 import { mergeAudioTracks } from "@/services/audioMerge"
@@ -410,7 +411,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     }
   }, [originalUserWavUrl, userWavUrl, vcMetrics, vcMetricsLoading, voiceAnalysisMode])
 
-  const triggerVcQuality = useCallback(async () => {
+  const triggerVcQuality = useCallback(async (skipMetrics?: VcQualityMetric[]) => {
     if (voiceAnalysisMode === "off") return
     if (!originalUserWavUrl || !userWavUrl || !vcTargetUrl) return
     if (vcQualityData || vcQualityLoading) return
@@ -422,7 +423,15 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         fetch(userWavUrl).then(r => r.blob()),
         fetch(vcTargetUrl).then(r => r.blob()),
       ])
-      const data = await vcQuality(orig, tgt, conv, { segmentMode: "fixed" })
+      const data = await vcQuality(orig, tgt, conv, {
+        segmentMode: "fixed",
+        // 5s/5s windows give ~5x fewer WavLM forward passes than the 2s/1s
+        // CLI default — essential on CPU. Coarser anomaly resolution; still
+        // localizes drift to a 5-second region.
+        segmentWin: 5,
+        segmentHop: 5,
+        skipMetrics,
+      })
       if (runId === conversationRunId.current) setVcQualityData(data)
     } catch {
       if (runId === conversationRunId.current) setVcQualityData(null)
