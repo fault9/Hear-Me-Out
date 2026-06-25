@@ -83,6 +83,37 @@ cd <workspace> && bash Hear-Me-Out/infra/run_all.sh
 
 When `VC_ENGINE=xvc`, `run_all.sh` instead sets `XVC_DIR`, `XVC_CONFIG`, `XVC_CKPT`, and the streaming window `XVC_CHUNK_MS` / `XVC_CURRENT_MS` / `XVC_SMOOTH_MS` / `XVC_FUTURE_MS` (default `2400/120/20/100` ms), and runs `services/xvc/server.py` via the `services/xvc` uv env.
 
+Frontend post-VC voice analysis is controlled independently from PersonaPlex
+session reset:
+
+| Mode | Effect |
+|---|---|
+| `off` | Do not show or run post-VC voice metrics automatically. |
+| `manual` | Show analysis buttons after results are saved; do not auto-run them. This is the default. |
+| `after_vc` | Legacy auto-run of voice-change metrics after a VC run; VC-quality remains available manually. |
+
+Set the mode at build/runtime with Vite env, or per browser session with a query
+parameter:
+
+```bash
+# Default/recommended: fresh sessions, saved results, manual analysis buttons
+VITE_VOICE_ANALYSIS_MODE=manual npm run build
+
+# No post-VC analysis UI or background analysis
+VITE_VOICE_ANALYSIS_MODE=off npm run build
+
+# Backward-compatible legacy auto voice-change metrics after VC
+VITE_VOICE_ANALYSIS_MODE=after_vc npm run build
+```
+
+Per session:
+
+```text
+https://<host>/?voice_analysis=off
+https://<host>/?voice_analysis=manual
+https://<host>/?voice_analysis=after_vc
+```
+
 ## Deploying a change
 
 Edit locally, commit, push — then on the server:
@@ -97,4 +128,3 @@ bash infra/build-frontend.sh                 # only if the frontend changed
 A frontend-only change needs a rebuild + hard refresh, no backend restart. A backend change
 (`services/app_api/app.py`, `services/meanvc/server.py`, `services/xvc/server.py`,
 `services/app_api/metrics.py`) needs the service restarted.
-

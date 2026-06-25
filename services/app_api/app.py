@@ -124,17 +124,56 @@ def create_app():
             temp_path = f.name
 
         def _run(model):
-            segments_result, _ = model.transcribe(temp_path, beam_size=1, language="en")
+            # beam_size>=5 fixes greedy-decode artifacts like word-final consonant
+            # drops ("I'm" -> "I'"). VAD + word timestamps below tighten segment
+            # boundaries; they're orthogonal to decoder beam width.
+            segments_result, _ = model.transcribe(
+                temp_path,
+                beam_size=5,
+                language="en",
+                word_timestamps=True,
+                vad_filter=True,
+                vad_parameters={
+                    "min_silence_duration_ms": 500,
+                    "speech_pad_ms": 120,
+                },
+            )
             segs = []
             for s in segments_result:  # generation (and any OOM) happens here
-                if s.text.strip():
-                    segs.append(
+                text = s.text.strip()
+                if not text:
+                    continue
+
+                words = []
+                for w in getattr(s, "words", None) or []:
+                    word = getattr(w, "word", "").strip()
+                    start = getattr(w, "start", None)
+                    end = getattr(w, "end", None)
+                    if not word or start is None or end is None:
+                        continue
+                    words.append(
                         {
-                            "start": round(s.start, 2),
-                            "end": round(s.end, 2),
-                            "text": s.text.strip(),
+                            "start": round(float(start), 2),
+                            "end": round(float(end), 2),
+                            "word": word,
                         }
                     )
+
+                # faster-whisper's segment end can include a following silence
+                # region. Word timestamps give the UI tighter diarized turns.
+                start = words[0]["start"] if words else round(s.start, 2)
+                end = words[-1]["end"] if words else round(s.end, 2)
+                if end <= start:
+                    end = round(s.end, 2)
+
+                segs.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "text": text,
+                        "words": words,
+                    }
+                )
             return segs
 
         try:

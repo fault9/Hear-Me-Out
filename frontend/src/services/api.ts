@@ -1,9 +1,27 @@
 import { API_BASE } from "@/lib/config"
 import { createWavFile } from "@/lib/audio"
 
+export interface TranscriptionWord {
+  start: number
+  end: number
+  word: string
+}
+
+export interface TranscriptionSegment {
+  start: number
+  end: number
+  text: string
+  words?: TranscriptionWord[]
+}
+
+export interface TranscriptionResult {
+  text: string
+  segments: TranscriptionSegment[]
+}
+
 export async function transcribeRecording(
   chunks: Blob[]
-): Promise<{ text: string; segments: { start: number; end: number; text: string }[] }> {
+): Promise<TranscriptionResult> {
   const blob = new Blob(chunks, { type: "audio/webm" })
   const arrayBuffer = await blob.arrayBuffer()
   const ctx = new AudioContext()
@@ -23,7 +41,7 @@ export async function transcribeRecording(
 // Safer for long clips than transcribeRecording, which rebuilds the audio.
 export async function transcribeWavBlob(
   wav: Blob
-): Promise<{ text: string; segments: { start: number; end: number; text: string }[] }> {
+): Promise<TranscriptionResult> {
   const formData = new FormData()
   formData.append("audio", wav, "audio.wav")
   const resp = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: formData })

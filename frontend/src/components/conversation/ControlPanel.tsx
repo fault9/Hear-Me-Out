@@ -3,9 +3,31 @@ import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Mic, MicOff, ChevronRight, Wand2, Volume2, Pause, Headphones } from "lucide-react"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
+import { getMeanvcInfoUrl } from "@/lib/config"
 import type { useMeanVCPipeline } from "@/hooks/useMeanVCPipeline"
+
+// Both engines mount the same /api/meanvc/* routes on :5002. We query
+// /api/meanvc/info once on mount so the pipeline pill shows whichever engine
+// run_all.sh actually picked at startup. Falls back to "MeanVC" (the default
+// engine) if the server is unreachable, since that's the most common case.
+const VC_ENGINE_LABELS: Record<string, string> = { meanvc: "MeanVC", xvc: "X-VC" }
+function useVcEngineLabel(): string {
+  const [label, setLabel] = useState("MeanVC")
+  useEffect(() => {
+    const ctrl = new AbortController()
+    fetch(getMeanvcInfoUrl(), { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { engine?: string } | null) => {
+        const engine = data?.engine
+        if (engine && VC_ENGINE_LABELS[engine]) setLabel(VC_ENGINE_LABELS[engine])
+      })
+      .catch(() => { /* keep fallback */ })
+    return () => ctrl.abort()
+  }, [])
+  return label
+}
 
 type VCState = ReturnType<typeof useMeanVCPipeline>
 
@@ -72,6 +94,7 @@ export function ControlPanel({
 }: Props) {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
   const [previewPlaying, setPreviewPlaying] = useState(false)
+  const vcEngineLabel = useVcEngineLabel()
 
   const togglePreview = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -149,7 +172,7 @@ export function ControlPanel({
         {vcPipeline.vcEnabled && vcPipeline.vcTargetId && (
           <>
             <ChevronRight className="size-2.5 shrink-0 text-muted-foreground/50" />
-            <PipelinePill>MeanVC</PipelinePill>
+            <PipelinePill>{vcEngineLabel}</PipelinePill>
           </>
         )}
         <ChevronRight className="size-2.5 shrink-0 text-muted-foreground/50" />

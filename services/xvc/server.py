@@ -377,8 +377,16 @@ async def cors_middleware(request: web.Request, handler):
     return resp
 
 
+async def handle_info(_request: web.Request) -> web.Response:
+    """Lets the frontend show the correct engine label. Both engines mount the
+    same /api/meanvc/* routes, so this is the only way to tell them apart from
+    the client side."""
+    return web.json_response({"engine": "xvc"})
+
+
 def create_app() -> web.Application:
     app = web.Application(middlewares=[cors_middleware], client_max_size=10 * 1024 * 1024)
+    app.router.add_get("/api/meanvc/info", handle_info)
     app.router.add_post("/api/meanvc/load-target", handle_load_target)
     app.router.add_get("/api/meanvc/stream", handle_stream)
     app.router.add_get("/api/meanvc/chat-proxy", handle_chat_proxy)

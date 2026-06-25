@@ -1,7 +1,17 @@
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { webmToWavBlob } from "@/lib/audio"
-import { transcribeRecording, transcribeWavBlob, compareMetricsData, vcQuality, type MetricsResult, type VcQualityResult } from "@/services/api"
+import {
+  transcribeRecording,
+  transcribeWavBlob,
+  compareMetricsData,
+  vcQuality,
+  type MetricsResult,
+  type TranscriptionResult,
+  type TranscriptionSegment,
+  type VcQualityResult,
+} from "@/services/api"
 import { mergeAudioTracks } from "@/services/audioMerge"
+import { getVoiceAnalysisMode } from "@/lib/config"
 import { formatTime } from "@/lib/utils"
 import type { useWebSocket } from "@/hooks/useWebSocket"
 import type { useRecorder } from "@/hooks/useRecorder"
@@ -18,9 +28,87 @@ export interface DiarizedTurn {
   end: number
 }
 
+// Diarization timing heuristics. These tune how Whisper words are grouped into
+// turns and how PersonaPlex transcripts (which lack precise per-word timestamps)
+// are placed on the timeline. Equivalent constants live in useWebSocket.ts —
+// keep them in sync if you tweak the speech-rate estimate.
+const WORD_GAP_BREAK_SECONDS = 1.15        // word-to-word gap that starts a new turn
+const MIN_TURN_DURATION_SECONDS = 0.2      // shortest renderable turn (prevents zero-length blips)
+const MIN_PP_TURN_DURATION_SECONDS = 0.8   // shortest plausible PP utterance
+const MAX_PP_TURN_DURATION_SECONDS = 12    // cap for over-estimated PP turn length
+const PP_WORDS_PER_SECOND = 2.7            // typical PP speech rate, used to estimate turn duration
+
+function textFromWords(words: { word: string }[]) {
+  return words.map((w) => w.word).join(" ").replace(/\s+([,.!?;:])/g, "$1").trim()
+}
+
+function segmentToFallbackTurn(
+  segment: TranscriptionSegment,
+  speaker: DiarizedTurn["speaker"],
+): DiarizedTurn | null {
+  const text = segment.text.trim()
+  if (!text) return null
+  const start = Math.max(0, segment.start)
+  const end = Math.max(start + MIN_TURN_DURATION_SECONDS, segment.end)
+  return { speaker, text, start, end }
+}
+
+function transcriptionToTurns(
+  result: TranscriptionResult,
+  speaker: DiarizedTurn["speaker"],
+): DiarizedTurn[] {
+  const turns: DiarizedTurn[] = []
+  for (const segment of result.segments || []) {
+    const words = (segment.words || []).filter(
+      (w) => w.word.trim() && Number.isFinite(w.start) && Number.isFinite(w.end),
+    )
+    if (words.length === 0) {
+      const fallback = segmentToFallbackTurn(segment, speaker)
+      if (fallback) turns.push(fallback)
+      continue
+    }
+
+    let group: typeof words = []
+    const flush = () => {
+      if (group.length === 0) return
+      const start = Math.max(0, group[0].start)
+      const end = Math.max(start + MIN_TURN_DURATION_SECONDS, group[group.length - 1].end)
+      const text = textFromWords(group)
+      if (text) turns.push({ speaker, text, start, end })
+      group = []
+    }
+
+    for (const word of words) {
+      const prev = group[group.length - 1]
+      if (prev && word.start - prev.end > WORD_GAP_BREAK_SECONDS) flush()
+      group.push(word)
+    }
+    flush()
+  }
+  return turns
+}
+
+function fallbackPersonaplexTurns(transcripts: WsState["transcripts"]): DiarizedTurn[] {
+  let cursor = 0
+  return transcripts.map((t) => {
+    const text = t.text.trim()
+    const wordCount = Math.max(1, text.split(/\s+/).length)
+    const estimatedDuration = Math.min(
+      MAX_PP_TURN_DURATION_SECONDS,
+      Math.max(MIN_PP_TURN_DURATION_SECONDS, wordCount / PP_WORDS_PER_SECOND),
+    )
+    const end = Math.max(t.end ?? 0, cursor + MIN_TURN_DURATION_SECONDS)
+    const start = Math.max(cursor, t.start ?? Math.max(0, end - estimatedDuration))
+    cursor = Math.max(end, start + MIN_TURN_DURATION_SECONDS)
+    return { speaker: "personaplex" as const, text, start, end: cursor }
+  }).filter((t) => t.text)
+}
+
 export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline: VCState) {
   const micClicked = useRef(false)
   const transcribed = useRef(false)
+  const conversationRunId = useRef(0)
+  const voiceAnalysisMode = useMemo(() => getVoiceAnalysisMode(), [])
 
   const [textPrompt, setTextPrompt] = useState("You enjoy having a good conversation.")
   const [diarized, setDiarized] = useState<DiarizedTurn[] | null>(null)
@@ -39,13 +127,35 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
   const [processing, setProcessing] = useState(false)
 
   const { vcEnabled, vcTargetId, vcTargetUrl, vcStreaming, startMic, beginSending, stopVCStream: vcStop, getOriginalUserWav } = vcPipeline
-  const { isRecording, start: startRecorder } = recorder
+  const {
+    clearTranscripts,
+    clearResponseChunks,
+    clearError,
+    connect,
+    disconnect,
+    getVcUserWav,
+    getPersonaplexWav,
+    handshakeReceived,
+    setMergedOutput,
+    transcripts,
+  } = ws
+  const {
+    isRecording,
+    start: startRecorder,
+    stop: stopRecorder,
+    recordingAvailable,
+    recordedChunks,
+    mergedContext,
+    mergedDestination,
+    getMergedChunks,
+  } = recorder
   const sendingBegun = useRef(false)
 
   const startConversation = useCallback(async () => {
-    ws.clearTranscripts()
-    ws.clearResponseChunks()
-    ws.clearError()
+    conversationRunId.current += 1
+    clearTranscripts()
+    clearResponseChunks()
+    clearError()
     micClicked.current = true
     transcribed.current = false
     sendingBegun.current = false
@@ -64,146 +174,191 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
       // chat-proxy (which speaks PersonaPlex's protocol on this same socket).
       try {
         const proxy = await startMic()
-        ws.connect(textPrompt, proxy)
+        connect(textPrompt, proxy)
       } catch {
         micClicked.current = false
       }
     } else {
-      ws.connect(textPrompt)
+      connect(textPrompt)
     }
-  }, [ws, textPrompt, vcEnabled, vcTargetId, startMic])
+  }, [clearTranscripts, clearResponseChunks, clearError, connect, textPrompt, vcEnabled, vcTargetId, startMic])
 
   const stopConversation = useCallback(() => {
+    const runId = conversationRunId.current
     const wasVC = vcStreaming
     if (vcStreaming) vcStop()
-    recorder.stop()
-    ws.disconnect()
+    stopRecorder()
+    disconnect()
     micClicked.current = false
     setProcessing(true)
 
     if (wasVC) {
       ;(async () => {
-        const vcWav = ws.getVcUserWav()
-        if (!vcWav) { setProcessing(false); return }
-        setUserWavUrl(URL.createObjectURL(vcWav))
-
-        const originalWav = getOriginalUserWav()
-        if (originalWav) setOriginalUserWavUrl(URL.createObjectURL(originalWav))
-
-        let pplxWav: Blob | null = null
-        try {
-          pplxWav = await ws.getPersonaplexWav()
-          if (pplxWav) setPersonaplexWavUrl(URL.createObjectURL(pplxWav))
-        } catch { /* ignore */ }
-
-        if (pplxWav) {
+        const stepDurationsMs: Record<string, number> = {}
+        const isCurrentRun = () => runId === conversationRunId.current
+        const timed = async <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+          const start = performance.now()
           try {
-            setMergedWavUrl(URL.createObjectURL(await mergeAudioTracks(vcWav, pplxWav)))
-          } catch { setMergedWavUrl(URL.createObjectURL(vcWav)) }
-        } else {
-          setMergedWavUrl(URL.createObjectURL(vcWav))
+            return await fn()
+          } finally {
+            stepDurationsMs[name] = Math.round(performance.now() - start)
+          }
         }
 
-        // Build PersonaPlex turns first so they survive even if the
-        // converted-voice transcription below fails (long clips, etc).
-        const convStart = ws.transcripts[0]?.timestamp ?? Date.now()
-        const pplxTurns: DiarizedTurn[] = ws.transcripts.map((t, i, arr) => {
-          const prevEnd = i > 0 ? (arr[i - 1].timestamp - convStart) / 1000 : 0
-          const start = Math.max(prevEnd, (t.timestamp - convStart) / 1000 - 2)
-          return { speaker: "personaplex" as const, text: t.text, start, end: start + 2 }
-        })
-        let vcTurns: DiarizedTurn[] = []
         try {
-          const result = await transcribeWavBlob(vcWav)
-          vcTurns = (result.segments || []).map(
-            (s: { start: number; end: number; text: string }) => ({
-              speaker: "user" as const, text: s.text, start: s.start, end: s.end,
-            })
-          )
-        } catch (e) {
-          console.error("Converted-voice transcription failed:", e)
-        }
-        setDiarized([...vcTurns, ...pplxTurns].sort((a, b) => a.start - b.start))
+          const vcWav = await timed("collect_converted_user_wav", () => getVcUserWav())
+          if (!isCurrentRun()) return
+          if (!vcWav) { setProcessing(false); return }
+          setUserWavUrl(URL.createObjectURL(vcWav))
 
-        // Voice-change metrics and VC-quality eval are now MANUAL — triggered
-        // by the matching DownloadBar button instead of auto-firing here.
-        // (Audiobox aesthetics inside compareMetricsData and the WavLM/UTMOS
-        // models inside vcQuality are heavy + sometimes flaky, so making them
-        // opt-in keeps the post-conversation path predictable.) The trigger
-        // functions below pull the WAV bytes back from blob URLs on demand.
+          const originalWav = await timed("collect_original_user_wav", () => getOriginalUserWav())
+          if (!isCurrentRun()) return
+          if (originalWav) setOriginalUserWavUrl(URL.createObjectURL(originalWav))
+
+          let pplxWav: Blob | null = null
+          try {
+            pplxWav = await timed("collect_personaplex_wav", () => getPersonaplexWav())
+            if (!isCurrentRun()) return
+            if (pplxWav) setPersonaplexWavUrl(URL.createObjectURL(pplxWav))
+          } catch (e) {
+            console.warn("PersonaPlex WAV assembly failed:", e)
+          }
+
+          if (pplxWav) {
+            try {
+              const merged = await timed("merge_audio", () => mergeAudioTracks(vcWav, pplxWav))
+              if (!isCurrentRun()) return
+              setMergedWavUrl(URL.createObjectURL(merged))
+            } catch {
+              if (isCurrentRun()) setMergedWavUrl(URL.createObjectURL(vcWav))
+            }
+          } else {
+            setMergedWavUrl(URL.createObjectURL(vcWav))
+          }
+
+          const pplxTurns = fallbackPersonaplexTurns(transcripts)
+
+          let vcTurns: DiarizedTurn[] = []
+          try {
+            const result = await timed("transcribe_converted_user_wav", () => transcribeWavBlob(vcWav))
+            vcTurns = transcriptionToTurns(result, "user")
+          } catch (e) {
+            console.error("Converted-voice transcription failed:", e)
+          }
+          if (!isCurrentRun()) return
+          setDiarized([...vcTurns, ...pplxTurns].sort((a, b) => a.start - b.start))
+
+          const voiceMetricsAutoRan = voiceAnalysisMode === "after_vc" && !!originalWav
+          console.info("[conversation reset]", {
+            runId,
+            resetType: "fresh_websocket_session",
+            voiceAnalysisMode,
+            voiceMetricsAutoRan,
+            stepDurationsMs,
+          })
+
+          if (voiceMetricsAutoRan && originalWav) {
+            setVcMetricsLoading(true)
+            const started = performance.now()
+            compareMetricsData(originalWav, vcWav)
+              .then((data) => {
+                if (isCurrentRun()) setVcMetrics(data)
+              })
+              .catch(() => {
+                if (isCurrentRun()) setVcMetrics(null)
+              })
+              .finally(() => {
+                if (isCurrentRun()) {
+                  console.info("[voice metrics]", {
+                    runId,
+                    mode: voiceAnalysisMode,
+                    durationMs: Math.round(performance.now() - started),
+                  })
+                  setVcMetricsLoading(false)
+                }
+              })
+          }
+        } catch (e) {
+          console.error("VC finalization failed:", e)
+          if (isCurrentRun()) setProcessing(false)
+        }
       })()
     }
-  }, [recorder, ws, vcStreaming, vcStop, getOriginalUserWav, vcTargetUrl])
+  }, [
+    vcStreaming,
+    vcStop,
+    stopRecorder,
+    disconnect,
+    getVcUserWav,
+    getOriginalUserWav,
+    getPersonaplexWav,
+    transcripts,
+    voiceAnalysisMode,
+  ])
 
   // VC mode: once the proxy relays PersonaPlex's handshake, open the gate so mic
   // PCM starts flowing. (Mic was already acquired in startConversation.)
   useEffect(() => {
-    if (ws.handshakeReceived && micClicked.current && vcStreaming && !sendingBegun.current) {
+    if (handshakeReceived && micClicked.current && vcStreaming && !sendingBegun.current) {
       sendingBegun.current = true
       beginSending()
     }
-  }, [ws.handshakeReceived, vcStreaming, beginSending])
+  }, [handshakeReceived, vcStreaming, beginSending])
 
   // Non-VC mode: start recording after handshake
   useEffect(() => {
-    if (ws.handshakeReceived && micClicked.current && !isRecording && !vcStreaming) {
+    if (handshakeReceived && micClicked.current && !isRecording && !vcStreaming) {
       startRecorder().catch(() => {
-        ws.disconnect()
+        disconnect()
         micClicked.current = false
       })
     }
-  }, [ws.handshakeReceived, isRecording, vcStreaming, startRecorder])
+  }, [handshakeReceived, isRecording, vcStreaming, startRecorder, disconnect])
 
   // Route PersonaPlex audio into merged capture
   useEffect(() => {
-    if (recorder.isRecording && recorder.mergedContext && recorder.mergedDestination) {
-      ws.setMergedOutput(recorder.mergedContext, recorder.mergedDestination)
+    if (isRecording && mergedContext && mergedDestination) {
+      setMergedOutput(mergedContext, mergedDestination)
     }
-  }, [recorder.isRecording, recorder.mergedContext, recorder.mergedDestination, ws.setMergedOutput])
+  }, [isRecording, mergedContext, mergedDestination, setMergedOutput])
 
   // Post-recording transcription (non-VC path)
   useEffect(() => {
-    if (!recorder.recordingAvailable || recorder.recordedChunks.length === 0 || transcribed.current) return
+    if (!recordingAvailable || recordedChunks.length === 0 || transcribed.current) return
     transcribed.current = true
+    const runId = conversationRunId.current
+    const isCurrentRun = () => runId === conversationRunId.current
     ;(async () => {
       try {
-        const result = await transcribeRecording(recorder.recordedChunks)
-        const userSegments: DiarizedTurn[] = (result.segments || []).map(
-          (s: { start: number; end: number; text: string }) => ({
-            speaker: "user" as const, text: s.text, start: s.start, end: s.end,
-          })
-        )
-        const convStart = ws.transcripts[0]?.timestamp ?? Date.now()
-        const pplxTurns: DiarizedTurn[] = ws.transcripts.map((t, i, arr) => {
-          const prevEnd = i > 0 ? (arr[i - 1].timestamp - convStart) / 1000 : 0
-          const start = Math.max(prevEnd, (t.timestamp - convStart) / 1000 - 2)
-          return { speaker: "personaplex" as const, text: t.text, start, end: start + 2 }
-        })
+        const result = await transcribeRecording(recordedChunks)
+        const userSegments = transcriptionToTurns(result, "user")
+        const userWav = await webmToWavBlob(recordedChunks)
+        if (!isCurrentRun()) return
+        setUserWavUrl(URL.createObjectURL(userWav))
+
+        const pplxWav = await getPersonaplexWav()
+        if (!isCurrentRun()) return
+        if (pplxWav) setPersonaplexWavUrl(URL.createObjectURL(pplxWav))
+
+        const pplxTurns = fallbackPersonaplexTurns(transcripts)
+        if (!isCurrentRun()) return
+
         const diarizedResult = [...userSegments, ...pplxTurns].sort((a, b) => a.start - b.start)
         setDiarized(diarizedResult)
 
-        ws.clearTranscripts()
-        for (const turn of diarizedResult) {
-          if (turn.speaker === "user") ws.addUserTranscript(turn.text)
-        }
-
-        const userWav = await webmToWavBlob(recorder.recordedChunks)
-        setUserWavUrl(URL.createObjectURL(userWav))
-
-        const pplxWav = await ws.getPersonaplexWav()
-        if (pplxWav) setPersonaplexWavUrl(URL.createObjectURL(pplxWav))
-
-        const mergedChunks = recorder.getMergedChunks()
+        const mergedChunks = getMergedChunks()
         if (mergedChunks.length > 0) {
           try {
-            setMergedWavUrl(URL.createObjectURL(await webmToWavBlob(mergedChunks)))
+            const merged = await webmToWavBlob(mergedChunks)
+            if (isCurrentRun()) setMergedWavUrl(URL.createObjectURL(merged))
           } catch (e) { console.error("Merged audio conversion failed:", e) }
         }
       } catch (err) {
         console.error("Transcription failed:", err)
+        if (isCurrentRun()) setProcessing(false)
       }
     })()
-  }, [recorder.recordingAvailable])
+  }, [recordingAvailable, recordedChunks, getPersonaplexWav, transcripts, getMergedChunks])
 
   // Results are ready once diarization lands → drop the shimmer.
   useEffect(() => {
@@ -236,25 +391,30 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
   // user voice (and target file) as blob URLs; these handlers pull the bytes
   // back on demand and run the heavy backend analysis only when asked.
   const triggerVcMetrics = useCallback(async () => {
+    if (voiceAnalysisMode === "off") return
     if (!originalUserWavUrl || !userWavUrl) return
     if (vcMetrics || vcMetricsLoading) return
+    const runId = conversationRunId.current
     setVcMetricsLoading(true)
     try {
       const [orig, conv] = await Promise.all([
         fetch(originalUserWavUrl).then(r => r.blob()),
         fetch(userWavUrl).then(r => r.blob()),
       ])
-      setVcMetrics(await compareMetricsData(orig, conv))
+      const data = await compareMetricsData(orig, conv)
+      if (runId === conversationRunId.current) setVcMetrics(data)
     } catch {
-      setVcMetrics(null)
+      if (runId === conversationRunId.current) setVcMetrics(null)
     } finally {
-      setVcMetricsLoading(false)
+      if (runId === conversationRunId.current) setVcMetricsLoading(false)
     }
-  }, [originalUserWavUrl, userWavUrl, vcMetrics, vcMetricsLoading])
+  }, [originalUserWavUrl, userWavUrl, vcMetrics, vcMetricsLoading, voiceAnalysisMode])
 
   const triggerVcQuality = useCallback(async () => {
+    if (voiceAnalysisMode === "off") return
     if (!originalUserWavUrl || !userWavUrl || !vcTargetUrl) return
     if (vcQualityData || vcQualityLoading) return
+    const runId = conversationRunId.current
     setVcQualityLoading(true)
     try {
       const [orig, conv, tgt] = await Promise.all([
@@ -262,13 +422,14 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         fetch(userWavUrl).then(r => r.blob()),
         fetch(vcTargetUrl).then(r => r.blob()),
       ])
-      setVcQualityData(await vcQuality(orig, tgt, conv, { segmentMode: "fixed" }))
+      const data = await vcQuality(orig, tgt, conv, { segmentMode: "fixed" })
+      if (runId === conversationRunId.current) setVcQualityData(data)
     } catch {
-      setVcQualityData(null)
+      if (runId === conversationRunId.current) setVcQualityData(null)
     } finally {
-      setVcQualityLoading(false)
+      if (runId === conversationRunId.current) setVcQualityLoading(false)
     }
-  }, [originalUserWavUrl, userWavUrl, vcTargetUrl, vcQualityData, vcQualityLoading])
+  }, [originalUserWavUrl, userWavUrl, vcTargetUrl, vcQualityData, vcQualityLoading, voiceAnalysisMode])
 
   return {
     textPrompt,
@@ -285,8 +446,8 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     downloadVcQuality,
     triggerVcMetrics,
     triggerVcQuality,
-    canTriggerVcMetrics: !!(originalUserWavUrl && userWavUrl),
-    canTriggerVcQuality: !!(originalUserWavUrl && userWavUrl && vcTargetUrl),
+    canTriggerVcMetrics: voiceAnalysisMode !== "off" && !!(originalUserWavUrl && userWavUrl),
+    canTriggerVcQuality: voiceAnalysisMode !== "off" && !!(originalUserWavUrl && userWavUrl && vcTargetUrl),
     processing,
     startConversation,
     stopConversation,
