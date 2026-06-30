@@ -1,0 +1,16 @@
+[project]
+name = "hearmeout-minicpm-o"
+version = "0.1.0"
+description = "Hear-Me-Out MiniCPM-o bridge (GPU). Exposes PersonaPlex's binary-tag WS protocol on :8000 while driving the llama.cpp-omni C++ engine (GGUF) over HTTP/SSE. No torch/transformers — inference runs in the C++ server."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "aiohttp>=3.10",       # WS server to the browser
+    "requests>=2.31",      # HTTP/SSE client to llama-omni-server
+    "sphn>=0.1.4,<0.2",    # Opus codec; 0.2+ removed OpusStreamWriter.read_bytes
+    "soundfile>=0.12",     # write 16k prefill WAVs + read 24k TTS WAVs
+    "soxr>=0.3",           # 24k->16k mic resampling (light, no librosa/numba)
+    "numpy>=1.26,<2",
+]
+
+# No PyTorch / transformers / minicpmo-utils: the 9B model runs inside the
+# llama.cpp-omni C++ binary (built by infra/setup.sh), so this venv stays tiny.

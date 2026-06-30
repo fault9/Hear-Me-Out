@@ -93,6 +93,10 @@ fi
 MEANVC_URL="https://github.com/ASLP-lab/MeanVC.git"   # cloned for its speaker_verification source
 XVC_URL="https://github.com/Jerrister/X-VC.git"
 XVC_COMMIT="49df8c591eafc48b096e466d96f9839f9c0dd739"
+# llama.cpp-omni: C++ engine that runs MiniCPM-o GGUF with full-duplex speech.
+# The HTTP `llama-server` target lives on the feat/web-demo branch.
+LLAMA_OMNI_URL="https://github.com/tc-mb/llama.cpp-omni.git"
+LLAMA_OMNI_BRANCH="feat/web-demo"
 
 # Derived paths. Export so helper scripts (generate-ssl.sh, download-meanvc-sv.sh)
 # and `uv run` downloads honor the chosen workspace.
@@ -106,7 +110,14 @@ REPO_DIR="$WORKSPACE/Hear-Me-Out"
 MODELS_DIR="$WORKSPACE/models"
 MEANVC_DIR="$WORKSPACE/MeanVC"
 XVC_DIR="$WORKSPACE/X-VC"
+LLAMA_OMNI_DIR="$WORKSPACE/llama.cpp-omni"
+MO_GGUF_DIR="$MODELS_DIR/minicpm-o-gguf"
 SERVICES="$REPO_DIR/services"
+# Dedicated conda env holding the CUDA toolkit used to BUILD llama.cpp-omni (build-time
+# only; keeps the base env + torch services untouched). Auto-discovered, no CUDA_HOME needed.
+HMO_CUDA_ENV_NAME="${HMO_CUDA_ENV_NAME:-hmo-cuda}"
+HMO_CUDA_ENV=""
+command -v conda >/dev/null 2>&1 && HMO_CUDA_ENV="$(conda info --base 2>/dev/null)/envs/$HMO_CUDA_ENV_NAME"
 
 echo; hr
 echo -e "  ${BOLD}Workspace${NC}    : $WORKSPACE"
@@ -131,8 +142,8 @@ phase_system() {
   export DEBIAN_FRONTEND=noninteractive
   sudo apt-get update -qq
   sudo apt-get install -y -qq --no-install-recommends \
-      build-essential pkg-config git wget curl ca-certificates \
-      ffmpeg libsndfile1 libopus-dev libsoxr-dev openssl nodejs npm
+      build-essential cmake pkg-config git wget curl ca-certificates \
+      ffmpeg libsndfile1 libopus-dev libsoxr-dev openssl nodejs npm libcurl4-openssl-dev
 }
 
 phase_workspace() {
@@ -143,9 +154,16 @@ phase_workspace() {
 }
 
 phase_clone() {
-  # Hear-Me-Out (with the seed-vc submodule).
-  [ -d "$REPO_DIR" ] && echo "Hear-Me-Out exists" || git clone --recursive "$REPO_URL" "$REPO_DIR"
+  # Hear-Me-Out (with the seed-vc submodule). If it already exists, pull so a stale
+  # checkout doesn't keep running an old setup.sh / service code.
+  if [ -d "$REPO_DIR/.git" ]; then
+    echo "Hear-Me-Out exists — pulling latest"
+    git -C "$REPO_DIR" pull --ff-only 2>/dev/null || echo "WARN: git pull failed (local changes?) — using existing checkout"
+  else
+    git clone --recursive "$REPO_URL" "$REPO_DIR"
+  fi
   git -C "$REPO_DIR" submodule update --init --recursive 2>/dev/null || true
+  echo "Hear-Me-Out at $(git -C "$REPO_DIR" log -1 --pretty='%h %s' 2>/dev/null)"
   # MeanVC — cloned only for its speaker_verification source (copied in phase_runtime).
   [ -d "$MEANVC_DIR" ] && echo "MeanVC exists" || git clone "$MEANVC_URL" "$MEANVC_DIR"
   # X-VC — cloned + run from source by services/xvc/server.py (added to sys.path).
@@ -155,6 +173,65 @@ phase_clone() {
     mkdir -p "$XVC_DIR/ckpts" "$XVC_DIR/pretrained"
   fi
   # PersonaPlex's moshi is NOT cloned — services/personaplex pulls it via uv git source.
+  # llama.cpp-omni — C++ engine for MiniCPM-o GGUF (built in phase_build_omni).
+  if [ -d "$LLAMA_OMNI_DIR/.git" ]; then
+    echo "llama.cpp-omni exists"
+  else
+    git clone --branch "$LLAMA_OMNI_BRANCH" --depth 1 "$LLAMA_OMNI_URL" "$LLAMA_OMNI_DIR"
+  fi
+}
+
+phase_build_omni() {
+  # Build only the HTTP server target.
+  if [ -x "$LLAMA_OMNI_DIR/build/bin/llama-server" ]; then
+    echo "llama-server already built"; return 0
+  fi
+
+  # Compiling CUDA needs a COMPLETE toolkit (nvcc + headers + libcudart.so) whose version
+  # is <= the driver's CUDA version — else kernels fail at runtime with "device kernel image
+  # is invalid". conda ignores the version pin (gives 12.9), and the pip nvcc wheel ships no
+  # nvcc front-end — so we install NVIDIA's official CUDA runfile toolkit (rootless, to a
+  # user dir, exact version). Default 12.2.2 (driver-matched here); override CUDA_RUNFILE_URL.
+  local cver="${CUDA_TOOLKIT_VERSION:-12.2}"
+  local CUDA_TK="$WORKSPACE/cuda-$cver"
+  local runfile_url="${CUDA_RUNFILE_URL:-https://developer.download.nvidia.com/compute/cuda/12.2.2/local_installers/cuda_12.2.2_535.104.05_linux.run}"
+
+  if [ -x "$CUDA_TK/bin/nvcc" ]; then
+    echo "CUDA $cver toolkit present at $CUDA_TK"
+  elif [ -n "$CUDA_HOME" ] && [ -x "$CUDA_HOME/bin/nvcc" ]; then
+    CUDA_TK="$CUDA_HOME"; echo "Using CUDA toolkit from CUDA_HOME=$CUDA_HOME"
+  else
+    echo "Installing CUDA $cver toolkit (runfile, rootless -> $CUDA_TK; one-time, ~4GB)..."
+    mkdir -p "$WORKSPACE/tmp"
+    local rf="$WORKSPACE/cuda_runfile.run"
+    wget -q "$runfile_url" -O "$rf" || { echo "ERROR: CUDA runfile download failed ($runfile_url)"; return 1; }
+    sh "$rf" --silent --toolkit --toolkitpath="$CUDA_TK" \
+        --tmpdir="$WORKSPACE/tmp" --override --no-man-page || true
+    rm -f "$rf"
+  fi
+  if [ ! -x "$CUDA_TK/bin/nvcc" ]; then
+    echo "ERROR: CUDA toolkit not available at $CUDA_TK/bin/nvcc."
+    echo "       Set CUDA_RUNFILE_URL to a CUDA <= driver runfile, or CUDA_HOME to a toolkit, and re-run."
+    return 1
+  fi
+  local root="$CUDA_TK"
+  local lcc; lcc="$(find "$root" -name 'libcudart.so*' 2>/dev/null | head -1 || true)"
+
+  # Force the GPU's compute capability so kernels get native SASS (RTX 3090 -> 86).
+  local arch="${CUDA_ARCH:-}"
+  if [ -z "$arch" ] && command -v nvidia-smi >/dev/null 2>&1; then
+    arch="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '. ')"
+  fi
+  [ -n "$arch" ] || arch="86"
+
+  echo "CUDA toolkit: root=$root nvcc=$root/bin/nvcc arch=$arch — building with GGML_CUDA"
+  export LD_LIBRARY_PATH="$root/lib64:${LD_LIBRARY_PATH:-}"  # build + runtime
+  rm -rf "$LLAMA_OMNI_DIR/build"   # wipe any poisoned cache from a failed configure
+  ( cd "$LLAMA_OMNI_DIR" \
+      && cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON \
+           -DCUDAToolkit_ROOT="$root" -DCMAKE_CUDA_COMPILER="$root/bin/nvcc" \
+           -DCMAKE_CUDA_ARCHITECTURES="$arch" \
+      && cmake --build build --target llama-server -j"$(nproc)" )
 }
 
 phase_sync() {
@@ -162,6 +239,7 @@ phase_sync() {
   echo "uv sync: app_api ..."      ; ( cd "$SERVICES/app_api"     && uv sync )
   echo "uv sync: meanvc ..."       ; ( cd "$SERVICES/meanvc"      && uv sync )
   echo "uv sync: personaplex (pulls moshi from git) ..." ; ( cd "$SERVICES/personaplex" && uv sync )
+  echo "uv sync: minicpm_o ..."    ; ( cd "$SERVICES/minicpm_o"   && uv sync )
   echo "uv sync: vc_quality (post-hoc eval) ..." ; ( cd "$SERVICES/vc_quality" && uv sync )
   if $INSTALL_XVC; then
     echo "uv sync: xvc (py3.10, torch 2.5.1) ..." ; ( cd "$SERVICES/xvc" && uv sync )
@@ -176,6 +254,18 @@ phase_models() {
   else
     echo "WARN: HF_TOKEN not set — skipping gated PersonaPlex model."
   fi
+  # MiniCPM-o 4.5 GGUF (public) — the alternative :8000 speech LM, run by llama.cpp-omni.
+  # Audio-only subset (~7.8GB): LLM Q4_K_M + audio/ + tts/ + token2wav-gguf/ (skip vision/).
+  # Downloaded via app_api's venv (it has huggingface_hub; minicpm_o's venv is torch-free).
+  if [ ! -f "$MO_GGUF_DIR/MiniCPM-o-4_5-Q4_K_M.gguf" ]; then
+    echo "Downloading MiniCPM-o 4.5 GGUF subset (~7.8GB)..."
+    uv run --project "$SERVICES/app_api" python -c "
+from huggingface_hub import snapshot_download
+snapshot_download('openbmb/MiniCPM-o-4_5-gguf', local_dir='$MO_GGUF_DIR',
+    allow_patterns=['MiniCPM-o-4_5-Q4_K_M.gguf','audio/*','tts/*','token2wav-gguf/*'])
+print('MiniCPM-o GGUF ready.')" \
+      || echo "WARN: MiniCPM-o GGUF download failed; rerun or fetch openbmb/MiniCPM-o-4_5-gguf manually."
+  else echo "MiniCPM-o GGUF present."; fi
   local SEEDVC_CKPT="$MODELS_DIR/seed-vc/DiT_uvit_tat_xlsr_ema.pth"
   if [ ! -f "$SEEDVC_CKPT" ]; then
     echo "Downloading Seed-VC checkpoint..."
@@ -235,6 +325,7 @@ if ! $MODELS_ONLY; then
   add_step phase_workspace "Create workspace"
   add_step phase_clone     "Clone repos + submodules"
   add_step phase_sync      "Resolve per-service deps (uv sync)"
+  add_step phase_build_omni "Build llama.cpp-omni (MiniCPM-o GGUF engine)"
 fi
 add_step phase_models  "Download models"
 add_step phase_runtime "Runtime setup (SSL, speaker-verification)"
@@ -255,6 +346,12 @@ print_header() {
   echo -e "${BOLD}│        Hear-Me-Out — installing backend      │${NC}"
   echo -e "${BOLD}╰──────────────────────────────────────────────╯${NC}"
   echo -e "  ${DIM}workspace${NC}  $WORKSPACE"
+  # Show the cloned Hear-Me-Out commit (this is the code run_all.sh + the phases use).
+  # setup.sh is usually curl'd to a standalone file outside the repo, so we read the
+  # repo at $REPO_DIR, not the script's own location. Empty until phase_clone runs.
+  # NOTE: must be `local VAR=$(...) || true` — a bare `VAR=$(failing)` aborts under set -e.
+  local _commit="$(git -C "$REPO_DIR" log -1 --pretty='%h %s (%cr)' 2>/dev/null || true)"
+  echo -e "  ${DIM}commit${NC}     ${_commit:-<repo not cloned yet — see Clone step>}"
   if command -v nvidia-smi >/dev/null 2>&1; then
     echo -e "  ${DIM}gpu${NC}        $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
   fi
@@ -345,7 +442,7 @@ echo -e "${GREEN}✓ Setup complete!${NC}"
 echo -e "  ${BOLD}workspace${NC}  $WORKSPACE"
 echo -e "  ${BOLD}deps${NC}       per-service uv envs under services/*/.venv"
 echo -e "  ${BOLD}start${NC}      bash $REPO_DIR/infra/run_all.sh"
-echo -e "  ${BOLD}ports${NC}      PersonaPlex :8000   app-api :5001   MeanVC/X-VC :5002"
+echo -e "  ${BOLD}ports${NC}      PersonaPlex/MiniCPM-o :8000   app-api :5001   MeanVC/X-VC :5002"
 echo -e "  ${BOLD}log${NC}        $SETUP_LOG"
 [ -n "$HF_TOKEN" ] || echo -e "  ${YELLOW}note${NC}       HF_TOKEN was not set — rerun with a token to fetch PersonaPlex."
 echo
