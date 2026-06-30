@@ -155,6 +155,43 @@ export interface VcQualityResult {
 // CPU win to skip (WavLM-large forward pass per segment).
 export type VcQualityMetric = "intelligibility" | "secs" | "naturalness" | "prosody"
 
+// Offline pitch/formant shift for soundboard bakes. Preserves duration.
+// `targetSr` MUST equal PP's expected SR (PP_SAMPLE_RATE); the server refuses
+// to bake at any other rate. Returns the WAV blob + the bake's measured input
+// vs output duration (from response headers) so the caller can flag drift.
+export interface PitchFormantBake {
+  wav: Blob
+  inMs: number
+  outMs: number
+  driftMs: number
+  sampleRate: number
+}
+
+export async function pitchFormantBake(
+  source: Blob,
+  semitones: number,
+  formantShift: number,
+  targetSr: number,
+): Promise<PitchFormantBake> {
+  const fd = new FormData()
+  fd.append("source_audio", source, "source.wav")
+  fd.append("semitones", String(semitones))
+  fd.append("formant_shift", String(formantShift))
+  fd.append("target_sr", String(targetSr))
+  const resp = await fetch(`${API_BASE}/api/pitch-formant`, { method: "POST", body: fd })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  const inMs = Number(resp.headers.get("X-Input-Duration-Ms") || "0")
+  const outMs = Number(resp.headers.get("X-Output-Duration-Ms") || "0")
+  const sampleRate = Number(resp.headers.get("X-Sample-Rate") || "0")
+  return {
+    wav: await resp.blob(),
+    inMs,
+    outMs,
+    driftMs: +(outMs - inMs).toFixed(2),
+    sampleRate,
+  }
+}
+
 export async function vcQuality(
   source: Blob, target: Blob, converted: Blob,
   opts?: {

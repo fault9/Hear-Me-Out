@@ -9,6 +9,7 @@ import { DownloadBar } from "@/components/conversation/DownloadBar"
 import { DownloadBarSkeleton } from "@/components/conversation/DownloadBarSkeleton"
 import { VoiceMetricsModal } from "@/components/conversation/VoiceMetricsModal"
 import { VcQualityModal } from "@/components/conversation/VcQualityModal"
+import { SoundboardPanel } from "@/components/conversation/SoundboardPanel"
 import { VC_QUALITY_DEMO, VC_QUALITY_DEMO_DIARIZED } from "@/lib/vcQualityMock"
 import type { useWebSocket } from "@/hooks/useWebSocket"
 import type { useRecorder } from "@/hooks/useRecorder"
@@ -170,6 +171,11 @@ export function ConversationView({ ws, recorder }: Props) {
             )}
           </CardContent>
         </Card>
+
+        {/* Runtime soundboard: render only when slots exist. Plays via
+            ws.sendAudio (direct-to-PP). Use with VC OFF on the control panel
+            so baked clips are not re-converted by the live VC stack. */}
+        <SoundboardPanel ws={ws} />
       </div>
 
       {showVcMetrics && vcMetrics && (

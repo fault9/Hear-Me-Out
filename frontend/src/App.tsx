@@ -3,10 +3,11 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ConversationView } from "@/components/ConversationView"
 import { VoiceConversion } from "@/components/VoiceConversion"
 import { MetricsComparison } from "@/components/MetricsComparison"
+import { ConfigureSoundboard } from "@/components/ConfigureSoundboard"
 import { useRecorder } from "@/hooks/useRecorder"
 import { useWebSocket } from "@/hooks/useWebSocket"
 import { ThemeToggle } from "@/components/ThemeToggle"
-import { Mic, GitCompare, Wand2 } from "lucide-react"
+import { Mic, GitCompare, Wand2, ListMusic } from "lucide-react"
 
 function App() {
   const ws = useWebSocket()
@@ -50,6 +51,12 @@ function App() {
           >
             <GitCompare />Metrics
           </TabsTrigger>
+          <TabsTrigger
+            value="soundboard"
+            className={`flex-1 gap-1.5 rounded-md ${activeTab === "soundboard" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground"}`}
+          >
+            <ListMusic />Soundboard
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="conversation" className="flex-1 min-h-0">
@@ -63,6 +70,11 @@ function App() {
         <TabsContent value="metrics" className="flex-1 min-h-0 overflow-y-auto">
           <div className="mx-auto max-w-lg pb-6">
             <MetricsComparison />
+          </div>
+        </TabsContent>
+        <TabsContent value="soundboard" className="flex-1 min-h-0 overflow-y-auto">
+          <div className="mx-auto max-w-4xl pb-6">
+            <ConfigureSoundboard />
           </div>
         </TabsContent>
       </Tabs>

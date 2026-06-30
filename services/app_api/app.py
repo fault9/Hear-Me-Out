@@ -331,6 +331,86 @@ def create_app():
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
+    @app.post("/api/pitch-formant")
+    async def pitch_formant(
+        source_audio: UploadFile = File(...),
+        semitones: float = Form(0.0),
+        formant_shift: float = Form(1.0),
+        target_sr: int = Form(0),
+    ):
+        """Offline pitch + formant shift for the soundboard. Preserves duration.
+
+        Body (multipart):
+            source_audio: WAV (mono recommended; stereo is downmixed).
+            semitones:    F0 shift in semitones (e.g. +4 = ~feminine perception).
+            formant_shift: multiplicative formant scaling (>1.0 raises formants).
+            target_sr:    REQUIRED if you want the output SR validated against
+                          PP's expected input. If 0, output SR == input SR (we
+                          still don't resample, we just skip the assert). The
+                          frontend should pass PP_SAMPLE_RATE here so the
+                          server refuses to silently bake at the wrong rate.
+
+        Returns:
+            WAV bytes at the input SR (NEVER resampled here). Headers include
+            X-Input-Duration-Ms and X-Output-Duration-Ms so the client can
+            flag any unexpected drift. Output length is forced to equal input
+            length inside shift_pitch_formant().
+        """
+        from pitch_formant import (
+            shift_pitch_formant,
+            wav_bytes_to_pcm,
+            pcm_to_wav_bytes,
+        )
+
+        if not source_audio.filename or not allowed_file(source_audio.filename):
+            raise HTTPException(status_code=400, detail="Invalid source audio")
+
+        wav_bytes = await source_audio.read()
+        pcm, sr = wav_bytes_to_pcm(wav_bytes)
+        in_ms = round(1000.0 * len(pcm) / sr, 2)
+
+        # Refuse to bake at the wrong sample rate if the client told us what
+        # PP wants. This is the server side of the format-integrity contract.
+        if target_sr and sr != target_sr:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"sample-rate mismatch: input is {sr} Hz but target_sr "
+                    f"is {target_sr} Hz. The frontend must resample to PP's "
+                    f"expected rate BEFORE upload — we never resample in the "
+                    f"bake path to avoid hidden timing drift."
+                ),
+            )
+
+        out_pcm = shift_pitch_formant(
+            pcm, sr,
+            semitones=semitones,
+            formant_shift=formant_shift,
+        )
+        out_ms = round(1000.0 * len(out_pcm) / sr, 2)
+        drift_ms = round(out_ms - in_ms, 2)
+        if abs(drift_ms) > 5.0:
+            # shift_pitch_formant pads/trims to input length, so this should
+            # never fire — if it does, our duration-preservation invariant
+            # has regressed and the experiment would be invalidated.
+            logger.error(
+                f"pitch-formant duration drift {drift_ms} ms (in={in_ms}, out={out_ms})"
+            )
+
+        out_wav = pcm_to_wav_bytes(out_pcm, sr, bit_depth=16)
+        from fastapi.responses import Response
+        return Response(
+            content=out_wav,
+            media_type="audio/wav",
+            headers={
+                "X-Input-Duration-Ms": str(in_ms),
+                "X-Output-Duration-Ms": str(out_ms),
+                "X-Sample-Rate": str(sr),
+                "X-Semitones": str(semitones),
+                "X-Formant-Shift": str(formant_shift),
+            },
+        )
+
     @app.post("/api/metrics-comparison")
     async def metrics_comparison(
         source_audio: UploadFile = File(...),
@@ -416,7 +496,6 @@ def create_app():
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
-    @app.post("/api/vc-quality")
     # Keys clients can pass to skip a heavy metric block. Names match the
     # vc_quality.py --no-* flags (mapped below).
     _SKIPPABLE_METRICS = {
@@ -426,6 +505,7 @@ def create_app():
         "prosody": "--no-prosody",
     }
 
+    @app.post("/api/vc-quality")
     async def vc_quality(
         source_audio: UploadFile = File(...),
         target_audio: UploadFile = File(...),

@@ -319,6 +319,18 @@ export function useWebSocket() {
     };
   }, [latestPersonaplexAudioEnd, playAudio, playFeedback]);
 
+  // Direct-to-PP byte-fidelity contract. This function:
+  //   - prepends the 0x01 tag byte (PP's user-audio frame marker)
+  //   - sends the rest of the bytes UNTOUCHED
+  // It does NOT resample, gain, normalize, transcode, or otherwise modify
+  // the payload. Whatever bytes the caller hands in are what PP receives
+  // (after one tag byte). Used by:
+  //   - useRecorder (live mic, Opus packets at 24kHz/80ms/1-per-page)
+  //   - useSoundboardPlayback (pre-baked WAVs encoded to Opus via the same
+  //     opus-recorder config; preserves the "byte baked = byte to PP" claim
+  //     for the Opus stream the encoder produces)
+  // If you ever need to mutate audio here, do it in a NEW function and
+  // leave sendAudio untouched — the soundboard depends on byte-fidelity.
   const sendAudio = useCallback((data: ArrayBuffer) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       const tagged = new Uint8Array(data.byteLength + 1);

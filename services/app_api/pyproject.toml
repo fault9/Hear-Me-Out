@@ -42,6 +42,9 @@ dependencies = [
     "accelerate",
     "gdown",
     "pydub==0.25.1",
+    # Soundboard offline pitch/formant shift. Decouples F0 from spectral
+    # envelope so we can shift each independently while preserving duration.
+    "pyworld>=0.3.4",
 ]
 
 # PyTorch CUDA 12.1 wheels (shared with meanvc/personaplex via uv's global cache).
