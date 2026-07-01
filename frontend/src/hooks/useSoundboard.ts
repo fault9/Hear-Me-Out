@@ -58,6 +58,18 @@ export function makeSessionContext(label: string = ""): SessionContext {
   }
 }
 
+// Cross-instance sync bus. Multiple useSoundboard() hooks (one in the
+// Configure tab, one in the runtime SoundboardPanel) each hold their own
+// React state; without a broadcast, mutations in one don't propagate to the
+// other. Any write op calls notifyChange(), which triggers refresh() on
+// every mounted instance.
+const SOUNDBOARD_EVENT = "hmo-soundboard-changed"
+function notifyChange() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(SOUNDBOARD_EVENT))
+  }
+}
+
 export function useSoundboard() {
   const [slots, setSlots] = useState<Slot[]>([])
   const [targets, setTargets] = useState<Target[]>([])
@@ -78,6 +90,7 @@ export function useSoundboard() {
         await ensureBuiltinTarget()
         if (cancelled) return
         await refresh()
+    notifyChange()
       } catch (e) {
         setError((e as Error).message)
       } finally {
@@ -85,6 +98,14 @@ export function useSoundboard() {
       }
     })()
     return () => { cancelled = true }
+  }, [refresh])
+
+  // Sync with any other useSoundboard() instances in the page (e.g. Configure
+  // tab writes → runtime SoundboardPanel refreshes without a tab switch).
+  useEffect(() => {
+    const onChange = () => { void refresh() }
+    window.addEventListener(SOUNDBOARD_EVENT, onChange)
+    return () => window.removeEventListener(SOUNDBOARD_EVENT, onChange)
   }, [refresh])
 
   // ---------- slot CRUD ----------
@@ -106,17 +127,20 @@ export function useSoundboard() {
     }
     await putSlot(slot)
     await refresh()
+    notifyChange()
     return slot
   }, [refresh])
 
   const updateSlot = useCallback(async (slot: Slot) => {
     await putSlot(slot)
     await refresh()
+    notifyChange()
   }, [refresh])
 
   const removeSlot = useCallback(async (id: string) => {
     await deleteSlot(id)
     await refresh()
+    notifyChange()
   }, [refresh])
 
   // ---------- target CRUD ----------
@@ -135,6 +159,7 @@ export function useSoundboard() {
     }
     await putTarget(target)
     await refresh()
+    notifyChange()
     return target
   }, [refresh])
 
@@ -144,6 +169,7 @@ export function useSoundboard() {
     }
     await deleteTarget(id)
     await refresh()
+    notifyChange()
   }, [refresh])
 
   // ---------- recording ----------
@@ -252,6 +278,7 @@ export function useSoundboard() {
     }
     await putSlot(patched)
     await refresh()
+    notifyChange()
   }, [refresh])
 
   const abortRecording = useCallback(async () => {
@@ -286,6 +313,7 @@ export function useSoundboard() {
     }
     await putSlot(patched)
     await refresh()
+    notifyChange()
   }, [refresh])
 
   // Download a slot's raw or baked WAV. Mostly convenience for spot-checks
@@ -388,6 +416,7 @@ export function useSoundboard() {
       }
       await putSlot(patched)
       await refresh()
+    notifyChange()
     },
     [refresh],
   )
@@ -492,6 +521,7 @@ export function useSoundboard() {
     const { slots: s, targets: t } = await importSoundboard(zip)
     await bulkReplace(s, t)
     await refresh()
+    notifyChange()
   }, [refresh])
 
   return {
