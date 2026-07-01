@@ -131,7 +131,11 @@ export function ConversationView({ ws, recorder }: Props) {
         </CardContent>
       </Card>
 
-      <div className="flex flex-col gap-4 order-first md:order-none">
+      {/* Right column scrolls internally when the soundboard panel (or any
+          future addition) makes total content exceed the viewport-bounded
+          column height. min-h-0 is required for the flex child to shrink
+          below its content size and let overflow-y-auto kick in. */}
+      <div className="flex flex-col gap-4 order-first md:order-none md:min-h-0 md:overflow-y-auto">
         <Card className="py-0 overflow-visible">
           <CardContent className="p-0">
             <ControlPanel

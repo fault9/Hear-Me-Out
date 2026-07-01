@@ -48,6 +48,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { OPUS_ENCODER_CONFIG, PP_SAMPLE_RATE } from "@/lib/soundboardConfig"
 import type { Slot } from "@/lib/soundboardDb"
 import type { useWebSocket } from "@/hooks/useWebSocket"
+import { transcribeWavBlob } from "@/services/api"
+import { putSlot } from "@/lib/soundboardDb"
 
 // opus-recorder's Recorder is loaded globally via <script> tag in index.html.
 // Mirror the type already declared in useRecorder.ts but add the sourceNode
@@ -174,10 +176,13 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
 
       const src = ctx.createBufferSource()
       src.buffer = audioBuffer
-      // NOTE: deliberately NOT connecting to ctx.destination — soundboard
-      // playback should not be audible locally on the researcher's machine
-      // (that's what Preview in Configure is for). If you want a monitor,
-      // add a GainNode tap here.
+      // LIVE MONITOR: also route the source to the local speakers so the
+      // researcher hears the same audio PP is receiving, in real time. This
+      // is a passive tap — the opus-recorder branch (which reads the source
+      // through its ScriptProcessor) is unaffected. If you want silent
+      // playback, mute your system output; there's no gain applied here so
+      // volume matches the bake's amplitude.
+      src.connect(ctx.destination)
 
       // Opus encoder mirrors live-mic config exactly.
       const recorder = new RecorderCtor({
@@ -210,10 +215,31 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
       onPlayStart?.(slot, startMs)
       src.start(0)
       // Inject slot transcript into the conversation stream so soundboard
-      // turns appear alongside live-voice turns. Skipped if the slot has
-      // no transcript (auto-Whisper failed or hasn't run yet).
+      // turns appear alongside live-voice turns. If the slot has no cached
+      // transcript (older slot baked before auto-Whisper, or transcription
+      // failed at bake time), kick off Whisper NOW and inject when done —
+      // it'll land in the transcript slightly late but still attributed.
       if (slot.transcript) {
         ws.addUserTranscript(slot.transcript, clipDurationMs / 1000)
+      } else {
+        void (async () => {
+          try {
+            const result = await transcribeWavBlob(blob)
+            const text = (result.text || "").trim()
+            if (!text) return
+            ws.addUserTranscript(text, clipDurationMs / 1000)
+            // Persist so future plays are instant. Refetching from IDB
+            // avoids clobbering any concurrent edits.
+            try {
+              const { getSlot } = await import("@/lib/soundboardDb")
+              const fresh = await getSlot(slot.id)
+              if (fresh) await putSlot({ ...fresh, transcript: text })
+              window.dispatchEvent(new CustomEvent("hmo-soundboard-changed"))
+            } catch { /* cache write is best-effort */ }
+          } catch (e) {
+            console.warn("[soundboard] on-demand transcript failed:", e)
+          }
+        })()
       }
 
       // onended fires when the buffer plays through; we give the encoder a
