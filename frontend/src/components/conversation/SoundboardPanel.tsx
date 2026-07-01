@@ -85,10 +85,12 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
     return Array.from(set).sort()
   }, [sb.slots])
 
+  // Show ALL slots (not just playable ones) so the researcher can see what
+  // exists and what still needs recording/baking. Playability is enforced
+  // at the button level.
   const visible = useMemo(() => {
-    const playable = sb.slots.filter((s) => !!(s.baked ?? s.raw))
-    if (conditionFilter === "__all__") return playable
-    return playable.filter((s) => s.condition === conditionFilter)
+    if (conditionFilter === "__all__") return sb.slots
+    return sb.slots.filter((s) => s.condition === conditionFilter)
   }, [sb.slots, conditionFilter])
 
   if (sb.loading) {
@@ -100,8 +102,10 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
       </Card>
     )
   }
-
-  if (sb.slots.length === 0) return null
+  // Deliberately NOT returning null when slots.length === 0 anymore —
+  // returning null makes the panel invisible when the toggle is on, which
+  // looks identical to "the feature is broken". Show an empty-state card
+  // instead so the researcher sees where to configure slots.
 
   return (
     <Card>
@@ -156,9 +160,20 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
         )}
 
         <div className="flex flex-col gap-1.5">
+          {sb.slots.length === 0 && (
+            <p className="text-[10px] text-muted-foreground italic">
+              No slots yet. Open the Soundboard tab to create some.
+            </p>
+          )}
+          {sb.slots.length > 0 && visible.length === 0 && (
+            <p className="text-[10px] text-muted-foreground italic">
+              No slots match this condition filter.
+            </p>
+          )}
           {visible.map((slot) => {
             const playing = playback.playingSlotId === slot.id
             const previewing = previewingId === slot.id
+            const hasAudio = !!(slot.baked ?? slot.raw)
             return (
               <div key={slot.id} className="flex items-center gap-1">
                 <Button
@@ -166,12 +181,14 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
                   size="xs"
                   onClick={() => playing ? playback.stop() : playback.playSlot(slot)}
                   disabled={
+                    !hasAudio ||
                     !ws.connected ||
                     vcEnabled ||
                     (playback.playingSlotId !== null && !playing)
                   }
                   className="flex-1 justify-start max-w-[300px] truncate"
                   title={
+                    !hasAudio ? "Slot has no recording yet — record/bake in Soundboard tab" :
                     !ws.connected ? "Start a conversation first" :
                     vcEnabled ? "Turn off VC to enable soundboard playback" :
                     `Send to PP · ${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s`
@@ -186,8 +203,9 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
                 <Button
                   variant="ghost"
                   size="xs"
+                  disabled={!hasAudio}
                   onClick={() => togglePreview(slot)}
-                  title="Hear this slot locally (does NOT send to PP)"
+                  title={hasAudio ? "Hear this slot locally (does NOT send to PP)" : "No audio yet"}
                 >
                   {previewing
                     ? <Pause className="size-3" />
@@ -196,11 +214,6 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
               </div>
             )
           })}
-          {visible.length === 0 && (
-            <p className="text-[10px] text-muted-foreground">
-              No baked slots match this filter.
-            </p>
-          )}
         </div>
 
         {playback.error && (
