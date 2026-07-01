@@ -20,9 +20,17 @@ type RecorderState = ReturnType<typeof useRecorder>
 interface Props {
   ws: WsState
   recorder: RecorderState
+  // Lifted from App.tsx so it survives tab-switch remounts.
+  soundboardEnabled: boolean
+  onSoundboardEnabledChange: (v: boolean) => void
 }
 
-export function ConversationView({ ws, recorder }: Props) {
+export function ConversationView({
+  ws,
+  recorder,
+  soundboardEnabled,
+  onSoundboardEnabledChange,
+}: Props) {
   const [meanvcSteps, setMeanvcSteps] = useState(2)
   const vcPipeline = useMeanVCPipeline((data) => ws.sendRawAudio(data), meanvcSteps)
 
@@ -62,8 +70,6 @@ export function ConversationView({ ws, recorder }: Props) {
 
   const [showVcMetrics, setShowVcMetrics] = useState(false)
   const [showVcQuality, setShowVcQuality] = useState(false)
-  // Soundboard panel is opt-in via ControlPanel toggle (mirrors VC UX).
-  const [soundboardEnabled, setSoundboardEnabled] = useState(false)
 
   // Dev affordance: open ?demo=vc-quality in the URL to preview the overlay
   // with realistic mock data (no backend / no conversation needed).
@@ -157,13 +163,17 @@ export function ConversationView({ ws, recorder }: Props) {
               pplxDeviceId={pplxDeviceId}
               onPplxDeviceChange={setPplxDeviceId}
               soundboardEnabled={soundboardEnabled}
-              onSoundboardEnabledChange={setSoundboardEnabled}
+              onSoundboardEnabledChange={onSoundboardEnabledChange}
             />
           </CardContent>
         </Card>
 
-        <Card className="flex flex-1 flex-col overflow-visible py-0 min-h-[120px]">
-          <CardContent className="flex flex-1 flex-col p-0">
+        {/* Partial transcript card: bounded to a fixed max-height so it
+            doesn't greedily fill the column via flex-1, which fought with
+            the column's overflow-y-auto and pushed the soundboard off-screen
+            after a tab-switch remount. */}
+        <Card className="flex flex-col overflow-visible py-0 min-h-[120px] max-h-[220px] flex-shrink-0">
+          <CardContent className="flex flex-1 flex-col p-0 min-h-0">
             {ws.partialTranscript ? (
               <div className="flex-1 overflow-y-auto">
                 <p className="p-4 text-sm leading-relaxed text-muted-foreground">{ws.partialTranscript}</p>

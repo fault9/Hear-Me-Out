@@ -20,6 +20,11 @@ function App() {
     ws.sendAudio(data)
   })
   const [activeTab, setActiveTab] = useState("conversation")
+  // Lifted here (not inside ConversationView) so it survives tab switches.
+  // Radix Tabs unmounts inactive TabsContent by default, so any state inside
+  // ConversationView is destroyed when you leave the Chat tab and re-created
+  // fresh when you come back. State that must persist across tabs lives here.
+  const [soundboardEnabled, setSoundboardEnabled] = useState(false)
 
 
   return (
@@ -67,7 +72,12 @@ function App() {
         </TabsList>
 
         <TabsContent value="conversation" className="flex-1 min-h-0">
-          <ConversationView ws={ws} recorder={recorder} />
+          <ConversationView
+            ws={ws}
+            recorder={recorder}
+            soundboardEnabled={soundboardEnabled}
+            onSoundboardEnabledChange={setSoundboardEnabled}
+          />
         </TabsContent>
         <TabsContent value="voice-conversion" className="flex-1 min-h-0 overflow-y-auto">
           <div className="mx-auto max-w-lg pb-6">
