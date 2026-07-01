@@ -62,6 +62,8 @@ export function ConversationView({ ws, recorder }: Props) {
 
   const [showVcMetrics, setShowVcMetrics] = useState(false)
   const [showVcQuality, setShowVcQuality] = useState(false)
+  // Soundboard panel is opt-in via ControlPanel toggle (mirrors VC UX).
+  const [soundboardEnabled, setSoundboardEnabled] = useState(false)
 
   // Dev affordance: open ?demo=vc-quality in the URL to preview the overlay
   // with realistic mock data (no backend / no conversation needed).
@@ -150,6 +152,8 @@ export function ConversationView({ ws, recorder }: Props) {
               onFeedbackDeviceChange={setFeedbackDeviceId}
               pplxDeviceId={pplxDeviceId}
               onPplxDeviceChange={setPplxDeviceId}
+              soundboardEnabled={soundboardEnabled}
+              onSoundboardEnabledChange={setSoundboardEnabled}
             />
           </CardContent>
         </Card>
@@ -172,11 +176,13 @@ export function ConversationView({ ws, recorder }: Props) {
           </CardContent>
         </Card>
 
-        {/* Runtime soundboard: render only when slots exist. Plays via
+        {/* Runtime soundboard: opt-in via ControlPanel toggle. Plays via
             ws.sendAudio (direct-to-PP). VC must be OFF — the panel refuses
             to play if vcEnabled is true because Opus can't be routed through
             the MeanVC/X-VC chat-proxy (which expects raw PCM). */}
-        <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
+        {soundboardEnabled && (
+          <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
+        )}
       </div>
 
       {showVcMetrics && vcMetrics && (

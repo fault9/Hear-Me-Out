@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
-import { Mic, MicOff, ChevronRight, Wand2, Volume2, Pause, Headphones } from "lucide-react"
+import { Mic, MicOff, ChevronRight, Wand2, Volume2, Pause, Headphones, ListMusic } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { getMeanvcInfoUrl } from "@/lib/config"
@@ -49,6 +49,10 @@ interface Props {
   onFeedbackDeviceChange: (v: string) => void
   pplxDeviceId: string
   onPplxDeviceChange: (v: string) => void
+  // Soundboard visibility toggle. Runtime SoundboardPanel below the control
+  // panel only renders when this is true, mirroring the VC toggle pattern.
+  soundboardEnabled: boolean
+  onSoundboardEnabledChange: (v: boolean) => void
 }
 
 function DeviceSelect({
@@ -91,6 +95,7 @@ export function ControlPanel({
   feedbackEnabled, onFeedbackEnabledChange,
   feedbackDeviceId, onFeedbackDeviceChange,
   pplxDeviceId, onPplxDeviceChange,
+  soundboardEnabled, onSoundboardEnabledChange,
 }: Props) {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
   const [previewPlaying, setPreviewPlaying] = useState(false)
@@ -246,6 +251,25 @@ export function ControlPanel({
               </label>
             </div>
           </>
+        )}
+      </div>
+
+      {/* Soundboard toggle — controls visibility of the runtime SoundboardPanel
+          below. Off by default; researchers turn on when they want to trigger
+          pre-baked stimulus clips instead of (or in addition to) live mic. */}
+      <div className="w-full rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-2.5 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ListMusic className="size-3.5 text-emerald-400" />
+            <span className="text-xs font-medium text-emerald-300">Soundboard</span>
+          </div>
+          <Switch checked={soundboardEnabled} onCheckedChange={onSoundboardEnabledChange} />
+        </div>
+        {soundboardEnabled && (
+          <p className="text-[10px] text-emerald-200/80 leading-snug">
+            Panel appears below. Turn VC OFF for playback to work (baked clips
+            go direct to PP as Opus and can't route through the VC proxy).
+          </p>
         )}
       </div>
 

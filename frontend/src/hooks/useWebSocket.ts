@@ -462,6 +462,29 @@ export function useWebSocket() {
     setError(null);
   }, []);
 
+  // Inject a user-speech transcript into the conversation stream. Used by the
+  // soundboard so pre-baked clips appear in the live transcript view just like
+  // spoken turns. start/end are seconds since conversation start; computed
+  // from Date.now() minus conversationStart if the caller passes 0.
+  const addUserTranscript = useCallback((text: string, durationSec: number) => {
+    const nowSec =
+      conversationStart.current > 0
+        ? (Date.now() - conversationStart.current) / 1000
+        : 0
+    const start = Math.max(0, nowSec)
+    const end = start + Math.max(0.1, durationSec)
+    setTranscripts((t) => [
+      ...t,
+      {
+        text,
+        timestamp: Date.now(),
+        start,
+        end,
+        speaker: "user",
+      },
+    ]);
+  }, []);
+
   return {
     connected,
     error,
@@ -486,5 +509,6 @@ export function useWebSocket() {
     setMergedOutput,
     setMicMuted,
     isMicMuted,
+    addUserTranscript,
   };
 }

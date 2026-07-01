@@ -50,6 +50,12 @@ export interface Slot {
   // Optional: VC-quality eval result (lazy / nice-to-have)
   qualityScore?: number | null
 
+  // Auto-Whisper transcript of the baked (or raw, for unconverted slots) audio.
+  // Injected into the conversation transcript when the slot plays, so
+  // soundboard-driven turns appear alongside live-voice turns in the diarized
+  // view. Populated during bake or on first play if missing.
+  transcript?: string | null
+
   bakeTimestamp?: number        // unix ms
   createdAt: number
   updatedAt: number

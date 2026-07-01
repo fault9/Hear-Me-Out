@@ -11,15 +11,16 @@
 //  baked clips reach PP exactly as baked (no double-conversion).
 // ============================================================================
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
-import { Play, Square, Download, Filter, ListMusic } from "lucide-react"
+import { Play, Square, Download, Filter, ListMusic, Headphones, Pause } from "lucide-react"
 import { useSoundboard, makeSessionContext, type SessionContext } from "@/hooks/useSoundboard"
 import { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
 import type { useWebSocket } from "@/hooks/useWebSocket"
+import type { Slot } from "@/lib/soundboardDb"
 
 interface Props {
   ws: ReturnType<typeof useWebSocket>
@@ -55,6 +56,28 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
       void sb.logPlayback(slot, session, rec.startMs, rec.endMs, rec.clipDurationMs)
     },
   })
+
+  // Local "hear this slot" preview — audio goes to the researcher's speakers
+  // ONLY, never touches PP. Useful for auditing a clip before triggering it.
+  // Shared previewRef ensures only one local preview at a time; clicking the
+  // active one pauses.
+  const previewRef = useRef<{ stop: () => void } | null>(null)
+  const [previewingId, setPreviewingId] = useState<string | null>(null)
+  const togglePreview = async (slot: Slot) => {
+    if (previewingId === slot.id) {
+      previewRef.current?.stop()
+      return
+    }
+    previewRef.current?.stop()
+    const blob = slot.baked ?? slot.raw
+    if (!blob) return
+    setPreviewingId(slot.id)
+    const handle = await sb.previewBlob(blob, () => {
+      setPreviewingId((cur) => (cur === slot.id ? null : cur))
+      previewRef.current = null
+    })
+    previewRef.current = handle
+  }
 
   const conditions = useMemo(() => {
     const set = new Set<string>()
@@ -132,29 +155,45 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-col gap-1.5">
           {visible.map((slot) => {
             const playing = playback.playingSlotId === slot.id
+            const previewing = previewingId === slot.id
             return (
-              <Button
-                key={slot.id}
-                variant={playing ? "default" : "outline"}
-                size="xs"
-                onClick={() => playing ? playback.stop() : playback.playSlot(slot)}
-                disabled={
-                  !ws.connected ||
-                  vcEnabled ||
-                  (playback.playingSlotId !== null && !playing)
-                }
-                className="max-w-[220px] truncate"
-                title={`${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s`}
-              >
-                {playing ? <Square className="size-3" /> : <Play className="size-3" />}
-                <span className="truncate">{slot.label}</span>
-                <Badge variant="secondary" className="text-[9px] h-3.5">
-                  {slot.condition}
-                </Badge>
-              </Button>
+              <div key={slot.id} className="flex items-center gap-1">
+                <Button
+                  variant={playing ? "default" : "outline"}
+                  size="xs"
+                  onClick={() => playing ? playback.stop() : playback.playSlot(slot)}
+                  disabled={
+                    !ws.connected ||
+                    vcEnabled ||
+                    (playback.playingSlotId !== null && !playing)
+                  }
+                  className="flex-1 justify-start max-w-[300px] truncate"
+                  title={
+                    !ws.connected ? "Start a conversation first" :
+                    vcEnabled ? "Turn off VC to enable soundboard playback" :
+                    `Send to PP · ${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s`
+                  }
+                >
+                  {playing ? <Square className="size-3" /> : <Play className="size-3" />}
+                  <span className="truncate flex-1 text-left">{slot.label}</span>
+                  <Badge variant="secondary" className="text-[9px] h-3.5">
+                    {slot.condition}
+                  </Badge>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => togglePreview(slot)}
+                  title="Hear this slot locally (does NOT send to PP)"
+                >
+                  {previewing
+                    ? <Pause className="size-3" />
+                    : <Headphones className="size-3" />}
+                </Button>
+              </div>
             )
           })}
           {visible.length === 0 && (

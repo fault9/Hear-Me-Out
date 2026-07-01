@@ -43,6 +43,7 @@ import {
 import {
   convertVoice,
   pitchFormantBake as apiPitchFormantBake,
+  transcribeWavBlob,
 } from "@/services/api"
 import { exportSoundboard, importSoundboard } from "@/lib/soundboardZip"
 
@@ -67,6 +68,19 @@ const SOUNDBOARD_EVENT = "hmo-soundboard-changed"
 function notifyChange() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(SOUNDBOARD_EVENT))
+  }
+}
+
+// Auto-Whisper on the given audio; returns null on failure (never throws) so
+// callers can attach the transcript opportunistically without failing the
+// bake/record on transcription hiccups.
+async function safeTranscribe(blob: Blob): Promise<string | null> {
+  try {
+    const result = await transcribeWavBlob(blob)
+    return (result.text || "").trim() || null
+  } catch (e) {
+    console.warn("[soundboard] transcript failed:", e)
+    return null
   }
 }
 
@@ -265,6 +279,10 @@ export function useSoundboard() {
     // a re-record invalidates the bake by definition.
     const existing = (await listSlots()).find((s) => s.id === slotId)
     if (!existing) throw new Error(`Slot ${slotId} not found.`)
+    // Auto-transcribe the fresh take so slot.transcript is populated for the
+    // runtime panel. Non-blocking would be nicer UX but the returned Slot is
+    // stored immediately; we just update once transcription lands.
+    const transcript = await safeTranscribe(wav)
     const patched: Slot = {
       ...existing,
       raw: wav,
@@ -275,6 +293,7 @@ export function useSoundboard() {
       driftMs: 0,
       bakeTimestamp: undefined,
       qualityScore: null,
+      transcript,
     }
     await putSlot(patched)
     await refresh()
@@ -300,6 +319,7 @@ export function useSoundboard() {
     const wav = encodeWavAtPpRate(conformed.pcm, PP_SAMPLE_RATE)
     const existing = (await listSlots()).find((s) => s.id === slotId)
     if (!existing) throw new Error(`Slot ${slotId} not found.`)
+    const transcript = await safeTranscribe(wav)
     const patched: Slot = {
       ...existing,
       raw: wav,
@@ -310,6 +330,7 @@ export function useSoundboard() {
       driftMs: 0,
       bakeTimestamp: undefined,
       qualityScore: null,
+      transcript,
     }
     await putSlot(patched)
     await refresh()
@@ -408,15 +429,22 @@ export function useSoundboard() {
         updates.driftMs = result.driftMs
       }
 
+      // Transcribe the FINAL clip that will be sent to PP (baked if there
+      // is one, else raw for unconverted mode). Runtime panel injects this
+      // text into the conversation transcript when the slot plays.
+      const forTranscript = baked ?? slot.raw
+      const transcript = forTranscript ? await safeTranscribe(forTranscript) : null
+
       const patched: Slot = {
         ...slot,
         ...updates,
         baked,
+        transcript,
         bakeTimestamp: Date.now(),
       }
       await putSlot(patched)
       await refresh()
-    notifyChange()
+      notifyChange()
     },
     [refresh],
   )

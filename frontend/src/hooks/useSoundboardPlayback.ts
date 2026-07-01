@@ -209,6 +209,12 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
       setPlayingSlotId(slot.id)
       onPlayStart?.(slot, startMs)
       src.start(0)
+      // Inject slot transcript into the conversation stream so soundboard
+      // turns appear alongside live-voice turns. Skipped if the slot has
+      // no transcript (auto-Whisper failed or hasn't run yet).
+      if (slot.transcript) {
+        ws.addUserTranscript(slot.transcript, clipDurationMs / 1000)
+      }
 
       // onended fires when the buffer plays through; we give the encoder a
       // tiny grace period to flush any partial frame before stopping.
