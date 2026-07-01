@@ -24,7 +24,6 @@ import {
   DURATION_DRIFT_TOLERANCE_MS,
   PITCH_FORMANT_PRESETS,
   PITCH_FORMANT_DEFAULTS,
-  DEFAULT_TARGET,
 } from "@/lib/soundboardConfig"
 import type { Slot, ManipulationMode } from "@/lib/soundboardDb"
 
@@ -51,8 +50,9 @@ export function ConfigureSoundboard() {
   const importInputRef = useRef<HTMLInputElement | null>(null)
 
   const showError = (e: unknown) => {
+    // Longer timeout so errors during a fast-throwing bake are readable.
     setFeedback((e as Error)?.message || String(e))
-    setTimeout(() => setFeedback(null), 5000)
+    setTimeout(() => setFeedback(null), 15000)
   }
 
   const handleCreate = async () => {
@@ -257,13 +257,12 @@ function TargetLibrary({ sb }: { sb: ReturnType<typeof useSoundboard> }) {
             }}
           />
         </div>
-        {DEFAULT_TARGET.builtin && (
-          <p className="text-[10px] text-muted-foreground">
-            Built-in target is referenced by name on the server (PP's voice prompt).
-            VC bakes against the built-in target are not supported yet — upload a
-            target WAV to use VC mode.
-          </p>
-        )}
+        <p className="text-[10px] text-muted-foreground">
+          Targets are the voice IDENTITY seed-vc converts your recording INTO
+          — e.g. upload a WAV of a female speaker to make your voice sound
+          female to PP. The soundboard never touches PP's own response voice.
+          Upload at least one WAV to enable VC-mode bakes.
+        </p>
       </CardContent>
     </Card>
   )
@@ -288,7 +287,11 @@ function SlotCard({
   const uploadRef = useRef<HTMLInputElement | null>(null)
 
   const [mode, setMode] = useState<ManipulationMode>(slot.manipulation)
-  const [targetId, setTargetId] = useState<string>(slot.targetId || sb.targets[0]?.id || "")
+  // VC bakes need a target WAV (built-in targets are name-only stubs and
+  // can't be used for VC yet). Default to the first uploaded target so the
+  // <select> value matches an actual <option>.
+  const vcCandidates = sb.targets.filter((t) => !!t.wav)
+  const [targetId, setTargetId] = useState<string>(slot.targetId || vcCandidates[0]?.id || "")
   const [semitones, setSemitones] = useState<number>(slot.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones)
   const [formantShift, setFormantShift] = useState<number>(slot.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift)
   const [baking, setBaking] = useState(false)
@@ -304,7 +307,8 @@ function SlotCard({
     setMode(slot.manipulation)
     setSemitones(slot.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones)
     setFormantShift(slot.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift)
-    setTargetId(slot.targetId || sb.targets[0]?.id || "")
+    const cands = sb.targets.filter((t) => !!t.wav)
+    setTargetId(slot.targetId || cands[0]?.id || "")
   }, [slot.id, slot.updatedAt]) // intentionally narrow
 
   const startRec = async () => {
@@ -444,19 +448,36 @@ function SlotCard({
           </div>
 
           {mode === "vc" && (
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="space-y-1">
-                <Label className="text-[10px]">Target voice</Label>
-                <select
-                  className="h-8 rounded-md border bg-background px-2 text-xs"
-                  value={targetId}
-                  onChange={(e) => setTargetId(e.target.value)}
-                >
-                  {sb.targets.filter((t) => !!t.wav).map((t) => (
-                    <option key={t.id} value={t.id}>{t.label}</option>
-                  ))}
-                </select>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px]">
+                    Target voice — what to convert YOUR voice INTO
+                  </Label>
+                  {vcCandidates.length === 0 ? (
+                    <p className="text-[11px] text-amber-500 max-w-xs">
+                      No uploaded target voices yet. Add one in the "Target voices"
+                      section above (drag or upload a WAV of the speaker whose
+                      voice identity you want to imitate).
+                    </p>
+                  ) : (
+                    <select
+                      className="h-8 rounded-md border bg-background px-2 text-xs"
+                      value={targetId}
+                      onChange={(e) => setTargetId(e.target.value)}
+                    >
+                      {vcCandidates.map((t) => (
+                        <option key={t.id} value={t.id}>{t.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </div>
+              <p className="text-[10px] text-muted-foreground">
+                VC-mode bake sends your recording + this target through seed-vc
+                (GPU). Doesn't touch PP's response voice — the soundboard is
+                for USER input only.
+              </p>
             </div>
           )}
 
@@ -492,7 +513,16 @@ function SlotCard({
               variant="default"
               size="sm"
               onClick={handleBake}
-              disabled={baking || !slot.raw}
+              disabled={
+                baking ||
+                !slot.raw ||
+                (mode === "vc" && (!targetId || vcCandidates.length === 0))
+              }
+              title={
+                !slot.raw ? "Record or upload raw audio first" :
+                (mode === "vc" && vcCandidates.length === 0) ? "Upload a target voice first" :
+                "Run the bake"
+              }
             >
               {baking ? <Spinner className="size-3.5" /> : <Wand2 className="size-3.5" />}
               Bake
