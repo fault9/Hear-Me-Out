@@ -69,6 +69,15 @@ async function setAudioSink(ctx: AudioContext | null, deviceId: string, label: s
 export function useWebSocket() {
   const socketRef = useRef<WebSocket | null>(null);
   const intentionalClose = useRef(false);
+  // When the soundboard is playing a slot, we mute the live mic's send path
+  // so PP receives a single coherent Opus stream (soundboard only), not the
+  // mic + soundboard interleaved at 2x packet rate. Ref (not state) so
+  // toggling doesn't trigger React re-renders on every 80 ms audio frame.
+  const micMutedRef = useRef(false);
+  const setMicMuted = useCallback((muted: boolean) => {
+    micMutedRef.current = muted;
+  }, []);
+  const isMicMuted = useCallback(() => micMutedRef.current, []);
   const decoderRef = useRef<OggOpusDecoder | null>(null);
   const mergedCtxRef = useRef<AudioContext | null>(null);
   const mergedDestRef = useRef<AudioNode | null>(null);
@@ -475,5 +484,7 @@ export function useWebSocket() {
     getPersonaplexStartTime,
     getConversationDuration,
     setMergedOutput,
+    setMicMuted,
+    isMicMuted,
   };
 }

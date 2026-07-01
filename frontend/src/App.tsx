@@ -11,7 +11,14 @@ import { Mic, GitCompare, Wand2, ListMusic } from "lucide-react"
 
 function App() {
   const ws = useWebSocket()
-  const recorder = useRecorder((data) => ws.sendAudio(data))
+  // Live-mic bytes are gated by ws.isMicMuted() so the soundboard can suppress
+  // them mid-clip. Without this the mic stream and the soundboard-clip stream
+  // are both sent as Opus over the same 0x01 channel, doubling PP's input rate
+  // and confusing its turn-taking logic (short "okay" barge-ins).
+  const recorder = useRecorder((data) => {
+    if (ws.isMicMuted()) return
+    ws.sendAudio(data)
+  })
   const [activeTab, setActiveTab] = useState("conversation")
 
 

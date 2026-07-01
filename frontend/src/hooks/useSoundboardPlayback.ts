@@ -102,6 +102,8 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
   const stop = useCallback(async () => {
     const slot = activeSlotRef.current
     await teardown()
+    // Un-suppress the live mic so normal conversation can resume.
+    ws.setMicMuted(false)
     if (slot) {
       const endMs = performance.now()
       onPlayEnd?.(slot, {
@@ -113,7 +115,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
     }
     activeSlotRef.current = null
     setPlayingSlotId(null)
-  }, [onPlayEnd, teardown])
+  }, [onPlayEnd, teardown, ws])
 
   const playSlot = useCallback(
     async (slot: Slot) => {
@@ -196,6 +198,9 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
       activeSlotRef.current = slot
       clipDurationRef.current = clipDurationMs
 
+      // Suppress the live mic BEFORE starting the encoder so no mic packets
+      // slip through while the soundboard's Opus stream ramps up.
+      ws.setMicMuted(true)
       await recorder.start()
       // Recorder is now connected to src in opus-recorder's internal graph.
       // Start the source AFTER recorder.start() so we don't lose initial frames.

@@ -173,9 +173,10 @@ export function ConversationView({ ws, recorder }: Props) {
         </Card>
 
         {/* Runtime soundboard: render only when slots exist. Plays via
-            ws.sendAudio (direct-to-PP). Use with VC OFF on the control panel
-            so baked clips are not re-converted by the live VC stack. */}
-        <SoundboardPanel ws={ws} />
+            ws.sendAudio (direct-to-PP). VC must be OFF — the panel refuses
+            to play if vcEnabled is true because Opus can't be routed through
+            the MeanVC/X-VC chat-proxy (which expects raw PCM). */}
+        <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
       </div>
 
       {showVcMetrics && vcMetrics && (

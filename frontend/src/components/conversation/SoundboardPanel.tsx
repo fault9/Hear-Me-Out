@@ -23,9 +23,15 @@ import type { useWebSocket } from "@/hooks/useWebSocket"
 
 interface Props {
   ws: ReturnType<typeof useWebSocket>
+  // True when VC (MeanVC/X-VC) is enabled for this conversation. Soundboard
+  // playback is direct-to-PP (Opus over the 0x01 tag) and CANNOT go through
+  // the chat-proxy (which expects raw PCM). If VC is on, we disable the
+  // panel and tell the researcher to turn VC off — otherwise PP would receive
+  // garbled Opus packets on a raw-PCM channel and misbehave.
+  vcEnabled?: boolean
 }
 
-export function SoundboardPanel({ ws }: Props) {
+export function SoundboardPanel({ ws, vcEnabled }: Props) {
   const sb = useSoundboard()
   const [conditionFilter, setConditionFilter] = useState<string>("__all__")
   const [conditionContext, setConditionContext] = useState("")
@@ -118,6 +124,14 @@ export function SoundboardPanel({ ws }: Props) {
           />
         </div>
 
+        {vcEnabled && (
+          <div className="rounded-md border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-500">
+            Soundboard playback is disabled while live VC is enabled. Turn VC
+            off in the control panel above — baked clips go direct to PP as
+            Opus and cannot be routed through the MeanVC/X-VC chat-proxy.
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-1.5">
           {visible.map((slot) => {
             const playing = playback.playingSlotId === slot.id
@@ -127,7 +141,11 @@ export function SoundboardPanel({ ws }: Props) {
                 variant={playing ? "default" : "outline"}
                 size="xs"
                 onClick={() => playing ? playback.stop() : playback.playSlot(slot)}
-                disabled={!ws.connected || (playback.playingSlotId !== null && !playing)}
+                disabled={
+                  !ws.connected ||
+                  vcEnabled ||
+                  (playback.playingSlotId !== null && !playing)
+                }
                 className="max-w-[220px] truncate"
                 title={`${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s`}
               >
