@@ -25,7 +25,7 @@ import {
   PITCH_FORMANT_PRESETS,
   PITCH_FORMANT_DEFAULTS,
 } from "@/lib/soundboardConfig"
-import type { Slot, ManipulationMode } from "@/lib/soundboardDb"
+import type { Slot, Target, ManipulationMode } from "@/lib/soundboardDb"
 
 // Suggested condition tags — researchers add their own freely.
 const CONDITION_PRESETS = [
@@ -182,7 +182,9 @@ function TargetLibrary({ sb }: { sb: ReturnType<typeof useSoundboard> }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [uploadLabel, setUploadLabel] = useState("")
   const [busy, setBusy] = useState(false)
-  const [previewing, setPreviewing] = useState<{ stop: () => void } | null>(null)
+  // Track WHICH target is currently playing so the button can toggle icons.
+  const [playingId, setPlayingId] = useState<string | null>(null)
+  const stopRef = useRef<(() => void) | null>(null)
 
   const handleFile = async (file: File) => {
     if (!uploadLabel.trim()) {
@@ -198,10 +200,21 @@ function TargetLibrary({ sb }: { sb: ReturnType<typeof useSoundboard> }) {
     } finally { setBusy(false) }
   }
 
-  const preview = async (blob: Blob | null) => {
-    if (!blob) return
-    previewing?.stop()
-    setPreviewing(await sb.previewBlob(blob))
+  const togglePreview = async (t: Target) => {
+    if (!t.wav) return
+    // Second click on the same target = pause.
+    if (playingId === t.id) {
+      stopRef.current?.()
+      return
+    }
+    // Different target playing — stop it first.
+    stopRef.current?.()
+    setPlayingId(t.id)
+    const handle = await sb.previewBlob(t.wav, () => {
+      setPlayingId((cur) => (cur === t.id ? null : cur))
+      stopRef.current = null
+    })
+    stopRef.current = handle.stop
   }
 
   return (
@@ -216,8 +229,10 @@ function TargetLibrary({ sb }: { sb: ReturnType<typeof useSoundboard> }) {
               <span className="font-medium">{t.label}</span>
               {t.builtin && <Badge variant="secondary" className="text-[9px] h-4">builtin</Badge>}
               {t.wav && (
-                <Button variant="ghost" size="xs" onClick={() => preview(t.wav)}>
-                  <Play className="size-3" />
+                <Button variant="ghost" size="xs" onClick={() => togglePreview(t)}>
+                  {playingId === t.id
+                    ? <Pause className="size-3" />
+                    : <Play className="size-3" />}
                 </Button>
               )}
               {!t.builtin && (
@@ -295,8 +310,11 @@ function SlotCard({
   const [semitones, setSemitones] = useState<number>(slot.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones)
   const [formantShift, setFormantShift] = useState<number>(slot.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift)
   const [baking, setBaking] = useState(false)
+  // "playing" tracks which clip (raw|baked) is currently sounding, so the
+  // button icon can toggle Play↔Pause. previewRef.current.stop() is called
+  // both to pause manually and by src.onended when the clip finishes.
   const previewRef = useRef<{ stop: () => void } | null>(null)
-  const [previewing, setPreviewing] = useState<"raw" | "baked" | null>(null)
+  const [playing, setPlaying] = useState<"raw" | "baked" | null>(null)
   const [label, setLabel] = useState(slot.label)
   const [condition, setCondition] = useState(slot.condition)
 
@@ -344,12 +362,21 @@ function SlotCard({
   }
 
   const preview = async (which: "raw" | "baked") => {
+    // Second click on the same clip = pause.
+    if (playing === which) {
+      previewRef.current?.stop()
+      return
+    }
+    // Switch to a different clip — stop the current one first.
     previewRef.current?.stop()
     const blob = which === "raw" ? slot.raw : (slot.baked ?? slot.raw)
     if (!blob) return
-    setPreviewing(which)
-    previewRef.current = await sb.previewBlob(blob)
-    setTimeout(() => setPreviewing(null), 100) // visual flash; real stop happens onended
+    setPlaying(which)
+    const handle = await sb.previewBlob(blob, () => {
+      setPlaying((cur) => (cur === which ? null : cur))
+      previewRef.current = null
+    })
+    previewRef.current = handle
   }
 
   const saveMeta = async () => {
@@ -424,7 +451,7 @@ function SlotCard({
           {slot.raw && (
             <>
               <Button variant="ghost" size="xs" onClick={() => preview("raw")}>
-                {previewing === "raw" ? <Pause className="size-3" /> : <Play className="size-3" />}
+                {playing === "raw" ? <Pause className="size-3" /> : <Play className="size-3" />}
                 raw
               </Button>
               <Button
@@ -545,7 +572,7 @@ function SlotCard({
               {(slot.baked || (mode === "unconverted" && slot.raw)) && (
                 <>
                   <Button variant="ghost" size="xs" onClick={() => preview("baked")}>
-                    {previewing === "baked" ? <Pause className="size-3" /> : <Play className="size-3" />}
+                    {playing === "baked" ? <Pause className="size-3" /> : <Play className="size-3" />}
                     baked
                   </Button>
                   {slot.baked && (

@@ -395,23 +395,29 @@ export function useSoundboard() {
   // ---------- preview ----------
   // Decode + play locally via AudioBufferSourceNode → destination. Does NOT
   // touch PP. Used in Configure to sanity-check a bake before committing.
-  const previewBlob = useCallback(async (blob: Blob): Promise<{ stop: () => void }> => {
-    const ctx = new AudioContext()
-    const audio = await ctx.decodeAudioData(await blob.arrayBuffer())
-    const src = ctx.createBufferSource()
-    src.buffer = audio
-    src.connect(ctx.destination)
-    src.start(0)
-    let stopped = false
-    src.onended = () => { if (!stopped) ctx.close() }
-    return {
-      stop: () => {
-        stopped = true
-        try { src.stop() } catch { /* noop */ }
-        ctx.close()
-      },
-    }
-  }, [])
+  // onEnded fires when the clip finishes naturally OR when stop() is called,
+  // so callers can flip a play/pause icon back to "play" without a timer.
+  const previewBlob = useCallback(
+    async (blob: Blob, onEnded?: () => void): Promise<{ stop: () => void }> => {
+      const ctx = new AudioContext()
+      const audio = await ctx.decodeAudioData(await blob.arrayBuffer())
+      const src = ctx.createBufferSource()
+      src.buffer = audio
+      src.connect(ctx.destination)
+      let finished = false
+      const cleanup = () => {
+        if (finished) return
+        finished = true
+        try { src.stop() } catch { /* already ended */ }
+        try { ctx.close() } catch { /* noop */ }
+        onEnded?.()
+      }
+      src.onended = cleanup
+      src.start(0)
+      return { stop: cleanup }
+    },
+    [],
+  )
 
   // ---------- session log ----------
   const logPlayback = useCallback(async (
