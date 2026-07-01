@@ -168,6 +168,14 @@ export function ConversationView({
           </CardContent>
         </Card>
 
+        {/* Runtime soundboard: mounted DIRECTLY BELOW ControlPanel so the
+            slot buttons appear right where the toggle is — no scrolling
+            required to see them. Opt-in via the ControlPanel toggle above.
+            VC must be OFF — panel refuses to play if vcEnabled is true. */}
+        {soundboardEnabled && (
+          <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
+        )}
+
         {/* Partial transcript card: bounded to a fixed max-height so it
             doesn't greedily fill the column via flex-1, which fought with
             the column's overflow-y-auto and pushed the soundboard off-screen
@@ -190,13 +198,6 @@ export function ConversationView({
           </CardContent>
         </Card>
 
-        {/* Runtime soundboard: opt-in via ControlPanel toggle. Plays via
-            ws.sendAudio (direct-to-PP). VC must be OFF — the panel refuses
-            to play if vcEnabled is true because Opus can't be routed through
-            the MeanVC/X-VC chat-proxy (which expects raw PCM). */}
-        {soundboardEnabled && (
-          <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
-        )}
       </div>
 
       {showVcMetrics && vcMetrics && (
