@@ -142,7 +142,7 @@ export function ConversationView({
           column height. min-h-0 is required for the flex child to shrink
           below its content size and let overflow-y-auto kick in. */}
       <div className="flex flex-col gap-4 order-first md:order-none md:row-start-2 md:col-start-2 md:min-h-0 md:overflow-y-auto">
-        <Card className="py-0 overflow-visible">
+        <Card className="py-0 overflow-visible shrink-0">
           <CardContent className="p-0">
             <ControlPanel
               isConnected={isConnected}
@@ -168,12 +168,17 @@ export function ConversationView({
           </CardContent>
         </Card>
 
-        {/* Runtime soundboard: mounted DIRECTLY BELOW ControlPanel so the
-            slot buttons appear right where the toggle is — no scrolling
-            required to see them. Opt-in via the ControlPanel toggle above.
-            VC must be OFF — panel refuses to play if vcEnabled is true. */}
+        {/* Runtime soundboard: mounted DIRECTLY BELOW ControlPanel. Wrapped in
+            shrink-0 because the right column is a bounded overflow-y-auto flex
+            container on desktop — without it, flex-shrink collapses the panel
+            to zero height (it "vanishes" in the wide layout while showing fine
+            in the narrow, unbounded layout). shrink-0 keeps its natural height
+            so the column scrolls to it instead. VC must be OFF — panel refuses
+            to play if vcEnabled is true. */}
         {soundboardEnabled && (
-          <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
+          <div className="shrink-0">
+            <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
+          </div>
         )}
 
         {/* Partial transcript card: bounded to a fixed max-height so it
