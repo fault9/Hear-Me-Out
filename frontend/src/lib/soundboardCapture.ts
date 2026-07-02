@@ -105,17 +105,60 @@ async function concatToWav(blobs: Blob[]): Promise<Blob | null> {
   return createWavFile(combined, PP_SAMPLE_RATE)
 }
 
-// What PP actually heard from the "user": every sent clip concatenated. This
-// is the downloadable "You" WAV and VC-quality's "converted" input.
+// GAPLESS concat of the sent clips — VC-quality's "converted" input. Silence
+// gaps are intentionally dropped here so WER/SECS/UTMOS score the speech, not
+// the dead air between plays.
 export function assembleSentWav(): Promise<Blob | null> {
   return concatToWav(clips.map((c) => c.sentBlob))
 }
 
-// The pre-bake raw takes concatenated in the same order — VC-quality's
-// "source" (what the researcher said before any conversion). Null if any clip
-// lacks a raw take, since a partial source would misalign with the converted.
+// GAPLESS concat of the pre-bake raw takes — VC-quality's "source". Null if any
+// clip lacks a raw take, since a partial source would misalign with converted.
 export function assembleRawWav(): Promise<Blob | null> {
   const raws = clips.map((c) => c.rawBlob)
   if (raws.some((b) => !b)) return Promise.resolve(null)
   return concatToWav(raws as Blob[])
+}
+
+// TIMELINE placement: each clip is written into a silence buffer at its
+// conversation-relative start time (startSec), so the recording reflects WHEN
+// each clip was actually played. PersonaPlex audio is positioned on the same
+// t=0 (handshake) timeline, so merging the two yields a properly synced
+// conversation recording — this is what the "You"/"All" downloads use.
+async function timelineToWav(pick: (c: CapturedClip) => Blob | null): Promise<Blob | null> {
+  const placed: { pcm: Float32Array; startSample: number }[] = []
+  let maxEnd = 0
+  for (const c of clips) {
+    const b = pick(c)
+    if (!b) continue
+    const decoded = await decodeToPcm(b)
+    const pcm =
+      decoded.sampleRate === PP_SAMPLE_RATE
+        ? decoded.pcm
+        : await resampleTo(decoded.pcm, decoded.sampleRate, PP_SAMPLE_RATE)
+    const startSample = Math.max(0, Math.round(c.startSec * PP_SAMPLE_RATE))
+    placed.push({ pcm, startSample })
+    maxEnd = Math.max(maxEnd, startSample + pcm.length)
+  }
+  if (maxEnd === 0) return null
+  const buf = new Float32Array(maxEnd)
+  for (const { pcm, startSample } of placed) {
+    // Overlay (clips shouldn't overlap in practice; clamp defensively).
+    for (let i = 0; i < pcm.length; i++) {
+      const idx = startSample + i
+      buf[idx] = Math.max(-1, Math.min(1, buf[idx] + pcm[i]))
+    }
+  }
+  return createWavFile(buf, PP_SAMPLE_RATE)
+}
+
+// Downloadable "You" WAV: sent clips on the conversation timeline.
+export function assembleSentTimelineWav(): Promise<Blob | null> {
+  return timelineToWav((c) => c.sentBlob)
+}
+
+// Downloadable "You (raw)" WAV: pre-bake raw takes on the conversation timeline.
+export function assembleRawTimelineWav(): Promise<Blob | null> {
+  if (clips.some((c) => !c.rawBlob)) return Promise.resolve(null)
+  return timelineToWav((c) => c.rawBlob)
 }

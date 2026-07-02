@@ -18,6 +18,8 @@ import {
   getCapturedClips,
   assembleSentWav,
   assembleRawWav,
+  assembleSentTimelineWav,
+  assembleRawTimelineWav,
   singleVcTarget,
   resetCapture,
 } from "@/lib/soundboardCapture"
@@ -422,11 +424,14 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         // sessions only; see singleVcTarget).
         if (hasCapture()) {
           try {
-            const sentWav = await assembleSentWav()
+            // Downloads use the TIMELINE assembly (clips at their real play
+            // times) so the recording is synced with the interaction and, when
+            // merged with PP, plays back as the actual conversation.
+            const sentWav = await assembleSentTimelineWav()
             if (isCurrentRun() && sentWav) {
               setUserWavUrl(URL.createObjectURL(sentWav))
-              // "conversation.wav" / inline player should be PP + soundboard,
-              // not PP + silent mic. Merge the sent audio with PP's response.
+              // "conversation.wav" / inline player = PP + soundboard on the same
+              // timeline (not PP + silent mic).
               if (pplxWav) {
                 try {
                   const merged = await mergeAudioTracks(sentWav, pplxWav)
@@ -434,7 +439,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
                 } catch { /* keep the mic-merged track as a fallback */ }
               }
             }
-            const rawWav = await assembleRawWav()
+            const rawWav = await assembleRawTimelineWav()
             if (isCurrentRun() && rawWav) setOriginalUserWavUrl(URL.createObjectURL(rawWav))
             const tgtId = singleVcTarget()
             if (tgtId) {
@@ -531,11 +536,25 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     const runId = conversationRunId.current
     setVcQualityLoading(true)
     try {
-      const [orig, conv, tgt] = await Promise.all([
-        fetch(originalUserWavUrl).then(r => r.blob()),
-        fetch(userWavUrl).then(r => r.blob()),
-        fetch(effectiveVcTargetUrl).then(r => r.blob()),
-      ])
+      // For a soundboard session the download URLs are the TIMELINE assembly
+      // (mostly silence between plays), which would wreck SECS/UTMOS. Score the
+      // GAPLESS concat of the captured clips instead. The capture buffer is
+      // still intact post-conversation (reset only on the next start).
+      const tgt = await fetch(effectiveVcTargetUrl).then(r => r.blob())
+      let orig: Blob | null
+      let conv: Blob | null
+      if (hasCapture()) {
+        ;[orig, conv] = await Promise.all([assembleRawWav(), assembleSentWav()])
+      } else {
+        ;[orig, conv] = await Promise.all([
+          fetch(originalUserWavUrl).then(r => r.blob()),
+          fetch(userWavUrl).then(r => r.blob()),
+        ])
+      }
+      if (!orig || !conv) {
+        if (runId === conversationRunId.current) setVcQualityData(null)
+        return
+      }
       const data = await vcQuality(orig, tgt, conv, {
         segmentMode: "fixed",
         // 5s/5s windows give ~5x fewer WavLM forward passes than the 2s/1s
