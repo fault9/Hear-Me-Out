@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
-import { Play, Square, Download, Filter, ListMusic, Headphones, Pause } from "lucide-react"
+import { Play, Square, Download, Filter, ListMusic, Headphones, Pause, Volume2, VolumeX } from "lucide-react"
 import { useSoundboard, makeSessionContext, type SessionContext } from "@/hooks/useSoundboard"
 import { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
 import type { useWebSocket } from "@/hooks/useWebSocket"
@@ -118,6 +118,21 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant={playback.monitorMuted ? "outline" : "secondary"}
+              size="xs"
+              onClick={() => playback.setMonitorMuted(!playback.monitorMuted)}
+              title={
+                playback.monitorMuted
+                  ? "Monitor is muted — you won't hear clips as they play to PP. Click to listen in."
+                  : "You're hearing clips locally as they play to PP. Click to mute (does NOT affect what PP receives)."
+              }
+            >
+              {playback.monitorMuted
+                ? <VolumeX className="size-3" />
+                : <Volume2 className="size-3" />}
+              {playback.monitorMuted ? "monitor off" : "monitor on"}
+            </Button>
             <div className="flex items-center gap-1">
               <Filter className="size-3 text-muted-foreground" />
               <select

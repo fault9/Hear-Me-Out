@@ -87,6 +87,19 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
   const startedAtRef = useRef<number>(0)
   const clipDurationRef = useRef<number>(0)
 
+  // Local monitor: whether the researcher hears the clip through their own
+  // speakers as it plays to PP. This is purely a local tap — muting it does
+  // NOT change what PP receives (the Opus stream is unaffected). Ref mirrors
+  // the state so a toggle mid-clip updates the live gain node immediately.
+  const [monitorMuted, setMonitorMutedState] = useState(false)
+  const monitorMutedRef = useRef(false)
+  const monitorGainRef = useRef<GainNode | null>(null)
+  const setMonitorMuted = useCallback((muted: boolean) => {
+    monitorMutedRef.current = muted
+    setMonitorMutedState(muted)
+    if (monitorGainRef.current) monitorGainRef.current.gain.value = muted ? 0 : 1
+  }, [])
+
   const teardown = useCallback(async () => {
     const rec = recRef.current
     const src = srcRef.current
@@ -94,6 +107,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
     recRef.current = null
     srcRef.current = null
     ctxRef.current = null
+    monitorGainRef.current = null
     try {
       src?.stop()
     } catch { /* already stopped */ }
@@ -177,13 +191,16 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
 
       const src = ctx.createBufferSource()
       src.buffer = audioBuffer
-      // LIVE MONITOR: also route the source to the local speakers so the
-      // researcher hears the same audio PP is receiving, in real time. This
-      // is a passive tap — the opus-recorder branch (which reads the source
-      // through its ScriptProcessor) is unaffected. If you want silent
-      // playback, mute your system output; there's no gain applied here so
-      // volume matches the bake's amplitude.
-      src.connect(ctx.destination)
+      // LIVE MONITOR: route the source to the local speakers through a gain
+      // node so the researcher hears the same audio PP is receiving, in real
+      // time — and can mute/unmute it with the panel toggle without affecting
+      // what PP gets. This is a passive tap; the opus-recorder branch (which
+      // reads the source through its ScriptProcessor) is unaffected either way.
+      const monitorGain = ctx.createGain()
+      monitorGain.gain.value = monitorMutedRef.current ? 0 : 1
+      src.connect(monitorGain)
+      monitorGain.connect(ctx.destination)
+      monitorGainRef.current = monitorGain
 
       // Opus encoder mirrors live-mic config exactly.
       const recorder = new RecorderCtor({
@@ -281,5 +298,5 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
   // Tear down on unmount.
   useEffect(() => () => { void teardown() }, [teardown])
 
-  return { playingSlotId, playSlot, stop, error }
+  return { playingSlotId, playSlot, stop, error, monitorMuted, setMonitorMuted }
 }
