@@ -15,7 +15,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Badge } from "@/components/ui/badge"
 import {
   Mic, Square, Trash2, Play, Download, Upload, Wand2, Sparkles,
-  CheckCircle2, AlertTriangle, Pause, FileAudio,
+  CheckCircle2, AlertTriangle, Pause, FileAudio, ChevronUp, ChevronDown,
 } from "lucide-react"
 import { useSoundboard } from "@/hooks/useSoundboard"
 import {
@@ -166,8 +166,15 @@ export function ConfigureSoundboard() {
             No slots yet. Add one above to begin.
           </div>
         )}
-        {sb.slots.map((slot) => (
-          <SlotCard key={slot.id} slot={slot} sb={sb} onError={showError} />
+        {sb.slots.map((slot, i) => (
+          <SlotCard
+            key={slot.id}
+            slot={slot}
+            sb={sb}
+            onError={showError}
+            isFirst={i === 0}
+            isLast={i === sb.slots.length - 1}
+          />
         ))}
       </div>
     </div>
@@ -291,10 +298,14 @@ function SlotCard({
   slot,
   sb,
   onError,
+  isFirst,
+  isLast,
 }: {
   slot: Slot
   sb: ReturnType<typeof useSoundboard>
   onError: (e: unknown) => void
+  isFirst: boolean
+  isLast: boolean
 }) {
   const [recording, setRecording] = useState(false)
   const [recElapsedMs, setRecElapsedMs] = useState(0)
@@ -407,6 +418,28 @@ function SlotCard({
             <datalist id={`cond-${slot.id}`}>
               {CONDITION_PRESETS.map((c) => <option key={c} value={c} />)}
             </datalist>
+          </div>
+          <div className="flex flex-col">
+            <Button
+              variant="ghost"
+              size="xs"
+              className="h-4 px-1"
+              disabled={isFirst}
+              onClick={() => sb.moveSlot(slot.id, "up")}
+              title="Move slot up"
+            >
+              <ChevronUp className="size-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="h-4 px-1"
+              disabled={isLast}
+              onClick={() => sb.moveSlot(slot.id, "down")}
+              title="Move slot down"
+            >
+              <ChevronDown className="size-3" />
+            </Button>
           </div>
           <Button variant="ghost" size="sm" onClick={() => sb.removeSlot(slot.id)}>
             <Trash2 className="size-3.5 text-destructive" />

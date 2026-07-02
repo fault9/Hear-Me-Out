@@ -157,6 +157,26 @@ export function useSoundboard() {
     notifyChange()
   }, [refresh])
 
+  // Move a slot one position up/down in the Configure list (and therefore in
+  // the runtime panel, which uses the same order). Swaps the two slots' sort
+  // keys — `order ?? createdAt`, on the createdAt scale — so the change is
+  // consistent whether or not the slots had an explicit order yet.
+  const moveSlot = useCallback(async (id: string, dir: "up" | "down") => {
+    const ordered = [...slots] // already sorted by listSlots
+    const i = ordered.findIndex((s) => s.id === id)
+    if (i < 0) return
+    const j = dir === "up" ? i - 1 : i + 1
+    if (j < 0 || j >= ordered.length) return
+    const a = ordered[i]
+    const b = ordered[j]
+    const aKey = a.order ?? a.createdAt
+    const bKey = b.order ?? b.createdAt
+    await putSlot({ ...a, order: bKey })
+    await putSlot({ ...b, order: aKey })
+    await refresh()
+    notifyChange()
+  }, [slots, refresh])
+
   // ---------- target CRUD ----------
   const addUploadedTarget = useCallback(async (label: string, file: File): Promise<Target> => {
     // Conform the upload to PP's expected format BEFORE storing. We don't
@@ -554,7 +574,7 @@ export function useSoundboard() {
 
   return {
     slots, targets, loading, error,
-    createSlot, updateSlot, removeSlot,
+    createSlot, updateSlot, removeSlot, moveSlot,
     addUploadedTarget, removeTarget,
     startRecording, stopRecording, abortRecording, loadRawFromFile,
     bakeSlot, previewBlob, downloadSlotAudio,

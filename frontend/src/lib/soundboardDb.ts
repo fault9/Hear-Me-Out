@@ -57,6 +57,10 @@ export interface Slot {
   transcript?: string | null
 
   bakeTimestamp?: number        // unix ms
+  // Manual sort key for the Configure tab's up/down reordering. Defaults to
+  // createdAt (insertion order) until the researcher reorders. Kept on the
+  // createdAt scale so slots with and without an explicit order sort together.
+  order?: number
   createdAt: number
   updatedAt: number
 }
@@ -153,7 +157,7 @@ function tx<T>(
 
 export function listSlots(): Promise<Slot[]> {
   return tx("slots", "readonly", (s) => s.getAll() as IDBRequest<Slot[]>).then(
-    (rows) => rows.sort((a, b) => a.createdAt - b.createdAt),
+    (rows) => rows.sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt)),
   )
 }
 
