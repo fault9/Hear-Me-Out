@@ -181,6 +181,18 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
   } = recorder
   const sendingBegun = useRef(false)
 
+  // The post-recording finalization effect must read the latest transcripts
+  // WITHOUT listing `transcripts` as a dependency. startConversation calls
+  // clearTranscripts(), which mutates `transcripts` and would re-fire the
+  // effect while the recorder still holds the PREVIOUS session's
+  // recordingAvailable/recordedChunks (they only reset when the new recorder
+  // starts, after handshake). That premature run consumes the
+  // transcribed.current guard, so the new session's real stop never finalizes
+  // — the 2nd+ conversation ends with no transcript. A ref hands the effect
+  // fresh transcripts without being a dependency.
+  const transcriptsRef = useRef(transcripts)
+  transcriptsRef.current = transcripts
+
   const startConversation = useCallback(async () => {
     conversationRunId.current += 1
     clearTranscripts()
@@ -393,7 +405,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         }
         if (!isCurrentRun()) return
 
-        const pplxTurns = fallbackPersonaplexTurns(transcripts)
+        const pplxTurns = fallbackPersonaplexTurns(transcriptsRef.current)
 
         // Soundboard turns come from the capture buffer, not the (muted) mic.
         // Each carries its own start/end (conversation-relative seconds), so the
@@ -451,7 +463,11 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         if (isCurrentRun()) setProcessing(false)
       }
     })()
-  }, [recordingAvailable, recordedChunks, getPersonaplexWav, transcripts, getMergedChunks])
+    // `transcripts` intentionally omitted — read via transcriptsRef so
+    // clearTranscripts() on the next session start doesn't re-fire this effect
+    // against the previous session's stale recorder state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordingAvailable, recordedChunks, getPersonaplexWav, getMergedChunks])
 
   // Results are ready once diarization lands → drop the shimmer.
   useEffect(() => {
