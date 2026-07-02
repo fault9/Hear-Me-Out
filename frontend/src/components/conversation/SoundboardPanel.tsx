@@ -37,11 +37,17 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
   const [conditionFilter, setConditionFilter] = useState<string>("__all__")
   const [conditionContext, setConditionContext] = useState("")
 
+  // Trail of slots played this session — greyed out so the researcher sees
+  // what's already been triggered, but still fully clickable (a turn can be
+  // replayed). Reset when a new conversation starts.
+  const [playedIds, setPlayedIds] = useState<Set<string>>(new Set())
+
   // A new session is minted when the WS connects; lasts for the conversation.
   const [session, setSession] = useState<SessionContext>(() => makeSessionContext(""))
   useEffect(() => {
     if (ws.connected) {
       setSession(makeSessionContext(conditionContext))
+      setPlayedIds(new Set())
     }
     // We deliberately don't mint a new session if conditionContext changes
     // mid-conversation — the user can rotate context label between conversations.
@@ -49,9 +55,16 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
   }, [ws.connected])
 
   // The playback hook does the actual byte-fidelity work; we just give it
-  // hooks for the timing log.
+  // hooks for the timing log + the played-trail.
   const playback = useSoundboardPlayback({
     ws,
+    onPlayStart: (slot) => {
+      setPlayedIds((prev) => {
+        const next = new Set(prev)
+        next.add(slot.id)
+        return next
+      })
+    },
     onPlayEnd: (slot, rec) => {
       void sb.logPlayback(slot, session, rec.startMs, rec.endMs, rec.clipDurationMs)
     },
@@ -189,6 +202,9 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
             const playing = playback.playingSlotId === slot.id
             const previewing = previewingId === slot.id
             const hasAudio = !!(slot.baked ?? slot.raw)
+            // Played this session but not currently playing → greyed trail.
+            // Still fully clickable so the turn can be replayed.
+            const played = playedIds.has(slot.id) && !playing
             return (
               <div key={slot.id} className="flex items-center gap-1">
                 <Button
@@ -201,16 +217,17 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
                     vcEnabled ||
                     (playback.playingSlotId !== null && !playing)
                   }
-                  className="flex-1 justify-start max-w-[300px] truncate"
+                  className={`flex-1 justify-start max-w-[300px] truncate ${played ? "opacity-45" : ""}`}
                   title={
                     !hasAudio ? "Slot has no recording yet — record/bake in Soundboard tab" :
                     !ws.connected ? "Start a conversation first" :
                     vcEnabled ? "Turn off VC to enable soundboard playback" :
-                    `Send to PP · ${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s`
+                    `Send to PP · ${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s${played ? " · played — click to replay" : ""}`
                   }
                 >
                   {playing ? <Square className="size-3" /> : <Play className="size-3" />}
                   <span className="truncate flex-1 text-left">{slot.label}</span>
+                  {played && <span className="text-[9px] text-muted-foreground">played</span>}
                   <Badge variant="secondary" className="text-[9px] h-3.5">
                     {slot.condition}
                   </Badge>
