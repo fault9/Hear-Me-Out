@@ -50,6 +50,7 @@ import type { Slot } from "@/lib/soundboardDb"
 import type { useWebSocket } from "@/hooks/useWebSocket"
 import { transcribeWavBlob } from "@/services/api"
 import { putSlot } from "@/lib/soundboardDb"
+import { captureClip } from "@/lib/soundboardCapture"
 
 // opus-recorder's Recorder is loaded globally via <script> tag in index.html.
 // Mirror the type already declared in useRecorder.ts but add the sourceNode
@@ -214,20 +215,45 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
       setPlayingSlotId(slot.id)
       onPlayStart?.(slot, startMs)
       src.start(0)
+
+      // Record what we're sending into the conversation-scoped capture buffer.
+      // This is the ONLY faithful record of the soundboard audio PP hears (the
+      // mic recorder is muted), and it's what useConversation reads at the end
+      // to build the final transcript + user WAV + VC-quality inputs.
+      const startSec = ws.getConversationElapsed()
+      const durationSec = clipDurationMs / 1000
+      const captured = captureClip({
+        slotId: slot.id,
+        slotLabel: slot.label,
+        condition: slot.condition,
+        manipulation: slot.manipulation,
+        targetId: slot.targetId,
+        sentBlob: blob,
+        rawBlob: slot.raw ?? null,
+        transcript: slot.transcript ?? null,
+        startSec,
+        endSec: startSec + durationSec,
+      })
+
       // Inject slot transcript into the conversation stream so soundboard
       // turns appear alongside live-voice turns. If the slot has no cached
       // transcript (older slot baked before auto-Whisper, or transcription
       // failed at bake time), kick off Whisper NOW and inject when done —
-      // it'll land in the transcript slightly late but still attributed.
+      // it'll land in the transcript slightly late but still attributed. We
+      // pin the turn to `startSec` so the live view and the final diarized
+      // transcript agree on placement.
       if (slot.transcript) {
-        ws.addUserTranscript(slot.transcript, clipDurationMs / 1000)
+        ws.addUserTranscript(slot.transcript, durationSec, startSec)
       } else {
         void (async () => {
           try {
             const result = await transcribeWavBlob(blob)
             const text = (result.text || "").trim()
             if (!text) return
-            ws.addUserTranscript(text, clipDurationMs / 1000)
+            // Fill the capture entry in place so the final transcript picks up
+            // the real text instead of the slot-label placeholder.
+            captured.transcript = text
+            ws.addUserTranscript(text, durationSec, startSec)
             // Persist so future plays are instant. Refetching from IDB
             // avoids clobbering any concurrent edits.
             try {

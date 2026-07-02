@@ -462,16 +462,23 @@ export function useWebSocket() {
     setError(null);
   }, []);
 
+  // Seconds elapsed since the PersonaPlex handshake (conversation start), or 0
+  // before the conversation begins. The soundboard uses this to timestamp its
+  // plays on the same timeline as PersonaPlex turns.
+  const getConversationElapsed = useCallback((): number => {
+    return conversationStart.current > 0
+      ? (Date.now() - conversationStart.current) / 1000
+      : 0
+  }, []);
+
   // Inject a user-speech transcript into the conversation stream. Used by the
   // soundboard so pre-baked clips appear in the live transcript view just like
-  // spoken turns. start/end are seconds since conversation start; computed
-  // from Date.now() minus conversationStart if the caller passes 0.
-  const addUserTranscript = useCallback((text: string, durationSec: number) => {
-    const nowSec =
-      conversationStart.current > 0
-        ? (Date.now() - conversationStart.current) / 1000
-        : 0
-    const start = Math.max(0, nowSec)
+  // spoken turns. `startSec` (seconds since conversation start) pins the turn
+  // on the timeline; if omitted we fall back to the current elapsed time.
+  // Returns the {start,end} used so the caller can align its own bookkeeping
+  // (e.g. the capture buffer) with what the transcript shows.
+  const addUserTranscript = useCallback((text: string, durationSec: number, startSec?: number) => {
+    const start = Math.max(0, startSec ?? getConversationElapsed())
     const end = start + Math.max(0.1, durationSec)
     setTranscripts((t) => [
       ...t,
@@ -483,7 +490,8 @@ export function useWebSocket() {
         speaker: "user",
       },
     ]);
-  }, []);
+    return { start, end }
+  }, [getConversationElapsed]);
 
   return {
     connected,
@@ -510,5 +518,6 @@ export function useWebSocket() {
     setMicMuted,
     isMicMuted,
     addUserTranscript,
+    getConversationElapsed,
   };
 }
