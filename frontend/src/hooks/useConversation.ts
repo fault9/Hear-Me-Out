@@ -364,20 +364,40 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     const isCurrentRun = () => runId === conversationRunId.current
     ;(async () => {
       try {
-        const result = await transcribeRecording(recordedChunks)
-        const userSegments = transcriptionToTurns(result, "user")
-        const userWav = await webmToWavBlob(recordedChunks)
+        // Mic transcription + WAV are BEST-EFFORT. A soundboard session records
+        // a muted (silent) mic, and transcribing/decoding that can throw or come
+        // back empty. That must NOT abort building the final transcript from the
+        // soundboard capture + PersonaPlex turns — otherwise a soundboard call
+        // ends with no transcript and no download bar at all.
+        let userSegments: DiarizedTurn[] = []
+        try {
+          const result = await transcribeRecording(recordedChunks)
+          userSegments = transcriptionToTurns(result, "user")
+        } catch (e) {
+          console.warn("Mic transcription failed (expected for soundboard-only calls):", e)
+        }
+        try {
+          const userWav = await webmToWavBlob(recordedChunks)
+          if (isCurrentRun()) setUserWavUrl(URL.createObjectURL(userWav))
+        } catch (e) {
+          console.warn("Mic WAV assembly failed (expected for soundboard-only calls):", e)
+        }
         if (!isCurrentRun()) return
-        setUserWavUrl(URL.createObjectURL(userWav))
 
-        const pplxWav = await getPersonaplexWav()
+        let pplxWav: Blob | null = null
+        try {
+          pplxWav = await getPersonaplexWav()
+          if (isCurrentRun() && pplxWav) setPersonaplexWavUrl(URL.createObjectURL(pplxWav))
+        } catch (e) {
+          console.warn("PersonaPlex WAV assembly failed:", e)
+        }
         if (!isCurrentRun()) return
-        if (pplxWav) setPersonaplexWavUrl(URL.createObjectURL(pplxWav))
 
         const pplxTurns = fallbackPersonaplexTurns(transcripts)
-        if (!isCurrentRun()) return
 
         // Soundboard turns come from the capture buffer, not the (muted) mic.
+        // Each carries its own start/end (conversation-relative seconds), so the
+        // diarized view + transcript download keep their timestamps.
         const sbTurns = hasCapture() ? soundboardTurns() : []
         const diarizedResult = [...userSegments, ...sbTurns, ...pplxTurns].sort((a, b) => a.start - b.start)
         setDiarized(diarizedResult)
