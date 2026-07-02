@@ -94,7 +94,7 @@ export function ConversationView({
   }, [playTime, playing])
 
   return (
-    <div className="flex flex-col gap-4 md:grid md:grid-cols-[1fr_280px] md:gap-4 md:h-full pb-2">
+    <div className="flex flex-col gap-4 md:grid md:grid-cols-[1fr_280px] md:grid-rows-[auto_minmax(0,1fr)] md:gap-4 md:h-full md:min-h-0 pb-2">
       {processing && !showResult && <DownloadBarSkeleton />}
 
       {showResult && (
@@ -120,7 +120,7 @@ export function ConversationView({
         />
       )}
 
-      <Card className="flex flex-col overflow-hidden h-full py-0">
+      <Card className="flex flex-col overflow-hidden h-full py-0 md:row-start-2 md:col-start-1">
         <CardContent className="flex flex-1 flex-col p-0 overflow-y-auto" role="status" aria-live="polite">
           <MessageFeed
             transcripts={ws.transcripts}
@@ -141,7 +141,7 @@ export function ConversationView({
           future addition) makes total content exceed the viewport-bounded
           column height. min-h-0 is required for the flex child to shrink
           below its content size and let overflow-y-auto kick in. */}
-      <div className="flex flex-col gap-4 order-first md:order-none md:min-h-0 md:overflow-y-auto">
+      <div className="flex flex-col gap-4 order-first md:order-none md:row-start-2 md:col-start-2 md:min-h-0 md:overflow-y-auto">
         <Card className="py-0 overflow-visible">
           <CardContent className="p-0">
             <ControlPanel
