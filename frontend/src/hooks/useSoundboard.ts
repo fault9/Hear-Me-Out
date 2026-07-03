@@ -50,6 +50,9 @@ import { exportSoundboard, importSoundboard } from "@/lib/soundboardZip"
 export interface SessionContext {
   sessionId: string
   conditionContext: string
+  // Human-readable counted-session number (P4). Undefined for the initial
+  // empty context before any conversation has started.
+  sessionNumber?: number
 }
 
 export function makeSessionContext(label: string = ""): SessionContext {

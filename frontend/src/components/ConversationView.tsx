@@ -164,6 +164,13 @@ export function ConversationView({
               onPplxDeviceChange={setPplxDeviceId}
               soundboardEnabled={soundboardEnabled}
               onSoundboardEnabledChange={onSoundboardEnabledChange}
+              onStartCountedSession={() => {
+                // Bootstrap a counted session: force VC OFF (forceNonVc avoids a
+                // setEnabled→start state race) and start. The SoundboardPanel
+                // auto-increments the session number on connect.
+                vcPipeline.setEnabled(false)
+                void startConversation({ forceNonVc: true })
+              }}
             />
           </CardContent>
         </Card>

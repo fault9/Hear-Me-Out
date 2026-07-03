@@ -53,6 +53,9 @@ interface Props {
   // panel only renders when this is true, mirroring the VC toggle pattern.
   soundboardEnabled: boolean
   onSoundboardEnabledChange: (v: boolean) => void
+  // P4 session bootstrap: one click forces VC OFF, applies the prompt above,
+  // resets PP context, and starts a new counted session.
+  onStartCountedSession: () => void
 }
 
 function DeviceSelect({
@@ -96,6 +99,7 @@ export function ControlPanel({
   feedbackDeviceId, onFeedbackDeviceChange,
   pplxDeviceId, onPplxDeviceChange,
   soundboardEnabled, onSoundboardEnabledChange,
+  onStartCountedSession,
 }: Props) {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
   const [previewPlaying, setPreviewPlaying] = useState(false)
@@ -170,6 +174,22 @@ export function ControlPanel({
           <p className="text-xs font-medium">{hasError ? "Connection error" : "Tap to start"}</p>
           <p className="text-[11px] text-muted-foreground">{hasError ? "Tap to retry" : "Press to begin"}</p>
         </div>
+      )}
+
+      {/* P4 — one-click counted-session bootstrap. Shown when the soundboard is
+          in use so the operator doesn't have to separately turn VC off, reset
+          PP context, and mint a session id. */}
+      {soundboardEnabled && !isConnected && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onStartCountedSession}
+          disabled={isWarming}
+          className="border-emerald-500/50 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-300"
+          title="Session bootstrap: forces VC OFF, applies the persona prompt above, resets PersonaPlex context, and starts a new numbered session."
+        >
+          <ListMusic className="size-3.5" /> Start counted session
+        </Button>
       )}
 
       <div className="flex flex-nowrap items-center justify-center gap-1">

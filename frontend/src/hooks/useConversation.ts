@@ -195,7 +195,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
   const transcriptsRef = useRef(transcripts)
   transcriptsRef.current = transcripts
 
-  const startConversation = useCallback(async () => {
+  const startConversation = useCallback(async (opts?: { forceNonVc?: boolean }) => {
     conversationRunId.current += 1
     clearTranscripts()
     clearResponseChunks()
@@ -217,7 +217,10 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     // session's finalization only sees what was actually played this time.
     resetCapture()
     setProcessing(false)
-    if (vcEnabled && vcTargetId) {
+    // forceNonVc lets the soundboard "counted session" bootstrap guarantee a
+    // non-VC socket even if the VC toggle hasn't re-rendered off yet (avoids a
+    // setEnabled(false)→startConversation state race).
+    if (!opts?.forceNonVc && vcEnabled && vcTargetId) {
       // VC mode: acquire mic first to learn the sample rate, then connect to the
       // chat-proxy (which speaks PersonaPlex's protocol on this same socket).
       try {

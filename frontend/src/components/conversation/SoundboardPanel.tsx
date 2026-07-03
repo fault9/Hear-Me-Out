@@ -18,6 +18,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
 import { Play, Square, Download, Filter, ListMusic, Headphones, Pause, Volume2, VolumeX } from "lucide-react"
 import { useSoundboard, makeSessionContext, type SessionContext } from "@/hooks/useSoundboard"
+import { nextSessionNumber } from "@/lib/sessionCounter"
 import { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
 import type { useWebSocket } from "@/hooks/useWebSocket"
 import type { Slot } from "@/lib/soundboardDb"
@@ -46,7 +47,12 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
   const [session, setSession] = useState<SessionContext>(() => makeSessionContext(""))
   useEffect(() => {
     if (ws.connected) {
-      setSession(makeSessionContext(conditionContext))
+      // Counted session (P4): auto-increment a persistent number so session ids
+      // in the timing log are stable + ordered. Short random suffix keeps ids
+      // unique across machines when logs are merged.
+      const n = nextSessionNumber()
+      const suffix = Math.random().toString(36).slice(2, 6)
+      setSession({ sessionId: `S${n}-${suffix}`, conditionContext, sessionNumber: n })
       setPlayedIds(new Set())
     }
     // We deliberately don't mint a new session if conditionContext changes
@@ -142,7 +148,12 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
           <div className="flex items-center gap-2 text-xs font-medium">
             <ListMusic className="size-3.5" /> Soundboard
             <span className="text-[10px] font-normal text-muted-foreground">
-              session: <span className="font-mono">{session.sessionId.slice(0, 16)}…</span>
+              {session.sessionNumber != null && (
+                <span className="mr-1 rounded bg-primary/15 px-1 font-semibold text-primary">
+                  Session #{session.sessionNumber}
+                </span>
+              )}
+              <span className="font-mono">{session.sessionId}</span>
             </span>
           </div>
           <div className="flex items-center gap-2">
