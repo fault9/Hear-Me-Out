@@ -54,6 +54,21 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws.connected])
 
+  // Log PP speech-start/-end events into the same session, on the same
+  // performance.now() clock as slot playback (RQ2b: latency/overlap/barge-in).
+  // Register once against the stable ws callback; read the current session +
+  // log fn via refs so we don't re-subscribe on every render.
+  const sessionRef = useRef(session)
+  sessionRef.current = session
+  const logPpEventRef = useRef(sb.logPpEvent)
+  logPpEventRef.current = sb.logPpEvent
+  const { registerPpSpeechListener } = ws
+  useEffect(() => {
+    return registerPpSpeechListener((e) => {
+      void logPpEventRef.current(sessionRef.current, e.type, e.timestampMs)
+    })
+  }, [registerPpSpeechListener])
+
   // The playback hook does the actual byte-fidelity work; we just give it
   // hooks for the timing log + the played-trail.
   const playback = useSoundboardPlayback({

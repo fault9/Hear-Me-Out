@@ -76,19 +76,34 @@ export interface Target {
   createdAt: number
 }
 
+// One row in the per-session timing log. Two kinds, distinguished by
+// `eventType`:
+//   - "slot": a soundboard clip was sent to PP (the slot* + play* fields).
+//   - "pp_speech_start" / "pp_speech_end": PersonaPlex began/finished a speech
+//     run (only timestampMs is meaningful; slot fields are absent).
+// All rows carry `timestampMs` on the SAME performance.now() clock, so response
+// latency, overlap, and barge-in are computable across both kinds. Legacy rows
+// written before this field existed have eventType/timestampMs undefined; the
+// exporter treats them as "slot" with timestampMs = playStartMs.
+export type SessionEventType = "slot" | "pp_speech_start" | "pp_speech_end"
+
 export interface SessionRow {
   // Auto-increment id (set by IDB). Not stable across exports.
   id?: number
   sessionId: string             // groups rows of one conversation
   conditionContext: string      // session-level tag (e.g. "experiment_2_pilot")
-  slotId: string
-  slotLabel: string
-  slotCondition: string
+  eventType?: SessionEventType  // undefined on legacy rows → treated as "slot"
+  // performance.now() at the event — the common clock for all row kinds.
+  timestampMs?: number
+  // Slot-playback fields (present when eventType === "slot").
+  slotId?: string
+  slotLabel?: string
+  slotCondition?: string
   // Times are performance.now() snapshots: monotonic, sub-ms resolution.
-  // For absolute clock time, use `timestamp` (unix ms).
-  playStartMs: number
-  playEndMs: number
-  clipDurationMs: number
+  playStartMs?: number
+  playEndMs?: number
+  clipDurationMs?: number
+  // Absolute wall-clock (unix ms) — used for cross-kind chronological sort.
   timestamp: number
 }
 

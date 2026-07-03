@@ -507,6 +507,8 @@ export function useSoundboard() {
     const row: SessionRow = {
       sessionId: sessionCtx.sessionId,
       conditionContext: sessionCtx.conditionContext,
+      eventType: "slot",
+      timestampMs: playStartMs,
       slotId: slot.id,
       slotLabel: slot.label,
       slotCondition: slot.condition,
@@ -518,26 +520,51 @@ export function useSoundboard() {
     await appendSessionRow(row)
   }, [])
 
+  // Log a PersonaPlex speech-start/-end event into the same session, on the
+  // same performance.now() clock as slot playback (RQ2b timing). Wired from the
+  // SoundboardPanel's PP-speech listener.
+  const logPpEvent = useCallback(async (
+    sessionCtx: SessionContext,
+    eventType: "pp_speech_start" | "pp_speech_end",
+    timestampMs: number,
+  ) => {
+    await appendSessionRow({
+      sessionId: sessionCtx.sessionId,
+      conditionContext: sessionCtx.conditionContext,
+      eventType,
+      timestampMs,
+      timestamp: Date.now(),
+    })
+  }, [])
+
   const downloadSessionLog = useCallback(async (sessionId?: string, fmt: "csv" | "json" = "csv") => {
     const rows = await listSessionRows(sessionId)
     let blob: Blob
     let filename: string
     if (fmt === "csv") {
+      const num = (v?: number) => (v == null ? "" : v.toFixed(3))
+      const str = (v?: string) => JSON.stringify(v ?? "")
       const header = [
-        "sessionId", "conditionContext", "slotId", "slotLabel", "slotCondition",
+        "sessionId", "conditionContext", "eventType", "timestampMs",
+        "slotId", "slotLabel", "slotCondition",
         "playStartMs", "playEndMs", "clipDurationMs", "timestamp",
       ]
       const lines = [header.join(",")]
       for (const r of rows) {
+        // Legacy rows predate eventType/timestampMs — treat as slot plays.
+        const eventType = r.eventType ?? "slot"
+        const timestampMs = r.timestampMs ?? r.playStartMs
         lines.push([
           r.sessionId,
-          JSON.stringify(r.conditionContext),
-          r.slotId,
-          JSON.stringify(r.slotLabel),
-          JSON.stringify(r.slotCondition),
-          r.playStartMs.toFixed(3),
-          r.playEndMs.toFixed(3),
-          r.clipDurationMs.toFixed(3),
+          str(r.conditionContext),
+          eventType,
+          num(timestampMs),
+          r.slotId ?? "",
+          str(r.slotLabel),
+          str(r.slotCondition),
+          num(r.playStartMs),
+          num(r.playEndMs),
+          num(r.clipDurationMs),
           r.timestamp,
         ].join(","))
       }
@@ -578,7 +605,7 @@ export function useSoundboard() {
     addUploadedTarget, removeTarget,
     startRecording, stopRecording, abortRecording, loadRawFromFile,
     bakeSlot, previewBlob, downloadSlotAudio,
-    logPlayback, downloadSessionLog, clearSession,
+    logPlayback, logPpEvent, downloadSessionLog, clearSession,
     exportZip, importZip,
     refresh,
   }

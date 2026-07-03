@@ -10,6 +10,18 @@ const MIN_PP_TURN_DURATION_SECONDS = 0.8   // shortest plausible PP utterance
 const MAX_PP_TURN_DURATION_SECONDS = 12    // cap for over-estimated PP turn length
 const PP_WORDS_PER_SECOND = 2.7            // typical PP speech rate, used to estimate turn duration
 
+// PP speech-run detection. PP streams audio packets (~80 ms apart) while
+// speaking; a gap longer than this ends the run. Emitted as speech-start/end
+// events on the performance.now() clock so they align with soundboard slot
+// playback timing — the basis for response latency / overlap / barge-in.
+const PP_SILENCE_GAP_MS = 400
+
+export type PpSpeechEventType = "pp_speech_start" | "pp_speech_end"
+export interface PpSpeechEvent {
+  type: PpSpeechEventType
+  timestampMs: number   // performance.now() — same clock as slot playback
+}
+
 // When VC is enabled, connect() targets the MeanVC chat-proxy instead of
 // PersonaPlex directly. The proxy converts mic audio server-side and forwards
 // it to PersonaPlex over localhost.
@@ -78,6 +90,30 @@ export function useWebSocket() {
     micMutedRef.current = muted;
   }, []);
   const isMicMuted = useCallback(() => micMutedRef.current, []);
+
+  // PP speech-run detection state + listeners (see PP_SILENCE_GAP_MS). Detection
+  // only runs while at least one listener is registered (the SoundboardPanel),
+  // so normal conversations pay nothing.
+  const ppSpeakingRef = useRef(false);
+  const lastPpPacketPerfRef = useRef(0);
+  const ppSilenceTimerRef = useRef<number | null>(null);
+  const ppSpeechListenersRef = useRef<Set<(e: PpSpeechEvent) => void>>(new Set());
+  const registerPpSpeechListener = useCallback((listener: (e: PpSpeechEvent) => void) => {
+    ppSpeechListenersRef.current.add(listener);
+    return () => { ppSpeechListenersRef.current.delete(listener); };
+  }, []);
+  const resetPpSpeech = useCallback((emitEnd: boolean) => {
+    if (ppSilenceTimerRef.current !== null) {
+      clearTimeout(ppSilenceTimerRef.current);
+      ppSilenceTimerRef.current = null;
+    }
+    if (emitEnd && ppSpeakingRef.current) {
+      const e: PpSpeechEvent = { type: "pp_speech_end", timestampMs: lastPpPacketPerfRef.current };
+      ppSpeechListenersRef.current.forEach((l) => l(e));
+    }
+    ppSpeakingRef.current = false;
+  }, []);
+
   const decoderRef = useRef<OggOpusDecoder | null>(null);
   const mergedCtxRef = useRef<AudioContext | null>(null);
   const mergedDestRef = useRef<AudioNode | null>(null);
@@ -139,6 +175,28 @@ export function useWebSocket() {
 
     const raw = new Uint8Array(payload);
     personaplexOpus.current.push({ packet: raw, time: Date.now() });
+
+    // PP speech-run detection on the performance.now() clock. A packet means PP
+    // is producing audio; the first after silence is speech-start, and the run
+    // ends once no packet has arrived for PP_SILENCE_GAP_MS (end is logged at
+    // the LAST packet's time, not the detection time, so durations aren't
+    // inflated by the gap threshold). Skipped entirely when nobody's listening.
+    if (ppSpeechListenersRef.current.size > 0) {
+      const perf = performance.now();
+      if (!ppSpeakingRef.current) {
+        ppSpeakingRef.current = true;
+        const e: PpSpeechEvent = { type: "pp_speech_start", timestampMs: perf };
+        ppSpeechListenersRef.current.forEach((l) => l(e));
+      }
+      lastPpPacketPerfRef.current = perf;
+      if (ppSilenceTimerRef.current !== null) clearTimeout(ppSilenceTimerRef.current);
+      ppSilenceTimerRef.current = window.setTimeout(() => {
+        ppSilenceTimerRef.current = null;
+        ppSpeakingRef.current = false;
+        const e: PpSpeechEvent = { type: "pp_speech_end", timestampMs: lastPpPacketPerfRef.current };
+        ppSpeechListenersRef.current.forEach((l) => l(e));
+      }, PP_SILENCE_GAP_MS);
+    }
 
     decoder.decode(raw).then(({ channelData, samplesDecoded }) => {
       if (runId !== runIdRef.current) return;
@@ -277,6 +335,7 @@ export function useWebSocket() {
           scheduledEnd.current = 0;
           mergedEndRef.current = 0;
           feedbackEnd.current = 0;
+          resetPpSpeech(false);   // fresh conversation — no prior run to close
           setWarmupComplete(true);
           setHandshakeReceived(true);
         } else if (tag === 1) {
@@ -367,7 +426,8 @@ export function useWebSocket() {
     setHandshakeReceived(false);
     scheduledEnd.current = 0;
     feedbackEnd.current = 0;
-  }, []);
+    resetPpSpeech(true);   // close any open PP run at conversation end
+  }, [resetPpSpeech]);
 
   useEffect(() => {
     return () => disconnect();
@@ -519,5 +579,6 @@ export function useWebSocket() {
     isMicMuted,
     addUserTranscript,
     getConversationElapsed,
+    registerPpSpeechListener,
   };
 }
