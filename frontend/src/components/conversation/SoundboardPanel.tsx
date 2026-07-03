@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
-import { Play, Square, Download, Filter, ListMusic, Headphones, Pause, Volume2, VolumeX } from "lucide-react"
+import { Play, Square, Download, Filter, ListMusic, Headphones, Pause, Volume2, VolumeX, RotateCcw } from "lucide-react"
 import { useSoundboard, makeSessionContext, type SessionContext } from "@/hooks/useSoundboard"
 import { nextSessionNumber } from "@/lib/sessionCounter"
 import { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
@@ -42,6 +42,22 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
   // what's already been triggered, but still fully clickable (a turn can be
   // replayed). Reset when a new conversation starts.
   const [playedIds, setPlayedIds] = useState<Set<string>>(new Set())
+
+  // P5 — protocol discipline. PP turn-gap indicator + enforced order + flagged
+  // retry. All driven off P1's PP speech events.
+  const [ppSpeaking, setPpSpeaking] = useState(false)
+  const ppSpeakingRef = useRef(false)
+  const ppLastEndRef = useRef(0)               // performance.now() of last speech_end
+  const [ppSilentMs, setPpSilentMs] = useState(0)
+  const [silenceThresholdMs, setSilenceThresholdMs] = useState(500)
+  const [enforceOrder, setEnforceOrder] = useState(true)
+  // Autoplay (VAD auto-advance): when on, the next slot fires automatically
+  // once PP has responded and then been silent ≥ silenceThresholdMs.
+  const [autoplay, setAutoplay] = useState(false)
+  const ppSpokeSinceLastPlayRef = useRef(false)  // PP responded since our last send?
+  const autoplayBusyRef = useRef(false)          // guards against double-fire
+  // Set immediately before a rule-triggered replay so onPlayEnd logs retry=true.
+  const pendingRetryRef = useRef(false)
 
   // A new session is minted when the WS connects; lasts for the conversation.
   const [session, setSession] = useState<SessionContext>(() => makeSessionContext(""))
@@ -72,8 +88,44 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
   useEffect(() => {
     return registerPpSpeechListener((e) => {
       void logPpEventRef.current(sessionRef.current, e.type, e.timestampMs)
+      if (e.type === "pp_speech_start") {
+        ppSpeakingRef.current = true
+        ppSpokeSinceLastPlayRef.current = true   // PP is responding to our turn
+        setPpSpeaking(true)
+      } else {
+        ppSpeakingRef.current = false
+        ppLastEndRef.current = e.timestampMs
+        setPpSpeaking(false)
+      }
     })
   }, [registerPpSpeechListener])
+
+  // Live "PP silent for N ms" ticker for the turn-gap indicator. Reads speaking
+  // state + last-end time via refs so the interval isn't re-created constantly.
+  useEffect(() => {
+    if (!ws.connected) {
+      setPpSilentMs(0)
+      setPpSpeaking(false)
+      ppSpeakingRef.current = false
+      ppLastEndRef.current = 0
+      return
+    }
+    const id = window.setInterval(() => {
+      setPpSilentMs(
+        ppSpeakingRef.current || !ppLastEndRef.current
+          ? 0
+          : performance.now() - ppLastEndRef.current,
+      )
+    }, 100)
+    return () => clearInterval(id)
+  }, [ws.connected])
+
+  // Start the PP-silence clock when PP becomes ready, so autoplay can fire the
+  // first slot even if PP never greets (otherwise ppSilentMs sits at 0 until
+  // PP's first utterance ends).
+  useEffect(() => {
+    if (ws.warmupComplete) ppLastEndRef.current = performance.now()
+  }, [ws.warmupComplete])
 
   // The playback hook does the actual byte-fidelity work; we just give it
   // hooks for the timing log + the played-trail.
@@ -85,11 +137,22 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
         next.add(slot.id)
         return next
       })
+      // Wait for PP to respond to THIS turn before autoplay advances.
+      ppSpokeSinceLastPlayRef.current = false
     },
     onPlayEnd: (slot, rec) => {
-      void sb.logPlayback(slot, session, rec.startMs, rec.endMs, rec.clipDurationMs)
+      void sb.logPlayback(slot, session, rec.startMs, rec.endMs, rec.clipDurationMs, pendingRetryRef.current)
+      pendingRetryRef.current = false
+      autoplayBusyRef.current = false
     },
   })
+
+  // Replay a slot as a rule-triggered retry (PP stayed silent / barged in).
+  // Marks the next log row retry=true; the slot stays greyed (already played).
+  const replaySlot = (slot: Slot) => {
+    pendingRetryRef.current = true
+    void playback.playSlot(slot)
+  }
 
   // Local "hear this slot" preview — audio goes to the researcher's speakers
   // ONLY, never touches PP. Useful for auditing a clip before triggering it.
@@ -126,6 +189,33 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
     if (conditionFilter === "__all__") return sb.slots
     return sb.slots.filter((s) => s.condition === conditionFilter)
   }, [sb.slots, conditionFilter])
+
+  // P5 enforced order: the next slot the operator should play is the first
+  // un-played, playable slot in the (ordered) visible list.
+  const nextExpectedId = useMemo(
+    () => visible.find((s) => !playedIds.has(s.id) && !!(s.baked ?? s.raw))?.id,
+    [visible, playedIds],
+  )
+
+  // Turn-gap gate: is PP silent long enough that it's OK to send the next turn?
+  const gapReady = !ppSpeaking && ppSilentMs >= silenceThresholdMs
+
+  // Autoplay / VAD auto-advance: fire the next slot (top-to-bottom order) once
+  // PP has responded to the previous turn and then gone silent ≥ threshold.
+  // Re-evaluated on each 100 ms tick (ppSilentMs). autoplayBusyRef guards the
+  // async gap between playSlot() and playingSlotId updating so we don't double
+  // fire; ppSpokeSinceLastPlay ensures we wait for PP's reply before advancing
+  // (except the very first turn).
+  useEffect(() => {
+    if (!autoplay || vcEnabled) return
+    if (!ws.connected || playback.playingSlotId !== null || autoplayBusyRef.current) return
+    if (!gapReady || !nextExpectedId) return
+    if (playedIds.size > 0 && !ppSpokeSinceLastPlayRef.current) return
+    const slot = visible.find((s) => s.id === nextExpectedId)
+    if (!slot) return
+    autoplayBusyRef.current = true
+    void playback.playSlot(slot)
+  }, [ppSilentMs, autoplay, vcEnabled, ws.connected, gapReady, nextExpectedId, playedIds, visible, playback])
 
   if (sb.loading) {
     return (
@@ -205,6 +295,56 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
           />
         </div>
 
+        {/* P5 — turn-gap indicator + protocol controls (silence threshold,
+            enforced order). Driven by P1's PP speech events. */}
+        <div className="flex items-center justify-between gap-2 flex-wrap rounded-md border bg-muted/30 px-2 py-1.5">
+          <div className="flex items-center gap-1.5 text-[11px]">
+            {!ws.connected ? (
+              <span className="text-muted-foreground">turn gate idle — start a session</span>
+            ) : ppSpeaking ? (
+              <span className="inline-flex items-center gap-1 font-medium text-amber-500">
+                <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" /> PP speaking…
+              </span>
+            ) : gapReady ? (
+              <span className="inline-flex items-center gap-1 font-medium text-emerald-500">
+                <span className="size-1.5 rounded-full bg-emerald-500" /> PP silent {Math.round(ppSilentMs)} ms — OK to send
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-muted-foreground">
+                <span className="size-1.5 rounded-full bg-muted-foreground/50" /> PP silent {Math.round(ppSilentMs)} ms — wait
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <label className="flex items-center gap-1" title="Silence threshold: how long PP must be quiet before the turn-gap indicator turns green and (if autoplay is on) the next slot fires.">
+              silent ≥
+              <input
+                type="number"
+                min={0}
+                step={50}
+                value={silenceThresholdMs}
+                onChange={(e) => setSilenceThresholdMs(Math.max(0, Number(e.target.value) || 0))}
+                className="w-14 h-6 rounded border bg-background px-1 text-[10px]"
+              />
+              ms
+            </label>
+            <button
+              onClick={() => setAutoplay((v) => !v)}
+              className={`rounded border px-1.5 py-0.5 ${autoplay ? "bg-emerald-500/15 text-emerald-600 border-emerald-500/40 dark:text-emerald-300" : "text-muted-foreground"}`}
+              title="Autoplay: automatically send the next slot (top-to-bottom) once PP has replied and then been silent for the threshold above."
+            >
+              {autoplay ? "autoplay: on" : "autoplay: off"}
+            </button>
+            <button
+              onClick={() => setEnforceOrder((v) => !v)}
+              className={`rounded border px-1.5 py-0.5 ${enforceOrder ? "bg-primary/15 text-primary border-primary/40" : "text-muted-foreground"}`}
+              title="When on, only the next slot in order can be sent (skip-ahead blocked). Replays of already-played slots stay available via the retry button and are logged as retries."
+            >
+              {enforceOrder ? "order: enforced" : "order: free"}
+            </button>
+          </div>
+        </div>
+
         {vcEnabled && (
           <div className="rounded-md border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-500">
             Soundboard playback is disabled while live VC is enabled. Turn VC
@@ -229,26 +369,28 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
             const previewing = previewingId === slot.id
             const hasAudio = !!(slot.baked ?? slot.raw)
             // Played this session but not currently playing → greyed trail.
-            // Still fully clickable so the turn can be replayed.
             const played = playedIds.has(slot.id) && !playing
+            // P5 enforced order: this is the next slot expected in sequence.
+            const isNext = slot.id === nextExpectedId
+            // With order enforced, only the next-expected slot's MAIN button is
+            // active; skip-ahead and re-firing played slots go through retry.
+            const orderBlocked = enforceOrder && !isNext && !playing
+            const otherPlaying = playback.playingSlotId !== null && !playing
+            const mainDisabled = !hasAudio || !ws.connected || vcEnabled || otherPlaying || orderBlocked
             return (
               <div key={slot.id} className="flex items-center gap-1">
                 <Button
                   variant={playing ? "default" : "outline"}
                   size="xs"
                   onClick={() => playing ? playback.stop() : playback.playSlot(slot)}
-                  disabled={
-                    !hasAudio ||
-                    !ws.connected ||
-                    vcEnabled ||
-                    (playback.playingSlotId !== null && !playing)
-                  }
-                  className={`flex-1 justify-start max-w-[300px] truncate ${played ? "opacity-45" : ""}`}
+                  disabled={mainDisabled}
+                  className={`flex-1 justify-start max-w-[300px] truncate ${played ? "opacity-45" : ""} ${isNext && ws.connected && !vcEnabled && !playing ? "ring-2 ring-emerald-500/60" : ""}`}
                   title={
                     !hasAudio ? "Slot has no recording yet — record/bake in Soundboard tab" :
                     !ws.connected ? "Start a conversation first" :
                     vcEnabled ? "Turn off VC to enable soundboard playback" :
-                    `Send to PP · ${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s${played ? " · played — click to replay" : ""}`
+                    orderBlocked ? "Order enforced — play the highlighted next slot (or use retry to replay a played one)" :
+                    `Send to PP · ${slot.label} · ${slot.condition} · ${(((slot.bakedDurationMs || slot.rawDurationMs) / 1000)).toFixed(2)}s${isNext ? " · next" : ""}`
                   }
                 >
                   {playing ? <Square className="size-3" /> : <Play className="size-3" />}
@@ -258,6 +400,20 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
                     {slot.condition}
                   </Badge>
                 </Button>
+                {/* Rule-triggered retry: replay a played slot (PP silent / barge-in)
+                    and tag the log row retry=true. Available once a slot has been
+                    played, even under enforced order. */}
+                {played && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={!hasAudio || !ws.connected || vcEnabled || otherPlaying}
+                    onClick={() => replaySlot(slot)}
+                    title="Replay this turn as a rule-triggered retry (logged as retry=1)"
+                  >
+                    <RotateCcw className="size-3" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="xs"

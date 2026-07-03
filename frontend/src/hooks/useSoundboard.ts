@@ -506,6 +506,7 @@ export function useSoundboard() {
     playStartMs: number,
     playEndMs: number,
     clipDurationMs: number,
+    retry: boolean = false,
   ) => {
     const row: SessionRow = {
       sessionId: sessionCtx.sessionId,
@@ -518,6 +519,7 @@ export function useSoundboard() {
       playStartMs,
       playEndMs,
       clipDurationMs,
+      retry,
       timestamp: Date.now(),
     }
     await appendSessionRow(row)
@@ -550,7 +552,7 @@ export function useSoundboard() {
       const header = [
         "sessionId", "conditionContext", "eventType", "timestampMs",
         "slotId", "slotLabel", "slotCondition",
-        "playStartMs", "playEndMs", "clipDurationMs", "timestamp",
+        "playStartMs", "playEndMs", "clipDurationMs", "retry", "timestamp",
       ]
       const lines = [header.join(",")]
       for (const r of rows) {
@@ -568,6 +570,7 @@ export function useSoundboard() {
           num(r.playStartMs),
           num(r.playEndMs),
           num(r.clipDurationMs),
+          eventType === "slot" ? (r.retry ? "1" : "0") : "",
           r.timestamp,
         ].join(","))
       }

@@ -103,6 +103,10 @@ export interface SessionRow {
   playStartMs?: number
   playEndMs?: number
   clipDurationMs?: number
+  // True when this playback was a rule-triggered retry (operator replayed the
+  // turn because PP stayed silent / barged in). Lets analysis separate planned
+  // turns from protocol-driven repeats. Only meaningful for eventType "slot".
+  retry?: boolean
   // Absolute wall-clock (unix ms) — used for cross-kind chronological sort.
   timestamp: number
 }
