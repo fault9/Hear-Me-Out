@@ -176,19 +176,25 @@ export function ControlPanel({
         </div>
       )}
 
-      {/* P4 — one-click counted-session bootstrap. Shown when the soundboard is
-          in use so the operator doesn't have to separately turn VC off, reset
-          PP context, and mint a session id. */}
-      {soundboardEnabled && !isConnected && (
+      {/* P4 — one-click session bootstrap. Adapts to the VC toggle: with VC OFF
+          it forces non-VC + resets PP + starts a numbered soundboard session;
+          with VC ON it keeps VC on for a live-VC counted session. Shown when the
+          soundboard is enabled OR VC is armed. */}
+      {!isConnected && (soundboardEnabled || (vcPipeline.vcEnabled && vcPipeline.vcTargetId)) && (
         <Button
           variant="outline"
           size="sm"
           onClick={onStartCountedSession}
           disabled={isWarming}
           className="border-emerald-500/50 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-300"
-          title="Session bootstrap: forces VC OFF, applies the persona prompt above, resets PersonaPlex context, and starts a new numbered session."
+          title={
+            vcPipeline.vcEnabled
+              ? "Start a counted VC session: applies the persona prompt, resets PersonaPlex context, keeps VC ON."
+              : "Start a counted session: forces VC OFF, applies the persona prompt, resets PersonaPlex context, mints a new session number."
+          }
         >
-          <ListMusic className="size-3.5" /> Start counted session
+          <ListMusic className="size-3.5" />
+          {vcPipeline.vcEnabled ? "Start counted VC session" : "Start counted session"}
         </Button>
       )}
 

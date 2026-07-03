@@ -165,11 +165,16 @@ export function ConversationView({
               soundboardEnabled={soundboardEnabled}
               onSoundboardEnabledChange={onSoundboardEnabledChange}
               onStartCountedSession={() => {
-                // Bootstrap a counted session: force VC OFF (forceNonVc avoids a
-                // setEnabled→start state race) and start. The SoundboardPanel
-                // auto-increments the session number on connect.
-                vcPipeline.setEnabled(false)
-                void startConversation({ forceNonVc: true })
+                // Bootstrap a counted session. If VC is armed, keep it ON for a
+                // live-VC session; otherwise force VC OFF (forceNonVc avoids a
+                // setEnabled→start race) for the soundboard. Either way this
+                // resets PP context and the SoundboardPanel mints the session.
+                if (vcPipeline.vcEnabled && vcPipeline.vcTargetId) {
+                  void startConversation()
+                } else {
+                  vcPipeline.setEnabled(false)
+                  void startConversation({ forceNonVc: true })
+                }
               }}
             />
           </CardContent>
