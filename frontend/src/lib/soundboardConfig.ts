@@ -67,6 +67,15 @@ export const PITCH_FORMANT_PRESETS = {
 // to know about drift.
 export const DURATION_DRIFT_TOLERANCE_MS = 5
 
+// Loudness normalization (EBU R128 / LUFS) target for soundboard bakes (P3).
+// -23 LUFS is the EBU R128 broadcast reference; the exact value matters less
+// than every condition landing at the SAME level so playback loudness isn't a
+// confound. Applied as a bake step (see useSoundboard.bakeSlot) when enabled.
+export const LOUDNESS_TARGET_LUFS = -23
+// Default the toggle ON — level-matched conditions are the safer research
+// default; the operator can turn it off per bake if needed.
+export const LOUDNESS_NORMALIZE_DEFAULT = true
+
 // Recording limits in Configure. Slot recordings are short scripted utterances;
 // 30s is plenty and keeps IndexedDB blobs small.
 export const MAX_RECORDING_SECONDS = 30

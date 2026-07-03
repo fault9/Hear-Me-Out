@@ -411,6 +411,72 @@ def create_app():
             },
         )
 
+    @app.post("/api/loudness-normalize")
+    async def loudness_normalize(
+        audio: UploadFile = File(...),
+        target_lufs: float = Form(-23.0),
+        target_sr: int = Form(0),
+    ):
+        """EBU R128 loudness-normalize a clip to a common integrated loudness so
+        soundboard conditions don't differ in playback level (P3, gate e).
+
+        Gain-only (pyloudnorm) with a peak guard against clipping. NEVER
+        resamples — returns WAV at the input SR; if target_sr is given it is
+        validated against the input (same format-integrity contract as the
+        pitch-formant bake). Very short clips (< ~0.4 s) can't be metered by
+        R128; those are returned unchanged. Headers: X-Sample-Rate,
+        X-Input-Lufs, X-Output-Lufs, X-Peak, X-Duration-Ms."""
+        import numpy as np
+        import pyloudnorm as pyln
+        from pitch_formant import wav_bytes_to_pcm, pcm_to_wav_bytes
+
+        if not audio.filename or not allowed_file(audio.filename):
+            raise HTTPException(status_code=400, detail="Invalid audio")
+
+        pcm, sr = wav_bytes_to_pcm(await audio.read())
+        if target_sr and sr != target_sr:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"sample-rate mismatch: input is {sr} Hz but target_sr is "
+                    f"{target_sr} Hz. Loudness-normalize never resamples."
+                ),
+            )
+        dur_ms = round(1000.0 * len(pcm) / sr, 2)
+
+        in_lufs = float("-inf")
+        try:
+            in_lufs = float(pyln.Meter(sr).integrated_loudness(pcm))
+        except Exception as e:  # too short / silent → skip gain
+            logger.warning(f"loudness measurement failed: {e}")
+
+        out = pcm
+        out_lufs = in_lufs
+        if np.isfinite(in_lufs):
+            out = pyln.normalize.loudness(pcm, in_lufs, target_lufs)
+            peak = float(np.max(np.abs(out))) if out.size else 0.0
+            if peak > 0.999:
+                out = out * (0.999 / peak)  # peak guard: avoid hard clipping
+            try:
+                out_lufs = float(pyln.Meter(sr).integrated_loudness(out))
+            except Exception:
+                out_lufs = in_lufs
+
+        peak = float(np.max(np.abs(out))) if out.size else 0.0
+        out_wav = pcm_to_wav_bytes(out.astype(np.float32), sr, bit_depth=16)
+        from fastapi.responses import Response
+        return Response(
+            content=out_wav,
+            media_type="audio/wav",
+            headers={
+                "X-Sample-Rate": str(sr),
+                "X-Input-Lufs": (f"{in_lufs:.2f}" if np.isfinite(in_lufs) else "nan"),
+                "X-Output-Lufs": (f"{out_lufs:.2f}" if np.isfinite(out_lufs) else "nan"),
+                "X-Peak": f"{peak:.4f}",
+                "X-Duration-Ms": str(dur_ms),
+            },
+        )
+
     @app.post("/api/metrics-comparison")
     async def metrics_comparison(
         source_audio: UploadFile = File(...),

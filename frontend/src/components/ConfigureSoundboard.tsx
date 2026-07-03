@@ -24,6 +24,8 @@ import {
   DURATION_DRIFT_TOLERANCE_MS,
   PITCH_FORMANT_PRESETS,
   PITCH_FORMANT_DEFAULTS,
+  LOUDNESS_TARGET_LUFS,
+  LOUDNESS_NORMALIZE_DEFAULT,
 } from "@/lib/soundboardConfig"
 import type { Slot, Target, ManipulationMode } from "@/lib/soundboardDb"
 
@@ -48,6 +50,10 @@ export function ConfigureSoundboard() {
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  // Global loudness-normalization defaults applied to every bake (P3), so all
+  // conditions land at the same playback level.
+  const [normalizeLoudness, setNormalizeLoudness] = useState(LOUDNESS_NORMALIZE_DEFAULT)
+  const [targetLufs, setTargetLufs] = useState(LOUDNESS_TARGET_LUFS)
 
   const showError = (e: unknown) => {
     // Longer timeout so errors during a fast-throwing bake are readable.
@@ -128,6 +134,42 @@ export function ConfigureSoundboard() {
 
       <TargetLibrary sb={sb} />
 
+      {/* Bake defaults — loudness normalization (P3). Applied to every bake so
+          per-condition level differences don't confound the study. */}
+      <Card>
+        <CardContent className="p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Bake defaults
+          </div>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              className="size-3.5 accent-primary"
+              checked={normalizeLoudness}
+              onChange={(e) => setNormalizeLoudness(e.target.checked)}
+            />
+            Normalize loudness (EBU R128)
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            target
+            <input
+              type="number"
+              step={0.5}
+              value={targetLufs}
+              disabled={!normalizeLoudness}
+              onChange={(e) => setTargetLufs(Number(e.target.value) || LOUDNESS_TARGET_LUFS)}
+              className="w-16 h-7 rounded border bg-background px-1.5 text-xs disabled:opacity-50"
+            />
+            LUFS
+          </label>
+          <p className="text-[10px] text-muted-foreground max-w-prose">
+            Gain-matches each baked clip to a common integrated loudness (with a
+            peak guard). Applies to VC, pitch/formant, and unconverted bakes —
+            re-bake existing slots to apply.
+          </p>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardContent className="p-4 space-y-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -174,6 +216,8 @@ export function ConfigureSoundboard() {
             onError={showError}
             isFirst={i === 0}
             isLast={i === sb.slots.length - 1}
+            normalizeLoudness={normalizeLoudness}
+            targetLufs={targetLufs}
           />
         ))}
       </div>
@@ -300,12 +344,16 @@ function SlotCard({
   onError,
   isFirst,
   isLast,
+  normalizeLoudness,
+  targetLufs,
 }: {
   slot: Slot
   sb: ReturnType<typeof useSoundboard>
   onError: (e: unknown) => void
   isFirst: boolean
   isLast: boolean
+  normalizeLoudness: boolean
+  targetLufs: number
 }) {
   const [recording, setRecording] = useState(false)
   const [recElapsedMs, setRecElapsedMs] = useState(0)
@@ -368,6 +416,8 @@ function SlotCard({
         targetId: mode === "vc" ? targetId : undefined,
         pitchSemitones: mode === "pitch_formant" ? semitones : undefined,
         formantShift: mode === "pitch_formant" ? formantShift : undefined,
+        normalize: normalizeLoudness,
+        targetLufs,
       })
     } catch (e) { onError(e) } finally { setBaking(false) }
   }
@@ -601,6 +651,11 @@ function SlotCard({
                     <AlertTriangle className="size-3" /> drift {drift.toFixed(1)} ms
                   </Badge>
                 )
+              )}
+              {slot.bakeTimestamp && slot.normalized && (
+                <Badge variant="secondary" className="text-[9px] h-4" title="Loudness-normalized (EBU R128)">
+                  {slot.measuredLufs != null ? `${slot.measuredLufs.toFixed(1)}` : `${slot.targetLufs}`} LUFS
+                </Badge>
               )}
               {(slot.baked || (mode === "unconverted" && slot.raw)) && (
                 <>

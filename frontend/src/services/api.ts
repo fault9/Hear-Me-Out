@@ -192,6 +192,43 @@ export async function pitchFormantBake(
   }
 }
 
+// EBU R128 / LUFS loudness normalization for soundboard bakes (P3). Preserves
+// SR + duration; `targetSr` must equal PP's expected rate (the server refuses
+// to resample). Returns the normalized WAV + measured in/out loudness so the
+// caller can audit the level match.
+export interface LoudnessNormalizeResult {
+  wav: Blob
+  sampleRate: number
+  inLufs: number | null    // null when the clip was too short/silent to meter
+  outLufs: number | null
+  peak: number
+  durationMs: number
+}
+
+export async function loudnessNormalize(
+  source: Blob,
+  targetLufs: number,
+  targetSr: number,
+): Promise<LoudnessNormalizeResult> {
+  const fd = new FormData()
+  fd.append("audio", source, "audio.wav")
+  fd.append("target_lufs", String(targetLufs))
+  fd.append("target_sr", String(targetSr))
+  const resp = await fetch(`${API_BASE}/api/loudness-normalize`, { method: "POST", body: fd })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  const parseNum = (h: string | null): number | null => {
+    if (h == null || h === "nan") return null
+    const n = Number(h)
+    return Number.isFinite(n) ? n : null
+  }
+  const sampleRate = Number(resp.headers.get("X-Sample-Rate") || "0")
+  const inLufs = parseNum(resp.headers.get("X-Input-Lufs"))
+  const outLufs = parseNum(resp.headers.get("X-Output-Lufs"))
+  const peak = Number(resp.headers.get("X-Peak") || "0")
+  const durationMs = Number(resp.headers.get("X-Duration-Ms") || "0")
+  return { wav: await resp.blob(), sampleRate, inLufs, outLufs, peak, durationMs }
+}
+
 export async function vcQuality(
   source: Blob, target: Blob, converted: Blob,
   opts?: {

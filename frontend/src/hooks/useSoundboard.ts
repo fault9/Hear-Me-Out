@@ -14,6 +14,7 @@ import {
   MAX_RECORDING_SECONDS,
   MIN_RECORDING_SECONDS,
   PITCH_FORMANT_DEFAULTS,
+  LOUDNESS_TARGET_LUFS,
   DEFAULT_TARGET,
 } from "@/lib/soundboardConfig"
 import {
@@ -43,6 +44,7 @@ import {
 import {
   convertVoice,
   pitchFormantBake as apiPitchFormantBake,
+  loudnessNormalize,
   transcribeWavBlob,
 } from "@/services/api"
 import { exportSoundboard, importSoundboard } from "@/lib/soundboardZip"
@@ -390,6 +392,10 @@ export function useSoundboard() {
       pitchSemitones?: number
       formantShift?: number
       engine?: "meanvc" | "xvc"
+      // P3 loudness normalization: EBU-R128 gain-match the FINAL clip to a
+      // common target so conditions don't differ in playback level.
+      normalize?: boolean
+      targetLufs?: number
     }) => {
       const slot = (await listSlots()).find((s) => s.id === slotId)
       if (!slot) throw new Error(`Slot ${slotId} not found.`)
@@ -450,6 +456,34 @@ export function useSoundboard() {
         baked = result.wav
         updates.bakedDurationMs = result.outMs
         updates.driftMs = result.driftMs
+      }
+
+      // Loudness normalization (P3): applied to the FINAL clip so every
+      // condition lands at a common integrated loudness. For unconverted mode
+      // this produces a `baked` (the level-matched raw) while `raw` stays the
+      // untouched take; for VC / pitch-formant it re-levels their output.
+      if (opts.normalize) {
+        const source = baked ?? slot.raw
+        const norm = await loudnessNormalize(
+          source,
+          opts.targetLufs ?? LOUDNESS_TARGET_LUFS,
+          PP_SAMPLE_RATE,
+        )
+        if (norm.sampleRate !== PP_SAMPLE_RATE) {
+          throw new Error(
+            `loudness-normalize returned SR ${norm.sampleRate}, expected ${PP_SAMPLE_RATE}.`,
+          )
+        }
+        baked = norm.wav
+        // Duration is unchanged by gain; keep the mode's bakedDurationMs when
+        // set, else the raw duration (unconverted path).
+        updates.bakedDurationMs = updates.bakedDurationMs ?? slot.rawDurationMs
+        updates.normalized = true
+        updates.targetLufs = opts.targetLufs ?? LOUDNESS_TARGET_LUFS
+        updates.measuredLufs = norm.outLufs
+      } else {
+        updates.normalized = false
+        updates.measuredLufs = null
       }
 
       // Transcribe the FINAL clip that will be sent to PP (baked if there

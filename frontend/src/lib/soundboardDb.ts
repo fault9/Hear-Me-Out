@@ -50,6 +50,13 @@ export interface Slot {
   // Optional: VC-quality eval result (lazy / nice-to-have)
   qualityScore?: number | null
 
+  // Loudness normalization audit (P3). When `normalized`, the baked clip was
+  // EBU-R128 gain-matched to `targetLufs`; `measuredLufs` is the achieved
+  // integrated loudness (may differ slightly after the anti-clip peak guard).
+  normalized?: boolean
+  targetLufs?: number
+  measuredLufs?: number | null
+
   // Auto-Whisper transcript of the baked (or raw, for unconverted slots) audio.
   // Injected into the conversation transcript when the slot plays, so
   // soundboard-driven turns appear alongside live-voice turns in the diarized
