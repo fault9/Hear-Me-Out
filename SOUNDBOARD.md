@@ -14,13 +14,15 @@ Two surfaces:
 
 ## Setup order
 
-1. **Install backend dep**. The pitch/formant bake uses `pyworld`. Already
-   listed in `services/app_api/pyproject.toml`. Re-sync:
+1. **Install backend deps**. The pitch/formant bake uses `pyworld`; loudness
+   normalization uses `pyloudnorm`. Both are listed in
+   `services/app_api/pyproject.toml`. Re-sync (and **restart app_api** so new
+   endpoints load):
    ```bash
    cd services/app_api && uv sync
    ```
    First sync may need `gcc`/`build-essential` (pyworld has a small Cython
-   extension).
+   extension). `pyloudnorm` is pure numpy/scipy (no build step).
 
 2. **Rebuild the frontend**:
    ```bash
@@ -56,6 +58,19 @@ Two surfaces:
   multiplicative ratio (0.5–2.0). Independent axes — useful when the
   experimental contrast is gender cues.
 
+### Loudness normalization (bake defaults)
+
+The Configure tab's **Bake defaults** card applies EBU R128 loudness
+normalization to the final clip of *every* bake (VC, pitch/formant, and
+unconverted), so conditions don't differ in playback level — a live confound
+otherwise. Default: **on, −23 LUFS** (`LOUDNESS_TARGET_LUFS`). Implementation:
+`/api/loudness-normalize` (`pyloudnorm`, gain-only + an anti-clip peak guard;
+never resamples). For unconverted mode with normalization on, the level-matched
+audio is stored as `baked` while `raw` stays the untouched take. Each baked
+slot shows a `… LUFS` badge; `slot.measuredLufs` records the achieved loudness.
+Re-bake existing slots to apply a changed target. If you'd rather normalize
+outside the app, turn it off and run ffmpeg `loudnorm` pre-upload.
+
 ## Format integrity — how to verify end-to-end
 
 The whole point of the soundboard is that what goes to PP is deterministic
@@ -77,6 +92,34 @@ and inspectable. To verify:
    vs `clipDurationMs` — should be within a few tens of ms. Larger drift
    means PP barged in (started responding before the clip finished) or the
    Opus encoder fell behind.
+
+## Running a counted session (protocol discipline)
+
+The runtime panel is built for reproducible, independent sessions:
+
+- **Session bootstrap** — the **Start counted session** button (in the control
+  panel when the soundboard is enabled) does the four session-independence
+  steps in one click: resets PP context (fresh socket), applies the persona
+  prompt, forces **VC OFF**, and mints the next session number. Sessions are
+  numbered by a persistent counter (`S<n>-<suffix>`, shown as *Session #n*).
+  When VC is armed instead, the button becomes **Start counted VC session** and
+  keeps VC on — same reset, for live-VC conditions.
+- **Turn-gap indicator** — a live *PP speaking / PP silent N ms* readout, green
+  once PP has been silent ≥ the configurable threshold (`silent ≥ [ ] ms`,
+  default 500). Tells the operator when it's safe to send the next turn.
+- **Enforced order** (toggle, default on) — only the next un-played slot
+  (top-to-bottom) is directly sendable; it gets a highlight ring. Skip-ahead is
+  blocked. Turn it off for free play.
+- **Flagged retry** — played slots show a ↺ button that replays the turn (e.g.
+  PP stayed silent or barged in) and logs the row with `retry=1`, so
+  protocol-driven repeats are separable in analysis.
+- **Autoplay** (toggle, default off) — auto-advances through the slots
+  top-to-bottom, firing the next one once PP has *replied* to the previous turn
+  and then been silent ≥ the threshold. It waits for PP's reply before
+  advancing (except the first turn), so it won't blast the whole script.
+- **Monitor on/off** — hear clips locally as they play to PP (does not change
+  what PP receives). **Played trail** — triggered slots grey out (still
+  replayable).
 
 ## What "byte fidelity to PP" actually means
 
@@ -114,26 +157,65 @@ on the wire side; it has a comment block explaining the invariant.
   than silently resampling.
 - **Storage is IndexedDB**, not the server. Slots and targets live in your
   browser; the export/import zip is how you move them.
-- **Session timing log** is structured (CSV or JSON) with one row per
-  playback. Columns: `sessionId, conditionContext, slotId, slotLabel,
-  slotCondition, playStartMs, playEndMs, clipDurationMs, timestamp`. Times
-  in ms via `performance.now()` (monotonic, sub-ms). Use it to detect PP
-  barge-ins post-hoc.
+- **Session timing log** is structured (CSV or JSON) with one row per event —
+  slot playbacks *and* PP speech-start/-end — all on the same `performance.now()`
+  clock. See [Session timing log](#session-timing-log-rq2b) below for the schema
+  and how to compute latency / overlap / barge-in.
+
+## Session timing log (RQ2b)
+
+Every conversation writes a per-session log (IndexedDB `sessions` store,
+downloadable as CSV/JSON from the panel's **log** button). It's the basis for
+response latency, overlap duration, and barge-in length. Two kinds of row,
+distinguished by `eventType`, share one `performance.now()` clock so they're
+directly comparable:
+
+- `slot` — a soundboard clip was sent to PP.
+- `pp_speech_start` / `pp_speech_end` — PersonaPlex began/ended a speech run
+  (detected from its audio-packet stream; a gap > 400 ms ends a run, logged at
+  the last packet's time).
+
+CSV columns:
+
+| Column | Meaning |
+|---|---|
+| `sessionId`, `conditionContext` | session id (`S<n>-<suffix>`) + operator tag |
+| `eventType` | `slot` \| `pp_speech_start` \| `pp_speech_end` |
+| `timestampMs` | event time on the `performance.now()` clock (all rows) |
+| `slotId`, `slotLabel`, `slotCondition` | slot fields (blank for PP events) |
+| `playStartMs`, `playEndMs`, `clipDurationMs` | slot playback timing (ms) |
+| `retry` | `1` if a rule-triggered replay, else `0` (slot rows only) |
+| `timestamp` | wall-clock unix ms (for chronological sort across kinds) |
+
+Computing the metrics from one session's rows:
+
+- **Response latency** = `pp_speech_start.timestampMs − slot.playEndMs` for the
+  slot that preceded it.
+- **Overlap / barge-in** = intersect a slot's `[playStartMs, playEndMs]` with PP
+  intervals `[pp_speech_start, pp_speech_end]`; a PP start before `playEndMs` is
+  a barge-in, and its length is the overlap.
+- Filter `retry=1` rows out (or analyze separately) to keep planned turns clean.
+
+Legacy rows written before this schema have `eventType`/`timestampMs` blank; the
+exporter treats them as `slot` with `timestampMs = playStartMs`.
 
 ## Files
 
 | File | What it does |
 |------|--------------|
-| `services/app_api/app.py` (`/api/pitch-formant`) | Server-side pitch+formant bake |
-| `services/app_api/pitch_formant.py` | WORLD-vocoder shift; duration-preserving |
-| `frontend/src/lib/soundboardConfig.ts` | One source of truth for SR/channels/bit-depth/defaults |
+| `services/app_api/app.py` (`/api/pitch-formant`, `/api/loudness-normalize`) | Server-side pitch+formant bake + EBU R128 normalize |
+| `services/app_api/pitch_formant.py` | WORLD-vocoder shift; duration-preserving; WAV helpers reused by normalize |
+| `frontend/src/lib/soundboardConfig.ts` | One source of truth for SR/channels/bit-depth/loudness/defaults |
 | `frontend/src/lib/audioFormat.ts` | Decode / resample / encode WAV at PP rate, duration checks |
-| `frontend/src/lib/soundboardDb.ts` | IndexedDB store for slots, targets, sessions |
+| `frontend/src/lib/soundboardDb.ts` | IndexedDB store for slots, targets, sessions (+ event/retry schema) |
 | `frontend/src/lib/soundboardZip.ts` | Pure-JS store-mode zip writer + reader |
-| `frontend/src/hooks/useSoundboard.ts` | Orchestration: record, bake, log, export |
-| `frontend/src/hooks/useSoundboardPlayback.ts` | Drives opus-recorder over baked WAVs |
-| `frontend/src/components/ConfigureSoundboard.tsx` | Slow-setup tab UI |
-| `frontend/src/components/conversation/SoundboardPanel.tsx` | Runtime panel |
+| `frontend/src/lib/soundboardCapture.ts` | Conversation-scoped capture of sent clips → transcript + You/All WAVs + VC-quality |
+| `frontend/src/lib/sessionCounter.ts` | Persistent counted-session number |
+| `frontend/src/hooks/useSoundboard.ts` | Orchestration: record, bake (incl. normalize), log, export |
+| `frontend/src/hooks/useSoundboardPlayback.ts` | Drives opus-recorder over baked WAVs; local monitor |
+| `frontend/src/hooks/useWebSocket.ts` | PP speech-run detection + `registerPpSpeechListener` |
+| `frontend/src/components/ConfigureSoundboard.tsx` | Slow-setup tab UI (bake defaults, reorder) |
+| `frontend/src/components/conversation/SoundboardPanel.tsx` | Runtime panel (turn-gap, autoplay, retry, log) |
 
 ## Importing local audio + per-slot downloads
 
@@ -170,13 +252,28 @@ Practical guidance:
 - **Recording, upload, IndexedDB storage** are all browser-side. No server
   cost at all.
 
+## Post-conversation analysis
+
+When soundboard clips drove a conversation, the results bar rebuilds the user
+side from what was actually sent (not the muted mic): the **You** / **You raw**
+downloads are the sent/pre-bake clips placed on the conversation timeline, and
+**All** is that merged with PP's audio — a synced recording of the interaction.
+The final transcript includes the soundboard turns (Whisper text, or a
+`[soundboard: label]` placeholder). **Analyze VC quality** lights up for a clean
+single-target VC session (it scores the gapless concat of the sent vs raw clips
+against the target). See `frontend/src/lib/soundboardCapture.ts`.
+
 ## What's not built (yet)
 
-Marked nice-to-have in the spec, skipped for the first usable version:
-
-- Auto-transcribe raw takes via Whisper for label suggestions
-- Per-slot VC-quality badge (call `/api/vc-quality` after bake)
+- Per-slot VC-quality badge at bake time (session-level VC-quality *is* wired
+  post-conversation; per-slot-at-bake is still nice-to-have)
 - VCTK corpus browser for target picker (a built-in default + uploads is
   enough for now)
 - Built-in default target VC bake (needs server-side target-id resolution
   on `/api/voice-conversion`; for now upload a target WAV to use VC mode)
+- Full VAD auto-advance is present (**Autoplay**); a stricter timing state
+  machine (hard-gating sends on the turn-gap) is intentionally left as operator
+  discretion
+
+Auto-transcribe on bake (Whisper) is **done** — every record/bake caches a
+transcript used for the live + final transcript.
