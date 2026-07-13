@@ -91,8 +91,11 @@ fi
 
 # Fixed upstreams (not prompted)
 MEANVC_URL="https://github.com/ASLP-lab/MeanVC.git"   # cloned for its speaker_verification source
-XVC_URL="https://github.com/Jerrister/X-VC.git"
-XVC_COMMIT="49df8c591eafc48b096e466d96f9839f9c0dd739"
+# Env-overridable: point XVC_URL/XVC_REF at the accent-finetuning fork to serve
+# fine-tuned checkpoints with its pipeline (eval harness, ckpt sha256 logging), e.g.
+#   XVC_URL=https://github.com/<you>/X-VC-accent-finetuning.git XVC_REF=accent-finetuning bash infra/setup.sh --xvc
+XVC_URL="${XVC_URL:-https://github.com/Jerrister/X-VC.git}"
+XVC_REF="${XVC_REF:-49df8c591eafc48b096e466d96f9839f9c0dd739}"
 # llama.cpp-omni: C++ engine that runs MiniCPM-o GGUF with full-duplex speech.
 # The HTTP `llama-server` target lives on the feat/web-demo branch.
 LLAMA_OMNI_URL="https://github.com/tc-mb/llama.cpp-omni.git"
@@ -169,7 +172,7 @@ phase_clone() {
   # X-VC — cloned + run from source by services/xvc/server.py (added to sys.path).
   if $INSTALL_XVC; then
     [ -d "$XVC_DIR" ] && echo "X-VC exists" || git clone "$XVC_URL" "$XVC_DIR"
-    ( cd "$XVC_DIR" && git checkout "$XVC_COMMIT" 2>/dev/null || true )
+    ( cd "$XVC_DIR" && git checkout "$XVC_REF" 2>/dev/null || true )
     mkdir -p "$XVC_DIR/ckpts" "$XVC_DIR/pretrained"
   fi
   # PersonaPlex's moshi is NOT cloned — services/personaplex pulls it via uv git source.

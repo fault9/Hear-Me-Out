@@ -4,6 +4,9 @@
 # Each service runs in its own uv project venv (uv run --project / from its dir).
 # Override the workspace with WORKSPACE=/dir.
 # Pick the speech LM with SPEECH_LM_ENGINE=personaplex|minicpm_o; the VC engine with VC_ENGINE=meanvc|xvc.
+# With VC_ENGINE=xvc, pick the checkpoint (original release vs an accent fine-tune)
+# interactively or with XVC_CKPT=/path/to/ckpt.pt; fine-tunes live in $XVC_DIR/ckpts/
+# (pull them there with X-VC's scripts/publish_checkpoint.py pull).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 # Defaults to the repo's parent (this script lives at <workspace>/Hear-Me-Out/infra/run_all.sh).
@@ -66,6 +69,51 @@ if [ -z "$VC_ENGINE" ]; then
   echo "    2) X-VC    (GPU, streaming; needs the X-VC install from setup.sh)"
   read -t 60 -p "  Choice [1/2]: " vc_choice < /dev/tty 2>/dev/tty || vc_choice="1"
   case "$vc_choice" in 2) VC_ENGINE=xvc ;; *) VC_ENGINE=meanvc ;; esac
+fi
+
+# X-VC only: pick WHICH checkpoint serves on :5002 (original release vs an accent
+# fine-tune). Any *.pt in $XVC_DIR/ckpts/ is offered; XVC_CKPT env skips the menu.
+if [ "$VC_ENGINE" = "xvc" ]; then
+  export XVC_DIR="${XVC_DIR:-$WORKSPACE/X-VC}"
+  export XVC_CONFIG="${XVC_CONFIG:-$XVC_DIR/configs/xvc.yaml}"
+  [ -d "$XVC_DIR" ] || { echo -e "${YELLOW}ERROR:${NC} X-VC not installed — rerun setup.sh with --xvc."; exit 1; }
+  if [ -z "$XVC_CKPT" ]; then
+    xvc_ckpts=()
+    [ -f "$XVC_DIR/ckpts/xvc.pt" ] && xvc_ckpts+=("$XVC_DIR/ckpts/xvc.pt")
+    while IFS= read -r f; do
+      [ "$(basename "$f")" = "xvc.pt" ] || xvc_ckpts+=("$f")
+    done < <(ls "$XVC_DIR"/ckpts/*.pt 2>/dev/null | sort)
+    if [ ${#xvc_ckpts[@]} -eq 0 ]; then
+      echo -e "${YELLOW}ERROR:${NC} no checkpoints in $XVC_DIR/ckpts/ — download xvc.pt (setup.sh)"
+      echo "       or pull a fine-tune: python scripts/publish_checkpoint.py pull ... --out ckpts/<name>.pt"
+      exit 1
+    elif [ ${#xvc_ckpts[@]} -eq 1 ]; then
+      XVC_CKPT="${xvc_ckpts[0]}"
+    else
+      echo ""
+      echo "  Which X-VC checkpoint on :5002?"
+      i=1
+      for f in "${xvc_ckpts[@]}"; do
+        label="$(basename "$f")"
+        [ "$label" = "xvc.pt" ] && label="xvc.pt  (original release)"
+        [ "$i" -eq 1 ] && label="$label [default]"
+        echo "    $i) $label"
+        i=$((i+1))
+      done
+      read -t 60 -p "  Choice [1-${#xvc_ckpts[@]}]: " ck_choice < /dev/tty 2>/dev/tty || ck_choice="1"
+      case "$ck_choice" in ''|*[!0-9]*) ck_choice=1 ;; esac
+      { [ "$ck_choice" -ge 1 ] && [ "$ck_choice" -le ${#xvc_ckpts[@]} ]; } || ck_choice=1
+      XVC_CKPT="${xvc_ckpts[$((ck_choice-1))]}"
+    fi
+  fi
+  export XVC_CKPT
+  # Fine-tuned checkpoints are saved WITHOUT EMA weights (ema_update: false in the
+  # fine-tune configs); load_xvc falls back to raw generator weights on its own, but
+  # set the flag explicitly so the served-weights intent is visible in the logs.
+  if [ "$(basename "$XVC_CKPT")" != "xvc.pt" ]; then
+    export XVC_EMA_LOAD="${XVC_EMA_LOAD:-0}"
+  fi
+  echo -e "  ${DIM}xvc ckpt${NC}   $XVC_CKPT ${DIM}(ema_load=${XVC_EMA_LOAD:-1})${NC}"
 fi
 
 export HF_HUB_ENABLE_HF_TRANSFER=1
@@ -142,12 +190,9 @@ PID2=$!
 
 # --- VC engine :5002 ---
 if [ "$VC_ENGINE" = "xvc" ]; then
-    echo -e "  ${CYAN}▶${NC} X-VC          :5002  ${DIM}(GPU, streaming)${NC}"
-    export XVC_DIR="$WORKSPACE/X-VC"
-    export XVC_CONFIG="$XVC_DIR/configs/xvc.yaml"
-    export XVC_CKPT="$XVC_DIR/ckpts/xvc.pt"
+    echo -e "  ${CYAN}▶${NC} X-VC          :5002  ${DIM}(GPU, streaming) ckpt=$(basename "$XVC_CKPT")${NC}"
     export MEANVC_PORT=5002
-    [ -d "$XVC_DIR" ] || { echo -e "  ${YELLOW}ERROR:${NC} X-VC not installed — rerun setup.sh with --xvc."; exit 1; }
+    # XVC_DIR/XVC_CONFIG/XVC_CKPT resolved by the checkpoint picker above.
     # Run from the X-VC repo (relative pretrained/ paths) using the services/xvc venv.
     ( cd "$XVC_DIR" && exec uv run --project "$SERVICES/xvc" python "$SERVICES/xvc/server.py" ) &
     PID3=$!; VC_LABEL="X-VC"
