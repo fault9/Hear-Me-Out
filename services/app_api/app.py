@@ -416,7 +416,6 @@ def create_app():
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
-    @app.post("/api/vc-quality")
     # Keys clients can pass to skip a heavy metric block. Names match the
     # vc_quality.py --no-* flags (mapped below).
     _SKIPPABLE_METRICS = {
@@ -426,6 +425,7 @@ def create_app():
         "prosody": "--no-prosody",
     }
 
+    @app.post("/api/vc-quality")
     async def vc_quality(
         source_audio: UploadFile = File(...),
         target_audio: UploadFile = File(...),
