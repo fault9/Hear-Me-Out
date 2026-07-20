@@ -18,6 +18,9 @@ export interface ProxyDescriptor {
   sourceSr: number;
   steps: number;
   voicePrompt?: string;
+  // Initial VC state at connect. The proxy socket is opened whenever a target
+  // exists (even when VC is off), then toggled live via sendControl().
+  vcEnabled: boolean;
 }
 
 export interface Transcript {
@@ -213,7 +216,7 @@ export function useWebSocket() {
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
     const url = proxy
-      ? getChatProxyWsUrl(proxy.targetId, proxy.sourceSr, proxy.steps, textPrompt ?? "", proxy.voicePrompt)
+      ? getChatProxyWsUrl(proxy.targetId, proxy.sourceSr, proxy.steps, textPrompt ?? "", proxy.voicePrompt, proxy.vcEnabled)
       : getPersonaplexWsURL(textPrompt);
     console.log("Connecting to:", url);
     setError(null);
@@ -336,6 +339,15 @@ export function useWebSocket() {
     }
   }, []);
 
+  // JSON text-frame control channel to the chat-proxy (e.g. live VC on/off:
+  // { type: "vc_control", enabled: boolean }). No-op if the socket is closed
+  // or this is a direct PersonaPlex connection (which ignores text frames).
+  const sendControl = useCallback((message: Record<string, unknown>) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(message));
+    }
+  }, []);
+
   const disconnect = useCallback(() => {
     runIdRef.current += 1;
     intentionalClose.current = true;
@@ -453,6 +465,7 @@ export function useWebSocket() {
     disconnect,
     sendAudio,
     sendRawAudio,
+    sendControl,
     getVcUserWav,
     setPersonaplexSink,
     configureFeedback,

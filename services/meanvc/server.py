@@ -499,6 +499,10 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     source_sr = int(request.query.get("source_sr", 16000))
     voice_prompt = request.query.get("voice_prompt", "")
     text_prompt = request.query.get("text_prompt", "")
+    # Initial conversion state. The browser can flip this live via a
+    # {"type":"vc_control","enabled":bool} text frame (see browser_to_pplx).
+    # Defaults to True so a client that never sends the flag behaves as before.
+    vc_enabled = request.query.get("vc_enabled", "true").lower() != "false"
     need_resample = source_sr != 16000
 
     if need_resample:
@@ -528,6 +532,12 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
 
     opus_writer = sphn.OpusStreamWriter(24000)
     out_resampler = torchaudio.transforms.Resample(16000, 24000).to("cpu")
+    # Passthrough (VC off) resampler: raw mic (source_sr) -> 24 kHz Opus rate,
+    # bypassing the model entirely. Only built if the mic isn't already 24 kHz.
+    pass_resampler = (
+        torchaudio.transforms.Resample(source_sr, 24000).to("cpu")
+        if source_sr != 24000 else None
+    )
     loop = asyncio.get_event_loop()
 
     # Optional debug capture: decode our own Opus stream with the SAME decoder
@@ -558,11 +568,61 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     OPUS_FRAME = 1920
     opus_pcm_buf = np.array([], dtype=np.float32)
 
+    async def emit_opus(pcm_24k: np.ndarray):
+        """Append 24 kHz PCM to the Opus stream and forward encoded frames to
+        PersonaPlex. Shared by the VC and passthrough paths so the user audio
+        arrives as ONE continuous Opus stream across live on/off toggles."""
+        nonlocal opus_pcm_buf
+        opus_pcm_buf = np.concatenate([opus_pcm_buf, pcm_24k])
+        while len(opus_pcm_buf) >= OPUS_FRAME:
+            frame = np.ascontiguousarray(opus_pcm_buf[:OPUS_FRAME])
+            opus_pcm_buf = opus_pcm_buf[OPUS_FRAME:]
+            opus_writer.append_pcm(frame)
+            while True:
+                encoded = opus_writer.read_bytes()
+                if len(encoded) == 0:
+                    break
+                await pplx_ws.send_bytes(TAG_AUDIO + encoded)
+                if opus_reader_dbg is not None:
+                    opus_reader_dbg.append_bytes(encoded)
+                    pcm = opus_reader_dbg.read_pcm()
+                    if pcm.shape[-1] > 0:
+                        debug_pcm.append(pcm.astype(np.float32))
+
     async def browser_to_pplx():
-        nonlocal chunk_count, acc_samples, opus_pcm_buf
+        nonlocal chunk_count, acc_samples, vc_enabled
         async for msg in browser_ws:
+            if msg.type == web.WSMsgType.TEXT:
+                # Control channel: live VC on/off without reconnecting.
+                try:
+                    ctrl = json.loads(msg.data)
+                except (ValueError, TypeError):
+                    continue
+                if ctrl.get("type") == "vc_control" and "enabled" in ctrl:
+                    vc_enabled = bool(ctrl["enabled"])
+                    logger.info(
+                        "[proxy] VC %s (live toggle)",
+                        "enabled" if vc_enabled else "passthrough",
+                    )
+                continue
+
             if msg.type == web.WSMsgType.BINARY:
                 incoming = np.frombuffer(msg.data, dtype=np.float32).copy()
+
+                if not vc_enabled:
+                    # Passthrough: forward the raw mic to PersonaPlex unchanged,
+                    # just resampled to the 24 kHz Opus rate. Deliberately no
+                    # TAG_VC_USER (0x03) frame — this audio is NOT converted, so
+                    # it must not be labeled/collected as converted-user audio.
+                    mic_24k = (
+                        pass_resampler(torch.from_numpy(incoming).unsqueeze(0))
+                        .squeeze(0)
+                        .numpy()
+                        if pass_resampler is not None else incoming
+                    )
+                    await emit_opus(mic_24k)
+                    continue
+
                 if need_resample:
                     t = torch.from_numpy(incoming).unsqueeze(0)
                     incoming = resampler(t).squeeze(0).numpy()
@@ -605,21 +665,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                         .squeeze(0)
                         .numpy()
                     )
-                    opus_pcm_buf = np.concatenate([opus_pcm_buf, vc_wav_24k])
-                    while len(opus_pcm_buf) >= OPUS_FRAME:
-                        frame = np.ascontiguousarray(opus_pcm_buf[:OPUS_FRAME])
-                        opus_pcm_buf = opus_pcm_buf[OPUS_FRAME:]
-                        opus_writer.append_pcm(frame)
-                        while True:
-                            encoded = opus_writer.read_bytes()
-                            if len(encoded) == 0:
-                                break
-                            await pplx_ws.send_bytes(TAG_AUDIO + encoded)
-                            if opus_reader_dbg is not None:
-                                opus_reader_dbg.append_bytes(encoded)
-                                pcm = opus_reader_dbg.read_pcm()
-                                if pcm.shape[-1] > 0:
-                                    debug_pcm.append(pcm.astype(np.float32))
+                    await emit_opus(vc_wav_24k)
 
                     # (b) send converted PCM (16 kHz) back to browser for downloads
                     if not browser_ws.closed:

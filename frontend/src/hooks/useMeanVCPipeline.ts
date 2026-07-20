@@ -18,6 +18,7 @@ export interface MeanVCPipelineState {
 // converts each chunk and relays it to PersonaPlex over localhost.
 export function useMeanVCPipeline(
   sendRawAudio: (data: ArrayBuffer) => void,
+  sendControl: (message: Record<string, unknown>) => void,
   initialSteps: number = 2,
 ) {
   const [state, setState] = useState<MeanVCPipelineState>({
@@ -33,11 +34,18 @@ export function useMeanVCPipeline(
   const pcmContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sendingRef = useRef(false);
+  // Mirror of vcStreaming for use inside stable callbacks (setEnabled) that must
+  // not be recreated on every state change.
+  const vcStreamingRef = useRef(false);
+  // Latest vcEnabled, read at connect time to seed the proxy descriptor.
+  const vcEnabledRef = useRef(false);
   // Raw (pre-conversion) mic PCM, kept for the post-conversation voice-change metrics.
   const originalPcmRef = useRef<Float32Array[]>([]);
   const resumeRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sendRawRef = useRef(sendRawAudio);
   sendRawRef.current = sendRawAudio;
+  const sendControlRef = useRef(sendControl);
+  sendControlRef.current = sendControl;
 
   const uploadTarget = useCallback(async (file: File) => {
     const url = URL.createObjectURL(file);
@@ -72,6 +80,7 @@ export function useMeanVCPipeline(
       setState(s => ({ ...s, vcStatus: "Upload a target voice first" }));
       throw new Error("No target voice loaded");
     }
+    vcStreamingRef.current = true;
     setState(s => ({ ...s, vcStatus: "Starting microphone...", vcStreaming: true }));
 
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -115,6 +124,9 @@ export function useMeanVCPipeline(
       sourceSr: audioCtx.sampleRate,
       steps: initialSteps,
       voicePrompt: "NATF2.pt",
+      // Seed the proxy with the toggle's current state. The route is always the
+      // proxy when a target exists; conversion is on/off per this flag.
+      vcEnabled: vcEnabledRef.current,
     };
   }, [state.vcTargetId, initialSteps]);
 
@@ -138,6 +150,7 @@ export function useMeanVCPipeline(
 
   const stopVCStream = useCallback(() => {
     sendingRef.current = false;
+    vcStreamingRef.current = false;
     if (resumeRef.current) clearInterval(resumeRef.current);
     if (processorRef.current) {
       processorRef.current.onaudioprocess = null;
@@ -152,7 +165,14 @@ export function useMeanVCPipeline(
   }, []);
 
   const setEnabled = useCallback((enabled: boolean) => {
+    vcEnabledRef.current = enabled;
     setState(s => ({ ...s, vcEnabled: enabled }));
+    // Live toggle: if the proxy conversation is active, tell the server to
+    // switch conversion on/off in place — no reconnect, no target change.
+    // Before connect, this only updates local state (used to seed the descriptor).
+    if (vcStreamingRef.current) {
+      sendControlRef.current({ type: "vc_control", enabled });
+    }
   }, []);
 
   return {

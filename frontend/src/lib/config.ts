@@ -48,6 +48,7 @@ export function getChatProxyWsUrl(
   steps: number,
   textPrompt: string,
   voicePrompt: string = "NATF2.pt",
+  vcEnabled: boolean = true,
 ): string {
   const host = env.VITE_MEANVC_HOST || "130.237.3.103";
   const params = new URLSearchParams({
@@ -56,6 +57,10 @@ export function getChatProxyWsUrl(
     source_sr: String(sourceSr),
     text_prompt: textPrompt,
     voice_prompt: voicePrompt,
+    // Initial conversion state. The socket is always the proxy when a target
+    // exists; the proxy converts or passes through per this flag, flipped live
+    // via {"type":"vc_control",...} control frames.
+    vc_enabled: String(vcEnabled),
   });
   return `wss://${host}:5002/api/meanvc/chat-proxy?${params.toString()}`;
 }

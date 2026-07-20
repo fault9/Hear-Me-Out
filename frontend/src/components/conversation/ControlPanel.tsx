@@ -191,11 +191,15 @@ export function ControlPanel({
         </div>
         {vcPipeline.vcEnabled && (
           <>
+            {/* Target voice is locked once connected: the proxy binds one target
+                per socket, so it can only be chosen before the call starts. VC
+                itself can still be toggled live via the switch above. */}
             <input
               type="file"
               accept="audio/wav,.wav"
+              disabled={isConnected}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) vcPipeline.uploadTarget(f) }}
-              className="w-full text-[10px] text-muted-foreground file:mr-2 file:py-0.5 file:px-2 file:rounded file:bg-purple-600 file:text-white file:border-0 hover:file:bg-purple-500"
+              className="w-full text-[10px] text-muted-foreground file:mr-2 file:py-0.5 file:px-2 file:rounded file:bg-purple-600 file:text-white file:border-0 hover:file:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-muted-foreground whitespace-nowrap">Steps: {meanvcSteps}</span>

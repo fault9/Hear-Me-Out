@@ -127,7 +127,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
   // True between conversation end and the results being ready (drives the shimmer).
   const [processing, setProcessing] = useState(false)
 
-  const { vcEnabled, vcTargetId, vcTargetUrl, vcStreaming, startMic, beginSending, stopVCStream: vcStop, getOriginalUserWav } = vcPipeline
+  const { vcTargetId, vcTargetUrl, vcStreaming, startMic, beginSending, stopVCStream: vcStop, getOriginalUserWav } = vcPipeline
   const {
     clearTranscripts,
     clearResponseChunks,
@@ -170,9 +170,11 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     setVcQualityData(null)
     setVcQualityLoading(false)
     setProcessing(false)
-    if (vcEnabled && vcTargetId) {
-      // VC mode: acquire mic first to learn the sample rate, then connect to the
-      // chat-proxy (which speaks PersonaPlex's protocol on this same socket).
+    if (vcTargetId) {
+      // A target exists → always route through the chat-proxy so VC can be
+      // toggled live mid-conversation (the proxy converts or passes through
+      // per the vc_control channel). This holds even if VC is currently off:
+      // startMic seeds the proxy with the toggle's initial state.
       try {
         const proxy = await startMic()
         connect(textPrompt, proxy)
@@ -180,9 +182,10 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         micClicked.current = false
       }
     } else {
+      // No target uploaded → direct PersonaPlex connection, no VC available.
       connect(textPrompt)
     }
-  }, [clearTranscripts, clearResponseChunks, clearError, connect, textPrompt, vcEnabled, vcTargetId, startMic])
+  }, [clearTranscripts, clearResponseChunks, clearError, connect, textPrompt, vcTargetId, startMic])
 
   const stopConversation = useCallback(() => {
     const runId = conversationRunId.current
@@ -209,12 +212,17 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         try {
           const vcWav = await timed("collect_converted_user_wav", () => getVcUserWav())
           if (!isCurrentRun()) return
-          if (!vcWav) { setProcessing(false); return }
-          setUserWavUrl(URL.createObjectURL(vcWav))
 
           const originalWav = await timed("collect_original_user_wav", () => getOriginalUserWav())
           if (!isCurrentRun()) return
           if (originalWav) setOriginalUserWavUrl(URL.createObjectURL(originalWav))
+
+          // The proxy only emits converted (0x03) audio while VC is ON. A
+          // conversation that stayed in passthrough the whole time has none, so
+          // fall back to the raw mic capture for the user track/downloads.
+          const userWav = vcWav ?? originalWav
+          if (!userWav) { setProcessing(false); return }
+          setUserWavUrl(URL.createObjectURL(userWav))
 
           let pplxWav: Blob | null = null
           try {
@@ -227,21 +235,21 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
 
           if (pplxWav) {
             try {
-              const merged = await timed("merge_audio", () => mergeAudioTracks(vcWav, pplxWav))
+              const merged = await timed("merge_audio", () => mergeAudioTracks(userWav, pplxWav))
               if (!isCurrentRun()) return
               setMergedWavUrl(URL.createObjectURL(merged))
             } catch {
-              if (isCurrentRun()) setMergedWavUrl(URL.createObjectURL(vcWav))
+              if (isCurrentRun()) setMergedWavUrl(URL.createObjectURL(userWav))
             }
           } else {
-            setMergedWavUrl(URL.createObjectURL(vcWav))
+            setMergedWavUrl(URL.createObjectURL(userWav))
           }
 
           const pplxTurns = fallbackPersonaplexTurns(transcripts)
 
           let vcTurns: DiarizedTurn[] = []
           try {
-            const result = await timed("transcribe_converted_user_wav", () => transcribeWavBlob(vcWav))
+            const result = await timed("transcribe_converted_user_wav", () => transcribeWavBlob(userWav))
             vcTurns = transcriptionToTurns(result, "user")
           } catch (e) {
             console.error("Converted-voice transcription failed:", e)
@@ -249,7 +257,9 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
           if (!isCurrentRun()) return
           setDiarized([...vcTurns, ...pplxTurns].sort((a, b) => a.start - b.start))
 
-          const voiceMetricsAutoRan = voiceAnalysisMode === "after_vc" && !!originalWav
+          // Auto voice-change metrics compare original vs converted, so only run
+          // them when actual converted audio exists (skip pure-passthrough runs).
+          const voiceMetricsAutoRan = voiceAnalysisMode === "after_vc" && !!originalWav && !!vcWav
           console.info("[conversation reset]", {
             runId,
             resetType: "fresh_websocket_session",
@@ -258,7 +268,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
             stepDurationsMs,
           })
 
-          if (voiceMetricsAutoRan && originalWav) {
+          if (voiceMetricsAutoRan && originalWav && vcWav) {
             setVcMetricsLoading(true)
             const started = performance.now()
             compareMetricsData(originalWav, vcWav)
