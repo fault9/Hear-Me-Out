@@ -22,10 +22,11 @@ from typing import Optional
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, UploadFile)
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .analysis import run_session_analysis
 from .engine import get_manager
+from . import yaml_io
 from .models import (REQUIRED_CARD_FIELDS, CreateStudyRequest, EnterRequest,
                      GenerateRequest, ProgressRequest, QuestionnaireRequest,
                      RunStartRequest, Scenario, SessionStartRequest,
@@ -165,9 +166,32 @@ def build_study_router() -> APIRouter:
         manager.stop_engine()
         return {"engine": "stopped"}
 
+    @router.get("/template", dependencies=[Depends(require_admin)])
+    async def template():
+        if yaml_io.TEMPLATE_PATH.exists():
+            return FileResponse(str(yaml_io.TEMPLATE_PATH), media_type="application/x-yaml",
+                                filename="pilot_study.yaml")
+        raise HTTPException(status_code=404, detail="Template not found")
+
     @router.get("/studies", dependencies=[Depends(require_admin)])
     async def list_studies():
         return {"studies": backend.list_studies()}
+
+    @router.get("/studies/{study_id}/yaml", dependencies=[Depends(require_admin)])
+    async def export_yaml(study_id: int):
+        if not backend.get_study(study_id):
+            raise HTTPException(status_code=404, detail="Unknown study")
+        text = yaml_io.dump_yaml(yaml_io.study_to_dict(backend, study_id))
+        return Response(text, media_type="application/x-yaml",
+                        headers={"Content-Disposition": f"attachment; filename=study{study_id}.yaml"})
+
+    @router.post("/studies/{study_id}/import", dependencies=[Depends(require_admin)])
+    async def import_yaml(study_id: int, file: UploadFile = File(...)):
+        if not backend.get_study(study_id):
+            raise HTTPException(status_code=404, detail="Unknown study")
+        data = yaml_io.parse_yaml(await file.read())
+        yaml_io.apply_import(backend, study_id, data)
+        return {"study": _study_detail(backend.get_study(study_id))}
 
     @router.post("/studies", dependencies=[Depends(require_admin)])
     async def create_study(body: CreateStudyRequest):

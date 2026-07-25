@@ -157,4 +157,20 @@ export const adminApi = {
   runs: (t: string, id: number) => jget(`/studies/${id}/runs`, adminHeaders(t)),
   sessions: (t: string, id: number) => jget(`/studies/${id}/sessions`, adminHeaders(t)),
   exportUrl: (id: number, format: "json" | "zip") => `${BASE}/studies/${id}/export?format=${format}`,
+
+  templateUrl: () => `${BASE}/template`,
+  yamlUrl: (id: number) => `${BASE}/studies/${id}/yaml`,
+  async importYaml(t: string, id: number, file: File) {
+    const fd = new FormData(); fd.append("file", file)
+    const r = await fetch(`${BASE}/studies/${id}/import`, { method: "POST", headers: adminHeaders(t), body: fd })
+    if (!r.ok) throw await asError(r)
+    return r.json()
+  },
+  async download(t: string, url: string, filename: string) {
+    const r = await fetch(url, { headers: adminHeaders(t) })
+    if (!r.ok) throw await asError(r)
+    const blob = await r.blob()
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href)
+  },
 };

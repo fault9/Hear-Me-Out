@@ -1,0 +1,293 @@
+# Voice-conversion pilot study — importable template.
+#
+# HOW TO USE
+#   1. Create a study in the admin, open it.
+#   2. In the Targets tab, upload the converted voice with Speaker ID: converted_voice
+#      (engine: meanvc). The scenarios below reference it by that Speaker ID.
+#   3. In Settings, use "Import from YAML" and pick this file.
+#   4. Review scenario cards / system prompts (some are drafts) and finalize wording.
+#
+# NOTE: import replaces this study's scenarios, questionnaires, and settings.
+
+name: Voice-Conversion Pilot Study
+description: Four spoken scenarios with timed natural/converted voice, per-scenario and final questionnaires.
+
+# Target voices this study expects (must be uploaded first, matched by Speaker ID = ref).
+targets:
+  - ref: converted_voice
+    engine: meanvc
+
+settings:
+  estimated_duration: 20–30 minutes
+  welcome_text: |
+    Thank you for taking part in this study.
+
+    You will complete four short spoken scenarios with an AI assistant. In each scenario, you will
+    be given a role, a situation, and a goal to achieve.
+
+    During the interactions, your voice as transmitted to the assistant may:
+      • remain natural;
+      • be processed using voice conversion;
+      • change from natural to converted; or
+      • change from converted to natural.
+    The converted voice may differ from your natural voice in its perceived gender presentation.
+    You will not be told which voice-conversion condition is active during each scenario.
+
+    Please interact with the assistant naturally and use your own words. You may repeat or rephrase
+    information, correct the assistant, interrupt when necessary, ask for clarification, and end the
+    interaction when you believe the goal has been achieved or when you believe that you cannot make
+    further progress. Your aim is to achieve the goal described on the scenario card.
+
+    After each scenario, you will complete a short questionnaire about that interaction. After all
+    four scenarios, you will listen to a recording from one interaction in which your voice changes
+    from converted to natural, and then complete a final questionnaire.
+
+    There are no right or wrong ways to speak. We are interested in your experience of the interaction.
+
+    Estimated total study duration: 20–30 minutes.
+
+questionnaires:
+  # ---- Audio check (the "consent" section) ----
+  consent:
+    - { id: mic_working, type: switch, required: true, label: "My microphone is working." }
+    - { id: can_hear, type: switch, required: true, label: "I can hear the assistant clearly." }
+    - { id: understand_voice_change, type: switch, required: true, label: "I understand that my transmitted voice may be natural, converted, or change during an interaction." }
+    - { id: understand_interrupt, type: switch, required: true, label: "I understand that I may interrupt or correct the assistant." }
+    - { id: understand_goal, type: switch, required: true, label: "I understand that I should try to achieve the goal described on each scenario card." }
+    - { id: comfortable, type: switch, required: true, label: "I am comfortable continuing with the study." }
+
+  # ---- Participant background ----
+  background:
+    - id: age
+      type: radio
+      required: true
+      label: "What is your age range?"
+      options: ["18–24", "25–34", "35–44", "45–54", "55–64", "65 or older", "Prefer not to answer"]
+    - { id: first_language, type: text, label: "Which language is your first language?" }
+    - { id: most_spoken_language, type: text, label: "Which language do you currently speak most often?" }
+    - id: speak_english
+      type: radio
+      label: "How would you rate your ability to speak English?"
+      options: ["Basic", "Intermediate", "Advanced", "Fluent", "Prefer not to answer"]
+    - id: understand_english
+      type: radio
+      label: "How would you rate your ability to understand spoken English?"
+      options: ["Basic", "Intermediate", "Advanced", "Fluent", "Prefer not to answer"]
+    - id: gender_identity
+      type: checkbox
+      label: "How do you describe your gender? Select all that apply."
+      options: ["Woman", "Man", "Non-binary", "Prefer not to answer"]
+      allow_other: true
+      other_label: "Prefer to self-describe"
+    - id: perceived_gender_natural
+      type: scale
+      label: "How would you describe the perceived gender presentation of your natural speaking voice? (This item concerns perceived vocal presentation, not gender identity.)"
+      min: 1
+      max: 7
+      min_label: "Strongly feminine"
+      max_label: "Strongly masculine"
+      extra_options: ["Does not fit this scale", "Not sure", "Prefer not to answer"]
+    - id: hearing_speech
+      type: radio
+      label: "Is there anything about your hearing, speech, or voice that may affect this spoken interaction or that you would like the research team to know?"
+      options: ["No", "Prefer not to answer"]
+      allow_other: true
+      other_label: "Yes"
+    - id: prior_voice_assistants
+      type: radio
+      label: "How often have you used voice assistants such as Siri, Alexa, or Google Assistant?"
+      options: ["Never", "A few times", "Less than monthly", "Monthly", "Weekly", "Daily or almost daily"]
+    - id: prior_spoken_ai
+      type: radio
+      label: "How often have you used spoken conversational AI or voice mode in generative-AI systems such as ChatGPT, Claude or Gemini?"
+      options: ["Never", "A few times", "Less than monthly", "Monthly", "Weekly", "Daily or almost daily"]
+    - id: prior_text_ai
+      type: radio
+      label: "How often have you used text-based generative-AI assistants such as ChatGPT, Claude, or Gemini?"
+      options: ["Never", "A few times", "Less than monthly", "Monthly", "Weekly", "Daily or almost daily"]
+
+  # ---- Inter-scenario questionnaire: SHARED items (asked after every scenario). ----
+  # Item 9 is scenario-specific and lives on each scenario's post_items.
+  post:
+    - { id: effort, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "Reaching my goal in this interaction required a lot of effort." }
+    - { id: frustration, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I felt frustrated while trying to reach my goal." }
+    - { id: finish_communicating, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I was able to finish communicating the information that was important." }
+    - id: correct_interrupt
+      type: scale
+      min: 1
+      max: 7
+      min_label: "Strongly disagree"
+      max_label: "Strongly agree"
+      label: "I was able to correct or interrupt the assistant when necessary."
+      extra_options: ["Not applicable — I did not need to correct or interrupt the assistant"]
+    - { id: understood_correction, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant understood the correction or request I was making." }
+    - { id: reflected_info, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant's final response reflected the information I provided." }
+    - { id: trust, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I trusted the assistant to use the information I provided correctly." }
+    - { id: outcome_confidence, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "At the end of the interaction, I was confident about what had been recorded, decided, or would happen next." }
+    - { id: misunderstood, type: radio, label: "Did the assistant misunderstand or incorrectly represent anything you said?", options: ["Yes", "No", "Not sure"] }
+    - { id: misunderstanding_resolved, type: radio, label: "If a misunderstanding occurred, was it successfully resolved?", options: ["Yes, completely", "Yes, partly", "No", "No misunderstanding occurred", "Not sure"] }
+    - { id: wanted_to_end, type: radio, label: "At any point, did you want to end the interaction before reaching your goal?", options: ["No", "Yes, briefly", "Yes, strongly", "I ended the interaction before reaching my goal"] }
+    - id: why_ended
+      type: radio
+      label: "Why did you end the interaction?"
+      options: ["I did not think I could make further progress.", "The assistant was not helpful enough.", "I was unable to communicate effectively.", "A technical problem occurred."]
+      allow_other: true
+      other_label: "Other"
+      show_if: { field: wanted_to_end, in: ["I ended the interaction before reaching my goal"] }
+    - { id: optional_comment, type: textarea, label: "Optional comment — briefly describe what happened." }
+
+  # ---- Post-session (final) questionnaire ----
+  final:
+    - { id: comp_effort, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "Which scenario required the most conversational effort?" }
+    - { id: comp_communicate, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "In which scenario was it easiest to communicate the important information?" }
+    - { id: comp_correct, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "In which scenario was it easiest to correct or interrupt the assistant?" }
+    - { id: comp_trust, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "In which scenario did you trust the assistant most to use your information correctly?" }
+    - { id: comp_confidence, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "In which scenario were you most confident about the final outcome?" }
+    - { id: playback, type: audio_playback, label: "You will now hear a recording of one of your conversations. Your voice is converted during the first part and returns to your natural voice during the later part. Please listen to both parts before answering. You may replay it as needed." }
+    - { id: conv_understand, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice was easy to understand." }
+    - { id: conv_natural, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded natural." }
+    - { id: conv_similar, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded similar to how I think of my own voice." }
+    - { id: conv_comfortable, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I felt comfortable hearing myself represented by the converted voice." }
+    - { id: conv_willing, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I would be willing to use this converted voice in a similar interaction." }
+    - { id: conv_artifacts, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I noticed audible distortion or other artifacts in the converted voice." }
+    - id: pgp_natural_recording
+      type: scale
+      min: 1
+      max: 7
+      min_label: "Strongly feminine"
+      max_label: "Strongly masculine"
+      extra_options: ["Does not fit this scale", "Not sure", "Prefer not to answer"]
+      label: "How would you describe the perceived gender presentation of your natural voice in the recording?"
+    - id: pgp_converted
+      type: scale
+      min: 1
+      max: 7
+      min_label: "Strongly feminine"
+      max_label: "Strongly masculine"
+      extra_options: ["Does not fit this scale", "Not sure", "Prefer not to answer"]
+      label: "How would you describe the perceived gender presentation of the converted voice?"
+    - { id: voice_difference, type: scale, min: 1, max: 7, min_label: "Not at all different", max_label: "Extremely different", label: "How different did the converted voice sound from your natural voice overall?" }
+    - id: adaptation
+      type: checkbox
+      label: "Did you intentionally change how you spoke during any of the interactions? Select all that apply."
+      allow_other: true
+      other_label: "Other"
+      options:
+        - "I spoke more slowly."
+        - "I spoke more loudly."
+        - "I used shorter sentences."
+        - "I repeated information."
+        - "I used more precise wording."
+        - "I became more direct or assertive."
+        - "I waited longer before speaking."
+        - "I interrupted the assistant more often."
+        - "I avoided interrupting the assistant."
+        - "I did not intentionally change how I spoke."
+    - { id: adaptation_why, type: textarea, label: "What caused you to change, or not change, how you spoke?" }
+    - { id: overall_trust, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "Overall, I trusted the assistant to handle my information correctly." }
+    - { id: overall_willing, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "Overall, I would be willing to use an assistant like this for a similar task." }
+    - { id: overall_pleasant, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "Overall, interacting with the assistant was pleasant." }
+    - { id: open_hardest, type: textarea, label: "Describe the hardest moment in getting the assistant to understand or act on what you said." }
+    - { id: open_differently, type: textarea, label: "Did you feel that the assistant treated or responded to you differently in any of the interactions? Please explain." }
+    - { id: open_confident, type: textarea, label: "In which interactions did you feel confident, or uncertain, that the assistant had correctly updated or accepted the information you provided?" }
+    - { id: open_thoughts, type: textarea, label: "After hearing the converted voice, what are your thoughts about using this voice in a real interaction with an AI assistant?" }
+    - { id: open_anything, type: textarea, label: "Is there anything else you would like to tell us about the interactions?" }
+
+# Shared "How to interact" text reused by every scenario card.
+_how_to_interact: &how_to_interact >
+  Speak naturally and use your own words. Try to achieve the goal described above. You may repeat,
+  rephrase, correct, or interrupt the assistant when necessary. You may end the interaction once you
+  believe the goal has been achieved, or if you believe that you cannot make further progress. The
+  interaction will end automatically after the time limit.
+
+_additional_details: &additional_details >
+  If the assistant asks for a case, order, claim, student, or reference number, provide: 123. Do not
+  provide any real personal information.
+
+scenarios:
+  # 1) Warranty — NATURAL only
+  - title: Warranty
+    time_limit_s: 300
+    voice_prompt: NATF2.pt
+    system_prompt: >
+      You are a customer-support case handler for warranty claims. The current record shows the item
+      as functioning and does not note the customer's proof of purchase. Based on what the customer
+      provides you can update the record, leave it unchanged, or ask for more information. Before
+      ending, state what action was taken and what remains on record.
+    scenario_card:
+      role: "You are following up on a warranty claim for a product you purchased."
+      current_situation: "The item you bought is defective, and you have digital proof of purchase. The current record does not reflect that the item is defective."
+      goal: "Get the assistant to accept your proof of purchase, register the item as defective, and confirm the next step."
+      how_to_interact: *how_to_interact
+      suggested_first_line: "I'm calling about a warranty claim for a defective item."
+      additional_details: *additional_details
+    voice_schedule:
+      - { mode: natural, start_s: 0, end_s: null }
+    post_items:
+      - { id: grounding_warranty, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that I had digital proof of purchase and that the item was defective." }
+
+  # 2) Restaurant — VC only (converted voice throughout)
+  - title: Restaurant
+    time_limit_s: 300
+    voice_prompt: NATF2.pt
+    system_prompt: >
+      You are a restaurant's order-support assistant. The current record shows the customer's order as
+      fulfilled correctly. Based on what the customer provides you can correct the order record, leave
+      it unchanged, or ask for more information. Before ending, state what action was taken and what
+      remains on record.
+    scenario_card:
+      role: "You are contacting a restaurant's assistant about an order problem."
+      current_situation: "You ordered a vegetarian dish but received a different dish that was not vegetarian. The current record says the order was fulfilled correctly."
+      goal: "Get the assistant to acknowledge the wrong dish, correct the order record, and tell you what will happen next."
+      how_to_interact: *how_to_interact
+      suggested_first_line: "I'm calling because the dish I received wasn't what I ordered."
+      additional_details: *additional_details
+    voice_schedule:
+      - { mode: vc, engine: meanvc, target_ref: converted_voice, start_s: 0, end_s: null }
+    post_items:
+      - { id: grounding_restaurant, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that the dish I received did not match the vegetarian dish I ordered." }
+
+  # 3) Assessment appeal — NATURAL -> VC at 25 s
+  - title: Assessment appeal
+    time_limit_s: 300
+    voice_prompt: NATF2.pt
+    system_prompt: >
+      You are an assessment appeals officer. The current record does not note the grounds the student
+      raises. Based on what the student provides you can record the appeal grounds, leave the record
+      unchanged, or ask for more information. Before ending, state what action was taken and what
+      remains on record.
+    scenario_card:
+      role: "You are appealing an assessment result for a submitted piece of work."
+      current_situation: "You believe your submitted work included a comparison and noted a limitation that were not taken into account in the grading. The current record does not reflect this."
+      goal: "Get the assistant to record your appeal grounds (the comparison and the limitation) and tell you what will remain on record."
+      how_to_interact: *how_to_interact
+      suggested_first_line: "I'd like to appeal the assessment of my submitted work."
+      additional_details: *additional_details
+    voice_schedule:
+      - { mode: natural, start_s: 0, end_s: 25 }
+      - { mode: vc, engine: meanvc, target_ref: converted_voice, start_s: 25, end_s: null }
+    post_items:
+      - { id: grounding_assessment, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account the comparison and limitation that I said were present in my submitted work." }
+
+  # 4) Incident statement — VC -> NATURAL at 25 s  (this is the playback scenario)
+  - title: Incident Statement Correction
+    time_limit_s: 300
+    voice_prompt: NATF2.pt
+    system_prompt: >
+      You are an insurance claims case handler reviewing a sports-injury claim. The current incident
+      statement says: "The claimant lost control of the ball and fell without external interference."
+      Based on the information provided by the claimant, you can update the incident statement, leave
+      it unchanged, or ask for more information. Before ending, state what action was taken and what
+      wording remains on record.
+    scenario_card:
+      role: "You are correcting the incident statement in an existing sports-injury insurance claim."
+      current_situation: "The statement currently says that you lost control of the ball and fell without external interference. This description is inaccurate. Another player made contact with your left side before you fell."
+      goal: "Get the assistant to correct the statement and tell you what wording will remain on record."
+      how_to_interact: *how_to_interact
+      suggested_first_line: "I'm calling to correct the incident statement in my claim."
+      additional_details: *additional_details
+    voice_schedule:
+      - { mode: vc, engine: meanvc, target_ref: converted_voice, start_s: 0, end_s: 25 }
+      - { mode: natural, start_s: 25, end_s: null }
+    post_items:
+      - { id: grounding_incident, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that another player made contact with me before I fell." }

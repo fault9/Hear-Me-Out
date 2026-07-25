@@ -131,6 +131,40 @@ function SettingsPanel({ token, studyId, study, onChange }: any) {
         }}>{busy ? "Saving…" : "Save settings"}</Button>
         {msg && <span className="text-sm text-muted-foreground">{msg}</span>}
       </div>
+
+      <YamlPanel token={token} studyId={studyId} onChange={onChange} />
+    </div>
+  )
+}
+
+function YamlPanel({ token, studyId, onChange }: any) {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  return (
+    <div className="mt-4 rounded-lg border p-4">
+      <div className="mb-2 text-sm font-semibold">Template & YAML</div>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Upload the target voices (Targets tab) <b>before importing</b> — the YAML references targets by
+        Speaker ID and import fails if any are missing.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={() => adminApi.download(token, adminApi.templateUrl(), "pilot_study.yaml")}>Download template</Button>
+        <Button size="sm" variant="secondary" onClick={() => adminApi.download(token, adminApi.yamlUrl(studyId), `study${studyId}.yaml`)}>Export this study</Button>
+        <label className="cursor-pointer">
+          <span className="inline-flex h-8 items-center rounded-md border px-3 text-sm">Import from YAML…</span>
+          <input type="file" accept=".yaml,.yml,text/yaml,application/x-yaml" className="hidden"
+            onChange={async e => {
+              const f = e.target.files?.[0]; if (!f) return
+              setBusy(true); setErr(null); setMsg(null)
+              try { await adminApi.importYaml(token, studyId, f); setMsg("Imported"); onChange() }
+              catch (ex: any) { setErr(ex?.message || String(ex)) } finally { setBusy(false); e.target.value = "" }
+            }} />
+        </label>
+        {busy && <span className="text-xs text-muted-foreground">Importing…</span>}
+        {msg && <span className="text-xs text-primary">{msg}</span>}
+      </div>
+      {err && <p className="mt-2 text-xs text-destructive">{err}</p>}
     </div>
   )
 }
