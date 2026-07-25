@@ -62,6 +62,7 @@ export function StudyEditor({ token, studyId, onBack }: {
           <Button variant="secondary" onClick={async () => {
             await adminApi.addScenario(token, studyId, {
               order_idx: scenarios.length, title: `Scenario ${scenarios.length + 1}`,
+              system_prompt: "You are a helpful conversational partner. Keep your replies concise.",
               voice_prompt: voices[0] || "NATF2.pt", time_limit_s: 300,
               scenario_card: {}, voice_schedule: [{ mode: "natural", start_s: 0, end_s: null }],
             })

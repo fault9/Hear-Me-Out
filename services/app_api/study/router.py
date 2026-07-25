@@ -376,7 +376,13 @@ def build_study_router() -> APIRouter:
                 r["engine_target_id"] = (t or {}).get("engine_target_id")
             resolved.append(r)
         default_voice = os.environ.get("STUDY_DEFAULT_VOICE_PROMPT", "NATF2.pt")
-        return {"text_prompt": scenario.get("system_prompt", ""),
+        # PersonaPlex (moshi) requires a non-empty text prompt — an empty one leaves
+        # its text_prompt_tokens None and crashes the connection. Fall back to a
+        # neutral prompt when a scenario's system prompt is blank.
+        text_prompt = (scenario.get("system_prompt") or "").strip() or os.environ.get(
+            "STUDY_DEFAULT_SYSTEM_PROMPT",
+            "You are a helpful conversational partner. Keep your replies concise.")
+        return {"text_prompt": text_prompt,
                 "voice_prompt": scenario.get("voice_prompt") or default_voice,
                 "schedule": resolved}
 
