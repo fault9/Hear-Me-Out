@@ -50,14 +50,27 @@ class ExtraField(BaseModel):
 
 class ScenarioCard(BaseModel):
     role: str = ""
-    task_goal: str = ""
-    relevant_facts: str = ""
-    success_criteria: str = ""
+    current_situation: str = ""
+    goal: str = ""
+    how_to_interact: str = ""
+    suggested_first_line: str = ""
+    additional_details: str = ""
     # Researcher-defined additional labeled fields shown on the scenario card.
     extra_fields: list[ExtraField] = Field(default_factory=list)
 
     class Config:
         extra = "allow"
+
+
+# Participant-facing card fields that must be filled in (in display order).
+REQUIRED_CARD_FIELDS = [
+    ("role", "Your role"),
+    ("current_situation", "Current situation"),
+    ("goal", "Your goal"),
+    ("how_to_interact", "How to interact"),
+    ("suggested_first_line", "Suggested first line"),
+    ("additional_details", "Additional details"),
+]
 
 
 class VoiceSegment(BaseModel):

@@ -45,9 +45,11 @@ export interface ScenarioInfo {
   scenario_id: number;
   title: string;
   role: string;
-  task_goal: string;
-  relevant_facts: string;
-  success_criteria: string;
+  current_situation: string;
+  goal: string;
+  how_to_interact: string;
+  suggested_first_line: string;
+  additional_details: string;
   extra_fields?: { label: string; value: string }[];
   time_limit_s: number;
 }

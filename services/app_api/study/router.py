@@ -26,10 +26,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .analysis import run_session_analysis
 from .engine import get_manager
-from .models import (CreateStudyRequest, EnterRequest, GenerateRequest,
-                     ProgressRequest, QuestionnaireRequest, RunStartRequest,
-                     Scenario, SessionStartRequest, SubmitRequest,
-                     UpdateStudyRequest, default_questionnaires)
+from .models import (REQUIRED_CARD_FIELDS, CreateStudyRequest, EnterRequest,
+                     GenerateRequest, ProgressRequest, QuestionnaireRequest,
+                     RunStartRequest, Scenario, SessionStartRequest,
+                     SubmitRequest, UpdateStudyRequest, default_questionnaires)
 from .storage import get_backend
 
 logger = logging.getLogger(__name__)
@@ -83,17 +83,31 @@ def _resolve_scenario(backend, participant: dict, scenario_order: int) -> dict:
 
 def _scenario_card(scenario: dict, scenario_order: int) -> dict:
     card = scenario.get("scenario_card") or {}
-    return {
+    out = {
         "scenario_order": scenario_order,
         "scenario_id": scenario.get("id"),
         "title": scenario.get("title", ""),
-        "role": card.get("role", ""),
-        "task_goal": card.get("task_goal", ""),
-        "relevant_facts": card.get("relevant_facts", ""),
-        "success_criteria": card.get("success_criteria", ""),
         "extra_fields": [f for f in (card.get("extra_fields") or []) if f.get("label")],
         "time_limit_s": scenario.get("time_limit_s", 300),
     }
+    for key, _label in REQUIRED_CARD_FIELDS:
+        out[key] = card.get(key, "")
+    return out
+
+
+def _validate_scenario(body: Scenario):
+    """All participant-facing card fields, the title, and the system prompt are
+    required (a blank system prompt also crashes PersonaPlex)."""
+    missing = []
+    if not (body.title or "").strip():
+        missing.append("Title")
+    if not (body.system_prompt or "").strip():
+        missing.append("System prompt")
+    for key, label in REQUIRED_CARD_FIELDS:
+        if not (getattr(body.scenario_card, key, "") or "").strip():
+            missing.append(label)
+    if missing:
+        raise HTTPException(status_code=422, detail="Please fill in: " + ", ".join(missing))
 
 
 def _run_public(run: Optional[dict]) -> dict:
@@ -183,6 +197,7 @@ def build_study_router() -> APIRouter:
 
     @router.put("/studies/{study_id}/scenarios/{scenario_id}", dependencies=[Depends(require_admin)])
     async def update_scenario(study_id: int, scenario_id: int, body: Scenario):
+        _validate_scenario(body)
         return {"scenario": backend.update_scenario(scenario_id, body.model_dump())}
 
     @router.delete("/studies/{study_id}/scenarios/{scenario_id}", dependencies=[Depends(require_admin)])

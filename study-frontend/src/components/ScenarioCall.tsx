@@ -93,9 +93,11 @@ export function ScenarioCall({ code, scenario, onDone }: {
           Scenario {scenario.scenario_order}{scenario.title ? ` — ${scenario.title}` : ""}
         </div>
         <Field label="Your role" value={scenario.role} />
-        <Field label="Task goal" value={scenario.task_goal} />
-        <Field label="Relevant facts" value={scenario.relevant_facts} />
-        <Field label="Success criteria" value={scenario.success_criteria} />
+        <Field label="Current situation" value={scenario.current_situation} />
+        <Field label="Your goal" value={scenario.goal} />
+        <Field label="How to interact" value={scenario.how_to_interact} />
+        <Field label="Suggested first line" value={scenario.suggested_first_line} />
+        <Field label="Additional details" value={scenario.additional_details} />
         {(scenario.extra_fields || []).map((f, i) => <Field key={i} label={f.label} value={f.value} />)}
       </div>
 

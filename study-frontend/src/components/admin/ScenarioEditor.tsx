@@ -37,9 +37,11 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
 
   const [title, setTitle] = useState(scenario.title || "")
   const [role, setRole] = useState(card.role || "")
-  const [goal, setGoal] = useState(card.task_goal || "")
-  const [facts, setFacts] = useState(card.relevant_facts || "")
-  const [success, setSuccess] = useState(card.success_criteria || "")
+  const [situation, setSituation] = useState(card.current_situation || "")
+  const [goal, setGoal] = useState(card.goal || "")
+  const [howTo, setHowTo] = useState(card.how_to_interact || "")
+  const [firstLine, setFirstLine] = useState(card.suggested_first_line || "")
+  const [additional, setAdditional] = useState(card.additional_details || "")
   const [prompt, setPrompt] = useState(scenario.system_prompt || "")
   const [extraFields, setExtraFields] = useState<{ label: string; value: string }[]>(card.extra_fields || [])
   const [voicePrompt, setVoicePrompt] = useState(scenario.voice_prompt || voices[0] || "NATF2.pt")
@@ -56,13 +58,21 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
   const engineTargets = targets.filter((t: any) => t.engine === engine)
 
   const save = async () => {
+    const required: [string, string][] = [
+      ["Title", title], ["System prompt", prompt], ["Your role", role],
+      ["Current situation", situation], ["Your goal", goal], ["How to interact", howTo],
+      ["Suggested first line", firstLine], ["Additional details", additional],
+    ]
+    const missing = required.filter(([, v]) => !v.trim()).map(([l]) => l)
+    if (missing.length) { setErr("Please fill in: " + missing.join(", ")); return }
     if (needsTarget && !target) { setErr("Pick a target voice for this VC scenario."); return }
     setBusy(true); setErr(null)
     try {
       await adminApi.updateScenario(token, studyId, scenario.id, {
         order_idx: scenario.order_idx ?? index, title,
         scenario_card: {
-          role, task_goal: goal, relevant_facts: facts, success_criteria: success,
+          role, current_situation: situation, goal, how_to_interact: howTo,
+          suggested_first_line: firstLine, additional_details: additional,
           extra_fields: extraFields.filter(f => f.label.trim()),
         },
         system_prompt: prompt, voice_prompt: voicePrompt, time_limit_s: Number(timeLimit),
@@ -80,12 +90,15 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
       </button>
       {open && (
         <div className="flex flex-col gap-3 border-t p-4">
-          <Field label="Title"><Input value={title} onChange={e => setTitle(e.target.value)} /></Field>
-          <Field label="Participant role"><Input value={role} onChange={e => setRole(e.target.value)} /></Field>
-          <Field label="Task goal"><Textarea value={goal} onChange={setGoal} /></Field>
-          <Field label="Relevant facts"><Textarea value={facts} onChange={setFacts} /></Field>
-          <Field label="Success criteria"><Textarea value={success} onChange={setSuccess} /></Field>
-          <Field label="System prompt (hidden from participant)"><Textarea value={prompt} onChange={setPrompt} /></Field>
+          <p className="text-xs text-muted-foreground">All fields below are required.</p>
+          <Field label="Title *"><Input value={title} onChange={e => setTitle(e.target.value)} /></Field>
+          <Field label="Your role *"><Textarea value={role} onChange={setRole} /></Field>
+          <Field label="Current situation *"><Textarea value={situation} onChange={setSituation} /></Field>
+          <Field label="Your goal *"><Textarea value={goal} onChange={setGoal} /></Field>
+          <Field label="How to interact *"><Textarea value={howTo} onChange={setHowTo} /></Field>
+          <Field label="Suggested first line *"><Textarea value={firstLine} onChange={setFirstLine} /></Field>
+          <Field label="Additional details *"><Textarea value={additional} onChange={setAdditional} /></Field>
+          <Field label="System prompt (hidden from participant) *"><Textarea value={prompt} onChange={setPrompt} /></Field>
 
           <div className="rounded-md border p-3">
             <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Extra fields (shown on the scenario card)</div>
