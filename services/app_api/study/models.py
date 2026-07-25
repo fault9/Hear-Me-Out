@@ -11,7 +11,17 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-FieldType = Literal["text", "textarea", "number", "radio", "select", "switch", "scale"]
+FieldType = Literal["text", "textarea", "number", "radio", "select", "checkbox",
+                    "switch", "scale", "audio_playback"]
+
+
+class ShowIf(BaseModel):
+    field: str
+    in_: list = Field(default_factory=list, alias="in")
+
+    class Config:
+        populate_by_name = True
+        extra = "allow"
 
 
 class QuestionnaireItem(BaseModel):
@@ -19,7 +29,12 @@ class QuestionnaireItem(BaseModel):
     type: FieldType = "text"
     label: str = ""
     required: bool = False
-    options: Optional[list[str]] = None       # radio / select
+    options: Optional[list[str]] = None       # radio / select / checkbox
+    options_source: Optional[str] = None      # "scenarios" auto-fills options with scenario titles
+    allow_other: bool = False                 # radio/checkbox: add an "other"/self-describe text box
+    other_label: Optional[str] = None
+    extra_options: Optional[list[str]] = None  # scale: non-numeric choices (e.g. "Not applicable")
+    show_if: Optional[dict] = None            # {field, in:[...]} conditional display
     min: Optional[float] = None               # number / scale
     max: Optional[float] = None
     min_label: Optional[str] = None           # scale endpoints
@@ -93,6 +108,17 @@ class Scenario(BaseModel):
     voice_prompt: str = ""
     voice_schedule: list[VoiceSegment] = Field(default_factory=list)
     time_limit_s: int = 300
+    # Scenario-specific post-questionnaire items (appended after the shared post items).
+    post_items: list[QuestionnaireItem] = Field(default_factory=list)
+
+    class Config:
+        extra = "allow"
+
+
+class StudySettings(BaseModel):
+    welcome_text: str = ""
+    estimated_duration: str = ""
+    playback: dict[str, Any] = Field(default_factory=dict)
 
     class Config:
         extra = "allow"
@@ -107,6 +133,7 @@ class CreateStudyRequest(BaseModel):
 class UpdateStudyRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    settings: Optional[dict[str, Any]] = None
 
 
 class EnterRequest(BaseModel):

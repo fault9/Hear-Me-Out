@@ -22,7 +22,7 @@ from typing import Optional
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, UploadFile)
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .analysis import run_session_analysis
 from .engine import get_manager
@@ -88,11 +88,17 @@ def _scenario_card(scenario: dict, scenario_order: int) -> dict:
         "scenario_id": scenario.get("id"),
         "title": scenario.get("title", ""),
         "extra_fields": [f for f in (card.get("extra_fields") or []) if f.get("label")],
+        "post_items": scenario.get("post_items") or [],   # scenario-specific post questions
         "time_limit_s": scenario.get("time_limit_s", 300),
     }
     for key, _label in REQUIRED_CARD_FIELDS:
         out[key] = card.get(key, "")
     return out
+
+
+def _is_vc_to_natural(scenario: dict) -> bool:
+    segs = scenario.get("voice_schedule") or []
+    return len(segs) >= 2 and segs[0].get("mode") == "vc" and segs[-1].get("mode") == "natural"
 
 
 def _validate_scenario(body: Scenario):
@@ -178,7 +184,7 @@ def build_study_router() -> APIRouter:
 
     @router.put("/studies/{study_id}", dependencies=[Depends(require_admin)])
     async def update_study(study_id: int, body: UpdateStudyRequest):
-        study = backend.update_study(study_id, body.name, body.description, None)
+        study = backend.update_study(study_id, body.name, body.description, None, body.settings)
         return {"study": _study_detail(study)}
 
     @router.delete("/studies/{study_id}", dependencies=[Depends(require_admin)])
@@ -203,6 +209,16 @@ def build_study_router() -> APIRouter:
     @router.delete("/studies/{study_id}/scenarios/{scenario_id}", dependencies=[Depends(require_admin)])
     async def delete_scenario(study_id: int, scenario_id: int):
         backend.delete_scenario(scenario_id)
+        return {"ok": True}
+
+    @router.put("/studies/{study_id}/scenarios/{scenario_id}/post-items", dependencies=[Depends(require_admin)])
+    async def set_scenario_post_items(study_id: int, scenario_id: int, body: dict):
+        """Set only a scenario's post questions (no card validation) — used by
+        'copy to all scenarios'."""
+        sc = backend.get_scenario(scenario_id)
+        if not sc:
+            raise HTTPException(status_code=404, detail="Unknown scenario")
+        backend.update_scenario(scenario_id, {**sc, "post_items": body.get("post_items", [])})
         return {"ok": True}
 
     @router.post("/studies/{study_id}/targets", dependencies=[Depends(require_admin)])
@@ -282,8 +298,11 @@ def build_study_router() -> APIRouter:
             if sc:
                 scenarios.append(_scenario_card(sc, i + 1))
         run = backend.get_latest_run(p["participant_id"])
+        settings = study.get("settings") or {}
         return {"participant_id": p["participant_id"], "study_name": study["name"],
                 "scenarios": scenarios, "questionnaires": study.get("questionnaires") or {},
+                "welcome_text": settings.get("welcome_text", ""),
+                "estimated_duration": settings.get("estimated_duration", ""),
                 "run": _run_public(run)}
 
     @router.post("/run/start")
@@ -450,5 +469,25 @@ def build_study_router() -> APIRouter:
         backend.save_answer(p["participant_id"], session_id if session_id != "none" else None,
                             body.kind, body.payload)
         return {"ok": True}
+
+    @router.get("/playback/{code}")
+    async def playback(code: str):
+        """Streams the merged (participant + assistant) recording of this
+        participant's VC->natural scenario, for the post-session playback item.
+        A participant can only fetch their own recording."""
+        p = backend.get_participant_by_code(code)
+        if not p:
+            raise HTTPException(status_code=404, detail="Invalid code")
+        order = p.get("scenario_order") or []
+        for i, sid in enumerate(order):
+            sc = backend.get_scenario(sid)
+            if sc and _is_vc_to_natural(sc):
+                session = backend.get_session(f"{p['participant_id']}_S{i + 1:02d}")
+                merged = ((session or {}).get("files") or {}).get("merged")
+                if merged:
+                    path = STUDY_DATA_DIR / merged
+                    if path.exists():
+                        return FileResponse(str(path), media_type="audio/wav")
+        raise HTTPException(status_code=404, detail="No playback recording available yet")
 
     return router

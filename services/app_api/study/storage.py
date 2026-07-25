@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 RUN_WINDOW_SECONDS = 3600
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _now() -> float:
@@ -39,8 +39,8 @@ class StorageBackend(abc.ABC):
     @abc.abstractmethod
     def get_study(self, study_id: int) -> Optional[dict]: ...
     @abc.abstractmethod
-    def update_study(self, study_id: int, name: Optional[str], description: Optional[str],
-                     questionnaires: Optional[dict]) -> Optional[dict]: ...
+    def update_study(self, study_id: int, name: Optional[str] = None, description: Optional[str] = None,
+                     questionnaires: Optional[dict] = None, settings: Optional[dict] = None) -> Optional[dict]: ...
     @abc.abstractmethod
     def archive_study(self, study_id: int, archived: bool = True) -> None: ...
     # scenarios
@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS study (
   name TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   questionnaires_json TEXT NOT NULL DEFAULT '{}',
+  settings_json TEXT NOT NULL DEFAULT '{}',
   archived INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL
 );
@@ -128,6 +129,7 @@ CREATE TABLE IF NOT EXISTS scenario (
   system_prompt TEXT NOT NULL DEFAULT '',
   voice_prompt TEXT NOT NULL DEFAULT '',
   voice_schedule_json TEXT NOT NULL DEFAULT '[]',
+  post_items_json TEXT NOT NULL DEFAULT '[]',
   time_limit_s INTEGER NOT NULL DEFAULT 300
 );
 CREATE TABLE IF NOT EXISTS target (
@@ -206,13 +208,24 @@ class SqliteBackend(StorageBackend):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
+    @staticmethod
+    def _add_column(c, table, col, decl):
+        try:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
     def _init_schema(self):
         with self._conn() as c:
             c.executescript(_SCHEMA)
             row = c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if row is None:
-                c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
-                          (str(SCHEMA_VERSION),))
+            ver = int(row["value"]) if row else 0
+            # Additive migrations preserve existing studies (no rebuild).
+            if ver < 3:
+                self._add_column(c, "study", "settings_json", "TEXT NOT NULL DEFAULT '{}'")
+                self._add_column(c, "scenario", "post_items_json", "TEXT NOT NULL DEFAULT '[]'")
+            c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
+                      (str(SCHEMA_VERSION),))
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -236,14 +249,15 @@ class SqliteBackend(StorageBackend):
     def list_studies(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM study ORDER BY archived, id DESC").fetchall()
-        return [_loads(r, ("questionnaires_json",)) for r in rows]
+        return [_loads(r, ("questionnaires_json", "settings_json")) for r in rows]
 
     def get_study(self, study_id) -> Optional[dict]:
         with self._conn() as c:
             row = c.execute("SELECT * FROM study WHERE id=?", (study_id,)).fetchone()
-        return _loads(row, ("questionnaires_json",)) if row else None
+        return _loads(row, ("questionnaires_json", "settings_json")) if row else None
 
-    def update_study(self, study_id, name, description, questionnaires) -> Optional[dict]:
+    def update_study(self, study_id, name=None, description=None, questionnaires=None,
+                     settings=None) -> Optional[dict]:
         with self._conn() as c:
             if name is not None:
                 c.execute("UPDATE study SET name=? WHERE id=?", (name, study_id))
@@ -252,6 +266,9 @@ class SqliteBackend(StorageBackend):
             if questionnaires is not None:
                 c.execute("UPDATE study SET questionnaires_json=? WHERE id=?",
                           (json.dumps(questionnaires), study_id))
+            if settings is not None:
+                c.execute("UPDATE study SET settings_json=? WHERE id=?",
+                          (json.dumps(settings), study_id))
         return self.get_study(study_id)
 
     def archive_study(self, study_id, archived=True) -> None:
@@ -263,12 +280,12 @@ class SqliteBackend(StorageBackend):
         with self._conn() as c:
             rows = c.execute("SELECT * FROM scenario WHERE study_id=? ORDER BY order_idx, id",
                              (study_id,)).fetchall()
-        return [_loads(r, ("scenario_card_json", "voice_schedule_json")) for r in rows]
+        return [_loads(r, ("scenario_card_json", "voice_schedule_json", "post_items_json")) for r in rows]
 
     def get_scenario(self, scenario_id) -> Optional[dict]:
         with self._conn() as c:
             row = c.execute("SELECT * FROM scenario WHERE id=?", (scenario_id,)).fetchone()
-        return _loads(row, ("scenario_card_json", "voice_schedule_json")) if row else None
+        return _loads(row, ("scenario_card_json", "voice_schedule_json", "post_items_json")) if row else None
 
     def _scenario_cols(self, data: dict) -> dict:
         return {
@@ -278,6 +295,7 @@ class SqliteBackend(StorageBackend):
             "system_prompt": data.get("system_prompt", ""),
             "voice_prompt": data.get("voice_prompt", ""),
             "voice_schedule_json": json.dumps(data.get("voice_schedule", [])),
+            "post_items_json": json.dumps(data.get("post_items", [])),
             "time_limit_s": int(data.get("time_limit_s", 300)),
         }
 
@@ -289,10 +307,10 @@ class SqliteBackend(StorageBackend):
                 cols["order_idx"] = n
             cur = c.execute(
                 "INSERT INTO scenario(study_id, order_idx, title, scenario_card_json, system_prompt, "
-                "voice_prompt, voice_schedule_json, time_limit_s) VALUES(?,?,?,?,?,?,?,?)",
+                "voice_prompt, voice_schedule_json, post_items_json, time_limit_s) VALUES(?,?,?,?,?,?,?,?,?)",
                 (study_id, cols["order_idx"], cols["title"], cols["scenario_card_json"],
                  cols["system_prompt"], cols["voice_prompt"], cols["voice_schedule_json"],
-                 cols["time_limit_s"]))
+                 cols["post_items_json"], cols["time_limit_s"]))
             sid = cur.lastrowid
         return self.get_scenario(sid)
 
@@ -301,9 +319,10 @@ class SqliteBackend(StorageBackend):
         with self._conn() as c:
             c.execute(
                 "UPDATE scenario SET order_idx=?, title=?, scenario_card_json=?, system_prompt=?, "
-                "voice_prompt=?, voice_schedule_json=?, time_limit_s=? WHERE id=?",
+                "voice_prompt=?, voice_schedule_json=?, post_items_json=?, time_limit_s=? WHERE id=?",
                 (cols["order_idx"], cols["title"], cols["scenario_card_json"], cols["system_prompt"],
-                 cols["voice_prompt"], cols["voice_schedule_json"], cols["time_limit_s"], scenario_id))
+                 cols["voice_prompt"], cols["voice_schedule_json"], cols["post_items_json"],
+                 cols["time_limit_s"], scenario_id))
         return self.get_scenario(scenario_id)
 
     def delete_scenario(self, scenario_id) -> None:

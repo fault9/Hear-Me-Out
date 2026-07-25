@@ -6,7 +6,7 @@ import { adminApi } from "@/api"
 import { ScenarioEditor } from "@/components/admin/ScenarioEditor"
 import { QuestionnaireBuilder } from "@/components/admin/QuestionnaireBuilder"
 
-type Tab = "scenarios" | "targets" | "questionnaires" | "participants" | "data"
+type Tab = "settings" | "scenarios" | "targets" | "questionnaires" | "participants" | "data"
 
 export function StudyEditor({ token, studyId, onBack }: {
   token: string; studyId: number; onBack: () => void
@@ -14,7 +14,7 @@ export function StudyEditor({ token, studyId, onBack }: {
   const [study, setStudy] = useState<any>(null)
   const [voices, setVoices] = useState<string[]>([])
   const [engines, setEngines] = useState<string[]>([])
-  const [tab, setTab] = useState<Tab>("scenarios")
+  const [tab, setTab] = useState<Tab>("settings")
   const [err, setErr] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
@@ -23,6 +23,12 @@ export function StudyEditor({ token, studyId, onBack }: {
       setStudy(r.study)
     } catch (e: any) { setErr(e?.message || String(e)) }
   }, [token, studyId])
+
+  const copyPostToAll = async (items: any[]) => {
+    const scs: any[] = (study?.scenarios || [])
+    await Promise.all(scs.map(s => adminApi.setScenarioPostItems(token, studyId, s.id, items)))
+    reload()
+  }
 
   useEffect(() => {
     reload()
@@ -45,7 +51,7 @@ export function StudyEditor({ token, studyId, onBack }: {
       {err && <p className="mb-3 text-sm text-destructive">{err}</p>}
 
       <div className="mb-5 flex flex-wrap gap-1 border-b">
-        {(["scenarios", "targets", "questionnaires", "participants", "data"] as Tab[]).map(t => (
+        {(["settings", "scenarios", "targets", "questionnaires", "participants", "data"] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className={`px-3 py-2 text-sm capitalize ${tab === t ? "border-b-2 border-primary font-medium" : "text-muted-foreground"}`}>
             {t}
@@ -53,11 +59,16 @@ export function StudyEditor({ token, studyId, onBack }: {
         ))}
       </div>
 
+      {tab === "settings" && (
+        <SettingsPanel token={token} studyId={studyId} study={study} onChange={reload} />
+      )}
+
       {tab === "scenarios" && (
         <div className="flex flex-col gap-4">
           {scenarios.map((sc, i) => (
             <ScenarioEditor key={sc.id} token={token} studyId={studyId} scenario={sc} index={i}
-              voices={voices} engines={engines} targets={targets} onChange={reload} />
+              voices={voices} engines={engines} targets={targets} onChange={reload}
+              onGoToTargets={() => setTab("targets")} onCopyPostToAll={copyPostToAll} />
           ))}
           <Button variant="secondary" onClick={async () => {
             await adminApi.addScenario(token, studyId, {
@@ -89,6 +100,37 @@ export function StudyEditor({ token, studyId, onBack }: {
       )}
 
       {tab === "data" && <DataPanel token={token} studyId={studyId} />}
+    </div>
+  )
+}
+
+function SettingsPanel({ token, studyId, study, onChange }: any) {
+  const s = study.settings || {}
+  const [name, setName] = useState(study.name || "")
+  const [welcome, setWelcome] = useState(s.welcome_text || "")
+  const [duration, setDuration] = useState(s.estimated_duration || "")
+  const [msg, setMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="flex flex-col gap-3">
+      <Labeled label="Study name"><Input value={name} onChange={e => setName(e.target.value)} /></Labeled>
+      <Labeled label="Welcome page text (shown to participants before the study)">
+        <textarea className="min-h-[200px] w-full rounded-md border bg-background p-3 text-sm"
+          value={welcome} onChange={e => setWelcome(e.target.value)} />
+      </Labeled>
+      <Labeled label="Estimated duration (e.g. 20–30 minutes)">
+        <Input value={duration} onChange={e => setDuration(e.target.value)} className="w-64" />
+      </Labeled>
+      <div className="flex items-center gap-3">
+        <Button disabled={busy} onClick={async () => {
+          setBusy(true); setMsg(null)
+          try {
+            await adminApi.updateStudy(token, studyId, { name, settings: { ...s, welcome_text: welcome, estimated_duration: duration } })
+            setMsg("Saved"); onChange()
+          } catch (e: any) { setMsg(e?.message || String(e)) } finally { setBusy(false) }
+        }}>{busy ? "Saving…" : "Save settings"}</Button>
+        {msg && <span className="text-sm text-muted-foreground">{msg}</span>}
+      </div>
     </div>
   )
 }

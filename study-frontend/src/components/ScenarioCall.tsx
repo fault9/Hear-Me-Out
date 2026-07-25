@@ -79,6 +79,11 @@ export function ScenarioCall({ code, scenario, onDone }: {
     }
   }, [conv, onDone])
 
+  // Auto-end when the scenario time limit is reached.
+  useEffect(() => {
+    if (phase === "active" && remaining === 0) endCall("time_up")
+  }, [phase, remaining, endCall])
+
   const statusBadge = () => {
     if (conv.error) return <Badge variant="destructive">Connection error</Badge>
     if (phase === "active") return <Badge>Connected</Badge>

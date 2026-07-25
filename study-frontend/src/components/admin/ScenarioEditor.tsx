@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { Button } from "@shared/ui/button"
 import { Input } from "@shared/ui/input"
 import { adminApi } from "@/api"
+import { ItemListEditor } from "@/components/admin/ItemListEditor"
 
 type Preset = "natural" | "vc" | "natural_vc" | "vc_natural"
 
@@ -30,7 +31,7 @@ function presetFromSchedule(schedule: any[]): { preset: Preset; engine: string; 
   return { preset: first === "natural" ? "natural_vc" : "vc_natural", engine, target, switchS }
 }
 
-export function ScenarioEditor({ token, studyId, scenario, index, voices, engines, targets, onChange }: any) {
+export function ScenarioEditor({ token, studyId, scenario, index, voices, engines, targets, onChange, onGoToTargets, onCopyPostToAll }: any) {
   const [open, setOpen] = useState(false)
   const card = scenario.scenario_card || {}
   const init = useMemo(() => presetFromSchedule(scenario.voice_schedule), [scenario.id])
@@ -44,6 +45,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
   const [additional, setAdditional] = useState(card.additional_details || "")
   const [prompt, setPrompt] = useState(scenario.system_prompt || "")
   const [extraFields, setExtraFields] = useState<{ label: string; value: string }[]>(card.extra_fields || [])
+  const [postItems, setPostItems] = useState<any[]>(scenario.post_items || [])
   const [voicePrompt, setVoicePrompt] = useState(scenario.voice_prompt || voices[0] || "NATF2.pt")
   const [timeLimit, setTimeLimit] = useState(scenario.time_limit_s || 300)
   const [preset, setPreset] = useState<Preset>(init.preset)
@@ -77,6 +79,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
         },
         system_prompt: prompt, voice_prompt: voicePrompt, time_limit_s: Number(timeLimit),
         voice_schedule: scheduleFromPreset(preset, engine, target, Number(switchS)),
+        post_items: postItems,
       })
       onChange()
     } catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(false) }
@@ -150,8 +153,22 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
               )}
             </div>
             {needsTarget && engineTargets.length === 0 && (
-              <p className="mt-2 text-xs text-destructive">No {engine} targets uploaded — add one in the Targets tab.</p>
+              <p className="mt-2 text-xs text-destructive">
+                No {engine} voices uploaded —{" "}
+                <button type="button" className="underline" onClick={onGoToTargets}>go to the Targets tab</button> to add one.
+              </p>
             )}
+          </div>
+
+          <div className="rounded-md border p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase text-muted-foreground">Scenario-specific post questions</div>
+              {onCopyPostToAll && (
+                <Button size="sm" variant="ghost" onClick={() => onCopyPostToAll(postItems)}>Copy to all scenarios</Button>
+              )}
+            </div>
+            <p className="mb-2 text-xs text-muted-foreground">Shown after this scenario, in addition to the shared post questions.</p>
+            <ItemListEditor items={postItems} onChange={setPostItems} />
           </div>
 
           {err && <p className="text-sm text-destructive">{err}</p>}

@@ -76,6 +76,7 @@ export function ParticipantFlow() {
     const step = run.current_step || {}
     const p = step.phase as Phase | undefined
     if (p === "background") { setPhase("background"); return }
+    if (p === "consent") { setPhase("consent"); return }
     if (p === "scenario" || p === "post") {
       setScenarioIdx(Math.max(0, (step.scenario_order ?? 1) - 1))
       setPhase(p)
@@ -83,7 +84,7 @@ export function ParticipantFlow() {
     }
     if (p === "final") { setPhase("final"); return }
     setScenarioIdx(0)
-    setPhase("consent")
+    setPhase("background")
   }, [])
 
   const setStep = useCallback((current_step: Record<string, any>, completed: Record<string, any> = {}) => {
@@ -98,7 +99,7 @@ export function ParticipantFlow() {
       const secs = res?.run?.remaining_seconds ?? 3600
       setDeadline(Date.now() + secs * 1000)
       if (mode === "restart") {
-        setScenarioIdx(0); setStep({ phase: "consent" }); setPhase("consent")
+        setScenarioIdx(0); setStep({ phase: "background" }); setPhase("background")
       } else {
         goToRunStep(res.run)
       }
@@ -147,10 +148,13 @@ export function ParticipantFlow() {
           </>
         ) : (
           <>
-            <p className="max-w-md text-center text-sm text-muted-foreground">
-              You will complete a short consent form, then {data.scenarios.length} conversation scenarios,
-              each followed by a brief questionnaire. You have one hour to finish.
-            </p>
+            {data.welcome_text
+              ? <div className="max-h-[60vh] max-w-2xl overflow-auto whitespace-pre-wrap text-left text-sm">{data.welcome_text}</div>
+              : <p className="max-w-md text-center text-sm text-muted-foreground">
+                  You will complete {data.scenarios.length} conversation scenarios, each followed by a brief
+                  questionnaire. You have one hour to finish.
+                </p>}
+            {data.estimated_duration && <p className="text-xs text-muted-foreground">Estimated duration: {data.estimated_duration}</p>}
             <Button onClick={() => startRun("restart")} disabled={busy}>Begin</Button>
           </>
         )}
@@ -166,27 +170,27 @@ export function ParticipantFlow() {
     </div>
   )
 
-  if (phase === "consent" && data) {
+  if (phase === "background" && data) {
     return Frame(
-      <QuestionnaireForm title="Consent & background" items={q("consent")} submitLabel="Continue" busy={busy}
+      <QuestionnaireForm title="Background questionnaire" items={q("background")} submitLabel="Continue" busy={busy}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
-            await api.questionnaire(null, code, "consent", ans)
-            setStep({ phase: "background" })
-            setPhase("background")
+            await api.questionnaire(null, code, "background", ans)
+            setStep({ phase: "consent" })
+            setPhase("consent")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
     )
   }
 
-  if (phase === "background" && data) {
+  if (phase === "consent" && data) {
     return Frame(
-      <QuestionnaireForm title="Background questionnaire" items={q("background")} submitLabel="Start scenarios" busy={busy}
+      <QuestionnaireForm title="Audio check" items={q("consent")} submitLabel="Start scenarios" busy={busy}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
-            await api.questionnaire(null, code, "background", ans)
+            await api.questionnaire(null, code, "consent", ans)
             setScenarioIdx(0)
             setStep({ phase: "scenario", scenario_order: 1 })
             setPhase("scenario")
@@ -208,8 +212,9 @@ export function ParticipantFlow() {
   if (phase === "post" && data) {
     const scenario = data.scenarios[scenarioIdx]
     const sid = sessionIdFor(data.participant_id, scenario.scenario_order)
+    const postItems = [...q("post"), ...((scenario.post_items as QItem[]) || [])]
     return Frame(
-      <QuestionnaireForm title={`After scenario ${scenario.scenario_order}`} items={q("post")}
+      <QuestionnaireForm title={`After scenario ${scenario.scenario_order}`} items={postItems}
         submitLabel={scenarioIdx < data.scenarios.length - 1 ? "Next scenario" : "Final questions"} busy={busy}
         onSubmit={async (ans) => {
           setBusy(true)
@@ -230,8 +235,10 @@ export function ParticipantFlow() {
   }
 
   if (phase === "final" && data) {
+    const scenarioOptions = data.scenarios.map(s => s.title).filter(Boolean)
     return Frame(
       <QuestionnaireForm title="Final questionnaire" items={q("final")} submitLabel="Submit study" busy={busy}
+        scenarioOptions={scenarioOptions} playbackUrl={api.playbackUrl(code)}
         onSubmit={async (ans) => {
           setBusy(true)
           try {

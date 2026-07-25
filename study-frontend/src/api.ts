@@ -51,6 +51,7 @@ export interface ScenarioInfo {
   suggested_first_line: string;
   additional_details: string;
   extra_fields?: { label: string; value: string }[];
+  post_items?: any[];
   time_limit_s: number;
 }
 export interface RunState {
@@ -65,6 +66,8 @@ export interface EnterResult {
   study_name: string;
   scenarios: ScenarioInfo[];
   questionnaires?: Record<string, any[]>;
+  welcome_text?: string;
+  estimated_duration?: string;
   run: RunState;
 }
 export interface PrepareState {
@@ -86,6 +89,7 @@ export const api = {
   questionnaire: (sessionId: string | null, code: string, kind: string, payload: Record<string, any>) =>
     jpost(`/session/${sessionId ?? "none"}/questionnaire`, { code, kind, payload }),
   submit: (code: string) => jpost("/run/submit", { code }),
+  playbackUrl: (code: string) => `${BASE}/playback/${encodeURIComponent(code)}`,
 
   async saveSession(sessionId: string, arts: {
     participant?: Blob | null; participant_raw?: Blob | null; model?: Blob | null;
@@ -128,7 +132,7 @@ export const adminApi = {
   listStudies: (t: string) => jget("/studies", adminHeaders(t)),
   createStudy: (t: string, name: string, description = "") => jpost("/studies", { name, description }, adminHeaders(t)),
   getStudy: (t: string, id: number) => jget(`/studies/${id}`, adminHeaders(t)),
-  updateStudy: (t: string, id: number, body: { name?: string; description?: string }) => jput(`/studies/${id}`, body, adminHeaders(t)),
+  updateStudy: (t: string, id: number, body: { name?: string; description?: string; settings?: any }) => jput(`/studies/${id}`, body, adminHeaders(t)),
   archiveStudy: (t: string, id: number) => jdel(`/studies/${id}`, adminHeaders(t)),
   setQuestionnaires: (t: string, id: number, questionnaires: unknown) =>
     jput(`/studies/${id}/questionnaires`, { questionnaires }, adminHeaders(t)),
@@ -136,6 +140,8 @@ export const adminApi = {
   addScenario: (t: string, id: number, scenario: unknown) => jpost(`/studies/${id}/scenarios`, scenario, adminHeaders(t)),
   updateScenario: (t: string, id: number, sid: number, scenario: unknown) => jput(`/studies/${id}/scenarios/${sid}`, scenario, adminHeaders(t)),
   deleteScenario: (t: string, id: number, sid: number) => jdel(`/studies/${id}/scenarios/${sid}`, adminHeaders(t)),
+  setScenarioPostItems: (t: string, id: number, sid: number, post_items: any[]) =>
+    jput(`/studies/${id}/scenarios/${sid}/post-items`, { post_items }, adminHeaders(t)),
 
   async uploadTarget(t: string, id: number, ref: string, speakerId: string, label: string, engine: string, file: File) {
     const fd = new FormData();
