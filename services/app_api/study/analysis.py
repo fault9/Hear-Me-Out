@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import sys
-import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -75,48 +76,76 @@ def _session_paths(session: dict):
     return conv_p, raw_p, model_transcript
 
 
+def status_path() -> Path:
+    return STUDY_DATA_DIR / "_analysis_status.json"
+
+
+_IDLE = {"running": False, "done": 0, "total": 0, "current": None, "study_id": None}
+_STATUS_KEYS = ("running", "done", "total", "current", "study_id")
+
+
+def _pid_alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError, TypeError):
+        return True  # PermissionError etc. -> exists but not ours; treat as alive
+
+
 class AnalysisRunner:
-    """Admin-triggered batch analysis for a study, run in a background thread so
-    the request returns immediately. One run at a time."""
+    """Admin-triggered batch analysis for a study.
+
+    The heavy work runs in a SEPARATE PROCESS (`study.analysis_worker`) so the
+    CPU-bound metrics stack never blocks the API's asyncio event loop (which made
+    the dashboard and page reloads hang). Progress is read from a JSON status file
+    the worker writes; this class only launches the worker and reports status."""
 
     def __init__(self):
-        self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
-        self._state = {"running": False, "done": 0, "total": 0, "current": None, "study_id": None}
+        self._proc: Optional[subprocess.Popen] = None
+
+    def _read_status(self) -> dict:
+        try:
+            st = json.loads(status_path().read_text())
+        except (OSError, ValueError):
+            return dict(_IDLE)
+        if st.get("running"):
+            # A stale 'running' (worker crashed, or the API restarted mid-run)
+            # must not stick forever: verify the worker pid and heartbeat.
+            pid = st.get("pid")
+            alive = _pid_alive(pid) if pid else (self._proc is not None and self._proc.poll() is None)
+            fresh = (time.time() - (st.get("heartbeat") or 0)) < 300
+            if not (alive and fresh):
+                st = {**st, "running": False}
+        return st
 
     def get_status(self) -> dict:
-        with self._lock:
-            return dict(self._state)
+        st = self._read_status()
+        return {k: st.get(k) for k in _STATUS_KEYS}
 
     def start(self, backend, study_id: int, force: bool) -> dict:
-        with self._lock:
-            if self._state["running"]:
-                return dict(self._state)
-            self._thread = threading.Thread(target=self._run, args=(backend, study_id, force), daemon=True)
-            self._state = {"running": True, "done": 0, "total": 0, "current": None, "study_id": study_id}
-            self._thread.start()
-            return dict(self._state)
+        if self._read_status().get("running"):
+            return self.get_status()
 
-    def _run(self, backend, study_id: int, force: bool):
-        sessions = backend.list_sessions(study_id)
-        pending = [s for s in sessions
-                   if (s.get("files") or {}).get("participant")
-                   and (force or s.get("metrics") is None)]
-        with self._lock:
-            self._state["total"] = len(pending)
-        for s in pending:
-            with self._lock:
-                self._state["current"] = s["session_id"]
-            conv, raw, mt = _session_paths(s)
-            try:
-                run_session_analysis(s["session_id"], conv, raw, mt)
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"[study] batch analysis error for {s['session_id']}: {e}")
-            with self._lock:
-                self._state["done"] += 1
-        with self._lock:
-            self._state["running"] = False
-            self._state["current"] = None
+        app_api_dir = str(Path(__file__).resolve().parents[1])
+        args = [sys.executable, "-m", "study.analysis_worker", str(study_id)]
+        if force:
+            args.append("--force")
+
+        # Seed the status file so the UI shows 'running' before the worker has
+        # finished importing its (slow) model stack.
+        try:
+            p = status_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({"running": True, "done": 0, "total": 0, "current": None,
+                                     "study_id": study_id, "pid": None, "heartbeat": time.time()}))
+        except OSError as e:  # noqa: BLE001
+            logger.warning(f"[study] could not seed analysis status: {e}")
+
+        self._proc = subprocess.Popen(args, cwd=app_api_dir)
+        logger.info(f"[study] launched analysis worker pid={self._proc.pid} study={study_id} force={force}")
+        return {"running": True, "done": 0, "total": 0, "current": None, "study_id": study_id}
 
 
 _runner: Optional[AnalysisRunner] = None
