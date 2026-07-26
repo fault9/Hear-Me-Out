@@ -180,7 +180,12 @@ async def handle_load_target(request: web.Request) -> web.Response:
         target_np = process_audio(tmp_path, cfg, int(cfg["latent_hop_length"]))
         target_wav = torch.from_numpy(target_np)[None, None].float().to(device)
         if MASK_TARGET_COND:
-            pad = torch.zeros((1, 1, int(2.4 * SR)), device=device)
+            # Pad must match the streaming window (CHUNK_MS), not a hardcoded 2.4 s.
+            # If they differ, the precomputed condition frames and the per-window
+            # content frames disagree and run_stream_chunk_forward's torch.cat fails
+            # ("Sizes of tensors must match … Expected 92 but got 90"), killing every
+            # VC conversion. 2.4 s == 2400 ms, so this is a no-op at the stock window.
+            pad = torch.zeros((1, 1, int(CHUNK_MS * SR / 1000)), device=device)
             target_wav_cond = torch.cat([target_wav, pad], dim=-1)
         else:
             target_wav_cond = target_wav
