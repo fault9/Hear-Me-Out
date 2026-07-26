@@ -404,6 +404,13 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         await client.close()
         if not browser_ws.closed:
             await browser_ws.close()
+        # Release GPU memory held by this session's X-VC buffers so it doesn't
+        # accumulate across scenarios / participants on the shared GPU.
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
 
     if debug_dir and debug_pcm:
         try:

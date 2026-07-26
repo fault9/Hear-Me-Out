@@ -59,6 +59,7 @@ class VCEngineManager:
         self._state_lock = threading.Lock()
         self._current_engine: Optional[str] = None   # engine we started on :5002
         self._loaded_engine: Optional[str] = None     # engine whose targets are loaded
+        self._force_restart: bool = False             # restart on next ensure (fresh GPU context)
         self._thread: Optional[threading.Thread] = None
 
     # ---- progress state ----
@@ -141,14 +142,26 @@ class VCEngineManager:
                 raise RuntimeError(f"load-target returned no target_id for {t['ref']}")
             backend.set_engine_target_id(t["id"], engine_target_id)
 
+    def invalidate(self) -> None:
+        """Force the next `ensure_engine` to restart the engine, even if the right
+        one is already up. Used at run start so each participant gets a FRESH engine
+        (clean CUDA context): X-VC (the GPU engine) degrades across long/repeated
+        sessions and a port-only health check can't detect it, which silently
+        produced dead-VC sessions for a second participant. Opt out with
+        STUDY_REUSE_ENGINE=1."""
+        with self._lock:
+            self._force_restart = True
+
     def ensure_engine(self, backend, study_id: int, requested_engine: Optional[str]) -> None:
         """Blocking. Bring up the engine this scenario needs (restarting :5002 if it
         differs) and load its targets. A natural-only scenario passes None and
         reuses whatever engine is up (default if none)."""
         with self._lock:
+            force = self._force_restart
+            self._force_restart = False  # consume: exactly one fresh restart per run
             target_engine = requested_engine or (self._current_engine if self.is_engine_up() else DEFAULT_ENGINE)
             targets = [t for t in backend.list_targets(study_id) if t["engine"] == target_engine]
-            already = (self.is_engine_up() and self._current_engine == target_engine
+            already = (not force and self.is_engine_up() and self._current_engine == target_engine
                        and self._loaded_engine == target_engine
                        and all(t.get("engine_target_id") for t in targets))
             if already:
@@ -157,7 +170,7 @@ class VCEngineManager:
 
             self._reset_steps()
             try:
-                if not (self.is_engine_up() and self._current_engine == target_engine):
+                if force or not (self.is_engine_up() and self._current_engine == target_engine):
                     s = self._step(f"Starting {target_engine} voice engine")
                     self._restart_to(target_engine)
                     self._finish_step(s)
