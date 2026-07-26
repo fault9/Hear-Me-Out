@@ -515,6 +515,13 @@ def build_study_router() -> APIRouter:
         # Save audio + the model transcript only. Whisper/metrics inference is
         # deferred to the admin-triggered batch (it competes with live inference).
         backend.save_session(session_id, files, {"model": model_turns, "participant": None}, None, False)
+        if not files:
+            # No audio captured at all -> the VC/PersonaPlex path produced nothing
+            # (e.g. engine misconfigured, or PersonaPlex never replied). The final
+            # playback will be empty for this scenario. Surface it in the logs.
+            logging.getLogger("study").warning(
+                f"[study] session {session_id} saved with NO audio files "
+                f"(model_turns={len(model_turns)}) — VC/PersonaPlex path likely failed")
         return {"ok": True, "files": files, "analysis": "deferred"}
 
     @router.post("/session/{session_id}/end")
