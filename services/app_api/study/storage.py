@@ -520,8 +520,8 @@ def get_backend() -> StorageBackend:
         kind = os.environ.get("STUDY_STORAGE", "sqlite").lower()
         if kind == "sqlite":
             # DB lives under STUDY_DATA_ROOT (a mountable volume) unless overridden.
-            root = os.environ.get("STUDY_DATA_ROOT", "/workspace/data")
-            db_path = os.environ.get("STUDY_DB_PATH", str(Path(root) / "study.db"))
+            root = os.path.expanduser(os.environ.get("STUDY_DATA_ROOT", "/workspace/data"))
+            db_path = os.path.expanduser(os.environ.get("STUDY_DB_PATH", str(Path(root) / "study.db")))
             _backend = SqliteBackend(db_path)
         else:
             raise RuntimeError(f"Unknown STUDY_STORAGE backend: {kind}")

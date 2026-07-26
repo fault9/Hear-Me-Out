@@ -24,8 +24,8 @@ _APP_API_DIR = str(Path(__file__).resolve().parents[1])
 if _APP_API_DIR not in sys.path:
     sys.path.insert(0, _APP_API_DIR)
 
-_DATA_ROOT = os.environ.get("STUDY_DATA_ROOT", "/workspace/data")
-STUDY_DATA_DIR = Path(os.environ.get("STUDY_DATA_DIR", str(Path(_DATA_ROOT) / "media")))
+_DATA_ROOT = os.path.expanduser(os.environ.get("STUDY_DATA_ROOT", "/workspace/data"))
+STUDY_DATA_DIR = Path(os.path.expanduser(os.environ.get("STUDY_DATA_DIR", str(Path(_DATA_ROOT) / "media"))))
 
 
 def run_session_analysis(session_id: str, converted_wav: str | None,

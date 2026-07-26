@@ -136,10 +136,18 @@ if [ "$APP_MODE" = "study" ]; then
         read -t 60 -p "  Study data dir (DB + audio) [/workspace/data]: " sdr < /dev/tty 2>/dev/tty || sdr=""
         STUDY_DATA_ROOT="${sdr:-/workspace/data}"
     fi
+    # Expand a leading ~ (bash does NOT expand it inside a variable, so an entered
+    # or exported "~/data" would otherwise create a literal "~" dir in the cwd).
+    case "$STUDY_DATA_ROOT" in "~/"*) STUDY_DATA_ROOT="$HOME/${STUDY_DATA_ROOT#\~/}" ;; "~") STUDY_DATA_ROOT="$HOME" ;; esac
     export STUDY_DATA_ROOT
     export STUDY_DB_PATH="${STUDY_DB_PATH:-$STUDY_DATA_ROOT/study.db}"
     export STUDY_DATA_DIR="${STUDY_DATA_DIR:-$STUDY_DATA_ROOT/media}"
-    mkdir -p "$STUDY_DATA_DIR" "$(dirname "$STUDY_DB_PATH")" 2>/dev/null || true
+    # Create the dirs now and report if it fails (don't silently swallow, or the DB
+    # ends up somewhere unexpected / nowhere).
+    if ! mkdir -p "$STUDY_DATA_DIR" "$(dirname "$STUDY_DB_PATH")"; then
+        echo -e "  ${YELLOW}ERROR:${NC} could not create study data dir under $STUDY_DATA_ROOT — check the path is writable (or set STUDY_DATA_ROOT to a writable dir)."
+        exit 1
+    fi
     echo -e "  ${DIM}storage${NC}    db=$STUDY_DB_PATH  media=$STUDY_DATA_DIR"
     export STUDY_VC_HOST="${STUDY_VC_HOST:-127.0.0.1}"
     # Best-effort: locate the PersonaPlex voice prompts (.pt) in the HF cache so the

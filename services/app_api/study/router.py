@@ -37,10 +37,16 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE = Path(os.environ.get("WORKSPACE", str(REPO_ROOT.parent)))
-_DATA_ROOT = os.environ.get("STUDY_DATA_ROOT", "/workspace/data")
-STUDY_DATA_DIR = Path(os.environ.get("STUDY_DATA_DIR", str(Path(_DATA_ROOT) / "media")))
+_DATA_ROOT = os.path.expanduser(os.environ.get("STUDY_DATA_ROOT", "/workspace/data"))
+STUDY_DATA_DIR = Path(os.path.expanduser(os.environ.get("STUDY_DATA_DIR", str(Path(_DATA_ROOT) / "media"))))
 TARGETS_DIR = STUDY_DATA_DIR / "targets"
 SESSIONS_DIR = STUDY_DATA_DIR / "sessions"
+# Ensure the media root exists as soon as app-api boots (not just lazily on first
+# upload), so the mounted volume is populated even before any study data is saved.
+try:
+    STUDY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 ADMIN_TOKEN = os.environ.get("STUDY_ADMIN_TOKEN") or "changeme-study-admin"
 if ADMIN_TOKEN == "changeme-study-admin":
