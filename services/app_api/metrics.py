@@ -81,7 +81,10 @@ def get_transcript(audio_path):
             truncation=False, padding="longest", return_attention_mask=True,
         )
         with torch.no_grad():
-            ids = model.generate(**inputs, return_timestamps=True)
+            # Force English transcription (not language auto-detect / translation) so
+            # results are deterministic regardless of what's spoken.
+            ids = model.generate(**inputs, return_timestamps=True,
+                                 language="en", task="transcribe")
         return processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
     except Exception as e:
         print(f"Error during transcription: {e}")
