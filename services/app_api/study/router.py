@@ -357,10 +357,10 @@ def build_study_router() -> APIRouter:
             raise HTTPException(status_code=409,
                                 detail="Another session is in progress, please try again shortly.")
         run = backend.start_run(p["participant_id"], body.mode)
-        # Give each participant a fresh VC engine (clean CUDA context): X-VC degrades
-        # across repeated GPU sessions, which silently killed a later participant's VC
-        # scenarios. The next prepare (audio check) does the one restart.
-        if os.environ.get("STUDY_REUSE_ENGINE", "").lower() not in ("1", "true", "yes"):
+        # Optional: give each participant a fresh VC engine (clean CUDA context). Off
+        # by default — a full run reuses one engine fine. Enable if you observe X-VC
+        # degrading across participants: STUDY_FRESH_ENGINE_PER_RUN=1.
+        if os.environ.get("STUDY_FRESH_ENGINE_PER_RUN", "").lower() in ("1", "true", "yes"):
             manager.invalidate()
         return {"run": _run_public(run)}
 

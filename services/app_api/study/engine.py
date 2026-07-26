@@ -143,12 +143,10 @@ class VCEngineManager:
             backend.set_engine_target_id(t["id"], engine_target_id)
 
     def invalidate(self) -> None:
-        """Force the next `ensure_engine` to restart the engine, even if the right
-        one is already up. Used at run start so each participant gets a FRESH engine
-        (clean CUDA context): X-VC (the GPU engine) degrades across long/repeated
-        sessions and a port-only health check can't detect it, which silently
-        produced dead-VC sessions for a second participant. Opt out with
-        STUDY_REUSE_ENGINE=1."""
+        """Force the next `ensure_engine` to restart the engine, even if the right one
+        is already up, so the run gets a fresh (clean CUDA context) engine. Optional
+        safety valve for suspected cross-participant X-VC (GPU) degradation; gated by
+        STUDY_FRESH_ENGINE_PER_RUN at the /run/start call site (off by default)."""
         with self._lock:
             self._force_restart = True
 
