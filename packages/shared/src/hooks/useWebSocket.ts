@@ -66,6 +66,7 @@ export function useWebSocket() {
   const [responseChunks, setResponseChunks] = useState<ArrayBuffer[]>([]);
   const [warmupComplete, setWarmupComplete] = useState(false);
   const [handshakeReceived, setHandshakeReceived] = useState(false);
+  const [audioReceived, setAudioReceived] = useState(false);   // true once the model emits any audio
 
   useEffect(() => {
     const init = async () => {
@@ -184,6 +185,7 @@ export function useWebSocket() {
     vcUserPcm.current = [];
     conversationStart.current = Date.now();
     intentionalClose.current = false;
+    setAudioReceived(false);
 
     const socket = new WebSocket(url);
     socket.binaryType = "arraybuffer";
@@ -234,6 +236,7 @@ export function useWebSocket() {
           setWarmupComplete(true);
           setHandshakeReceived(true);
         } else if (tag === 1) {
+          setAudioReceived(true);
           playAudio(payload);
         } else if (tag === 2) {
           const decoder = new TextDecoder();
@@ -365,6 +368,7 @@ export function useWebSocket() {
     responseChunks,
     warmupComplete,
     handshakeReceived,
+    audioReceived,
     connect,
     disconnect,
     sendAudio,

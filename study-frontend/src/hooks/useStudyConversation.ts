@@ -107,7 +107,7 @@ export function useStudyConversation() {
     handshakeReceived: ws.handshakeReceived,
     error: ws.error,
     amplitude: vc.amplitude,
-    modelAudioReceived: ws.responseChunks.length > 0,
+    modelAudioReceived: ws.audioReceived,
     start,
     stopAndAssemble,
     teardown,
