@@ -164,6 +164,8 @@ export const adminApi = {
   generate: (t: string, id: number, count: number) => jpost(`/studies/${id}/participants/generate`, { count }, adminHeaders(t)),
   runs: (t: string, id: number) => jget(`/studies/${id}/runs`, adminHeaders(t)),
   sessions: (t: string, id: number) => jget(`/studies/${id}/sessions`, adminHeaders(t)),
+  analyze: (t: string, id: number, force = false) => jpost(`/studies/${id}/analyze${force ? "?force=true" : ""}`, {}, adminHeaders(t)),
+  analyzeStatus: (t: string, id: number) => jget(`/studies/${id}/analyze/status`, adminHeaders(t)),
   exportUrl: (id: number, format: "json" | "zip") => `${BASE}/studies/${id}/export?format=${format}`,
 
   templateUrl: () => `${BASE}/template`,

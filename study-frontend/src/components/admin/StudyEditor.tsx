@@ -250,28 +250,57 @@ function ParticipantsPanel({ token, studyId, participants, hasScenarios, onChang
 function DataPanel({ token, studyId }: any) {
   const [runs, setRuns] = useState<any[]>([])
   const [sessions, setSessions] = useState<any[]>([])
-  useEffect(() => {
+  const [status, setStatus] = useState<any>(null)
+  const load = () => {
     adminApi.runs(token, studyId).then(r => setRuns(r.runs || [])).catch(() => {})
     adminApi.sessions(token, studyId).then(r => setSessions(r.sessions || [])).catch(() => {})
-  }, [token, studyId])
+    adminApi.analyzeStatus(token, studyId).then(setStatus).catch(() => {})
+  }
+  useEffect(() => { load() }, [token, studyId]) // eslint-disable-line
   const download = async (fmt: "json" | "zip") => {
     const r = await fetch(adminApi.exportUrl(studyId, fmt), { headers: { "X-Study-Admin-Token": token } })
     const blob = await r.blob()
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob)
     a.download = `study${studyId}_export.${fmt}`; a.click(); URL.revokeObjectURL(a.href)
   }
+  const runAnalysis = async (force: boolean) => {
+    await adminApi.analyze(token, studyId, force)
+    const poll = setInterval(async () => {
+      const s = await adminApi.analyzeStatus(token, studyId)
+      setStatus(s)
+      if (!s.running) { clearInterval(poll); load() }
+    }, 1500)
+  }
+  const pending = sessions.filter(s => !s.metrics).length
+  const running = status?.running
+
   return (
     <div>
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <Button size="sm" variant="secondary" onClick={() => download("json")}>Export JSON</Button>
         <Button size="sm" variant="secondary" onClick={() => download("zip")}>Export ZIP</Button>
         <Button size="sm" variant="ghost" onClick={() => adminApi.stopEngine(token)}>Stop VC engine</Button>
       </div>
+
+      <div className="mb-4 rounded-lg border p-3">
+        <div className="mb-1 text-sm font-semibold">Analysis (transcription + VC-quality metrics)</div>
+        <p className="mb-2 text-xs text-muted-foreground">
+          Run this <b>after data collection</b> — it's model inference and competes with live study sessions.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" disabled={running} onClick={() => runAnalysis(false)}>
+            {running ? `Analyzing ${status.done}/${status.total}…` : `Run analysis (${pending} pending)`}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={running} onClick={() => runAnalysis(true)}>Re-analyze all</Button>
+          {running && status.current && <span className="text-xs text-muted-foreground">{status.current}</span>}
+        </div>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-2">
         <Table title="Runs" head={["Participant", "Status", "Left"]}
           rows={runs.map(r => [r.participant_id, r.status, r.remaining_seconds ? `${Math.floor(r.remaining_seconds / 60)}m` : "—"])} />
-        <Table title="Sessions" head={["Session", "Condition", "End"]}
-          rows={sessions.map(s => [s.session_id, s.voice_condition, s.end_reason || "—"])} />
+        <Table title="Sessions" head={["Session", "Condition", "Analysis"]}
+          rows={sessions.map(s => [s.session_id, s.voice_condition, s.metrics ? "✓ analyzed" : "pending"])} />
       </div>
     </div>
   )

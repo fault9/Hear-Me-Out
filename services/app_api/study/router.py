@@ -20,11 +20,11 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
-                     HTTPException, UploadFile)
+from fastapi import (APIRouter, Depends, File, Form, Header, HTTPException,
+                     UploadFile)
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
-from .analysis import run_session_analysis
+from .analysis import get_runner
 from .engine import get_manager
 from . import yaml_io
 from .models import (REQUIRED_CARD_FIELDS, CreateStudyRequest, EnterRequest,
@@ -277,6 +277,19 @@ def build_study_router() -> APIRouter:
     async def list_sessions(study_id: int):
         return {"sessions": backend.list_sessions(study_id)}
 
+    @router.post("/studies/{study_id}/analyze", dependencies=[Depends(require_admin)])
+    async def analyze(study_id: int, force: bool = False):
+        """Run Whisper transcription + VC-quality metrics over the study's saved
+        sessions (batch, background). Deferred here so it doesn't compete with the
+        live study. force=true re-analyzes already-processed sessions."""
+        if not backend.get_study(study_id):
+            raise HTTPException(status_code=404, detail="Unknown study")
+        return get_runner().start(backend, study_id, force)
+
+    @router.get("/studies/{study_id}/analyze/status", dependencies=[Depends(require_admin)])
+    async def analyze_status(study_id: int):
+        return get_runner().get_status()
+
     @router.get("/studies/{study_id}/export", dependencies=[Depends(require_admin)])
     async def export(study_id: int, format: str = "json"):
         study = backend.get_study(study_id)
@@ -464,7 +477,7 @@ def build_study_router() -> APIRouter:
                 "schedule": resolved}
 
     @router.post("/session/{session_id}/save")
-    async def session_save(session_id: str, background_tasks: BackgroundTasks,
+    async def session_save(session_id: str,
                            participant: UploadFile | None = File(None),
                            participant_raw: UploadFile | None = File(None),
                            model: UploadFile | None = File(None),
@@ -492,12 +505,10 @@ def build_study_router() -> APIRouter:
             "files": files,
         }
         (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+        # Save audio + the model transcript only. Whisper/metrics inference is
+        # deferred to the admin-triggered batch (it competes with live inference).
         backend.save_session(session_id, files, {"model": model_turns, "participant": None}, None, False)
-
-        converted_path = str(out_dir / "participant.wav") if participant is not None else None
-        raw_path = str(out_dir / "participant_raw.wav") if participant_raw is not None else None
-        background_tasks.add_task(run_session_analysis, session_id, converted_path, raw_path, model_turns)
-        return {"ok": True, "files": files, "analysis": "scheduled"}
+        return {"ok": True, "files": files, "analysis": "deferred"}
 
     @router.post("/session/{session_id}/end")
     async def session_end(session_id: str, body: dict):
