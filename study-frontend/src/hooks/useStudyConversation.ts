@@ -91,13 +91,25 @@ export function useStudyConversation() {
     }
   }, [ws, vc])
 
+  // Tear down without assembling artifacts (used by the audio check).
+  const teardown = useCallback(() => {
+    streamingRef.current = false
+    clearConnectTimer()
+    vc.stopVCStream()
+    ws.disconnect()
+    setStatus("idle")
+  }, [ws, vc])
+
   return {
     status,
     connected: ws.connected,
     warmupComplete: ws.warmupComplete,
     handshakeReceived: ws.handshakeReceived,
     error: ws.error,
+    amplitude: vc.amplitude,
+    modelAudioReceived: ws.responseChunks.length > 0,
     start,
     stopAndAssemble,
+    teardown,
   }
 }

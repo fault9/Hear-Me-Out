@@ -409,10 +409,29 @@ def build_study_router() -> APIRouter:
         return {"session_id": session_id, "scenario": _scenario_card(scenario, body.scenario_order),
                 "prepare": manager.get_state()}
 
+    @router.post("/audio-check/start")
+    async def audio_check_start(body: EnterRequest):
+        """Warm the default VC engine and hand back a throwaway '_CHECK' session so
+        the participant can run a short PersonaPlex exchange through the proxy."""
+        p = _require_participant(body.code)
+        _guard_window(p["participant_id"])
+        manager.start_prepare_async(backend, p["study_id"], None)
+        return {"session_id": f"{p['participant_id']}_CHECK", "prepare": manager.get_state()}
+
     @router.get("/condition/{session_id}")
     async def get_condition(session_id: str):
         """Internal: the active VC engine resolves the hidden prompt + voice
         schedule here (localhost). Never called by the browser."""
+        # Audio-check session: generic natural pass-through, not a real scenario.
+        if session_id.endswith("_CHECK"):
+            return {
+                "text_prompt": os.environ.get(
+                    "STUDY_AUDIO_CHECK_PROMPT",
+                    "You are performing a brief audio check. Warmly greet the participant, "
+                    "confirm out loud that you can hear them, and ask them to continue."),
+                "voice_prompt": os.environ.get("STUDY_DEFAULT_VOICE_PROMPT", "NATF2.pt"),
+                "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
+            }
         session = backend.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Unknown session")
@@ -495,23 +514,38 @@ def build_study_router() -> APIRouter:
         return {"ok": True}
 
     @router.get("/playback/{code}")
-    async def playback(code: str):
-        """Streams the merged (participant + assistant) recording of this
-        participant's VC->natural scenario, for the post-session playback item.
+    async def playback(code: str, scenario: int = 0, track: str = "merged"):
+        """Streams a recording for the post-session playback item. `scenario`
+        (1-based order) + `track` (merged|participant) select it explicitly; unset
+        falls back to the participant's VC->natural scenario's merged recording.
         A participant can only fetch their own recording."""
         p = backend.get_participant_by_code(code)
         if not p:
             raise HTTPException(status_code=404, detail="Invalid code")
+        track_key = "participant" if track == "participant" else "merged"
         order = p.get("scenario_order") or []
-        for i, sid in enumerate(order):
-            sc = backend.get_scenario(sid)
-            if sc and _is_vc_to_natural(sc):
-                session = backend.get_session(f"{p['participant_id']}_S{i + 1:02d}")
-                merged = ((session or {}).get("files") or {}).get("merged")
-                if merged:
-                    path = STUDY_DATA_DIR / merged
-                    if path.exists():
-                        return FileResponse(str(path), media_type="audio/wav")
+
+        def serve(order_idx: int):
+            session = backend.get_session(f"{p['participant_id']}_S{order_idx:02d}")
+            files = (session or {}).get("files") or {}
+            rel = files.get(track_key) or files.get("merged")
+            if rel:
+                path = STUDY_DATA_DIR / rel
+                if path.exists():
+                    return FileResponse(str(path), media_type="audio/wav")
+            return None
+
+        if scenario and 1 <= scenario <= len(order):
+            r = serve(scenario)
+            if r:
+                return r
+        else:
+            for i, sid in enumerate(order):
+                sc = backend.get_scenario(sid)
+                if sc and _is_vc_to_natural(sc):
+                    r = serve(i + 1)
+                    if r:
+                        return r
         raise HTTPException(status_code=404, detail="No playback recording available yet")
 
     return router

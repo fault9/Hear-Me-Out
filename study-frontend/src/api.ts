@@ -89,7 +89,15 @@ export const api = {
   questionnaire: (sessionId: string | null, code: string, kind: string, payload: Record<string, any>) =>
     jpost(`/session/${sessionId ?? "none"}/questionnaire`, { code, kind, payload }),
   submit: (code: string) => jpost("/run/submit", { code }),
-  playbackUrl: (code: string) => `${BASE}/playback/${encodeURIComponent(code)}`,
+  audioCheckStart: (code: string): Promise<{ session_id: string; prepare: PrepareState }> =>
+    jpost("/audio-check/start", { code }),
+  playbackUrl: (code: string, scenarioOrder?: number, track?: string) => {
+    const qs = new URLSearchParams()
+    if (scenarioOrder) qs.set("scenario", String(scenarioOrder))
+    if (track) qs.set("track", track)
+    const q = qs.toString()
+    return `${BASE}/playback/${encodeURIComponent(code)}${q ? `?${q}` : ""}`
+  },
 
   async saveSession(sessionId: string, arts: {
     participant?: Blob | null; participant_raw?: Blob | null; model?: Blob | null;

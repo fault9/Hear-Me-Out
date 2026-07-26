@@ -91,7 +91,7 @@ export function StudyEditor({ token, studyId, onBack }: {
 
       {tab === "questionnaires" && (
         <QuestionnaireBuilder token={token} studyId={studyId}
-          questionnaires={study.questionnaires || {}} onChange={reload} />
+          questionnaires={study.questionnaires || {}} scenarios={scenarios} onChange={reload} />
       )}
 
       {tab === "participants" && (

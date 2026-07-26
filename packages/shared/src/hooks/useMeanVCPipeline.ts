@@ -19,6 +19,7 @@ export interface MeanVCPipelineState {
   vcTargetUrl: string | null;
   vcStatus: string;
   vcStreaming: boolean;
+  amplitude: number;   // live mic RMS (0..1) for a level meter
 }
 
 // VC mic capture. Conversion now happens server-side in the MeanVC chat-proxy,
@@ -37,6 +38,7 @@ export function useMeanVCPipeline(
     vcTargetUrl: null,
     vcStatus: "",
     vcStreaming: false,
+    amplitude: 0,
   });
 
   const pcmStreamRef = useRef<MediaStream | null>(null);
@@ -108,8 +110,12 @@ export function useMeanVCPipeline(
     originalPcmRef.current = [];
 
     processor.onaudioprocess = (e) => {
-      if (!sendingRef.current) return;
       const ch = e.inputBuffer.getChannelData(0);
+      // Live mic level (updates ~8x/s) so a meter works even before sending starts.
+      let sum = 0;
+      for (let i = 0; i < ch.length; i++) sum += ch[i] * ch[i];
+      setState(s => ({ ...s, amplitude: Math.sqrt(sum / ch.length) }));
+      if (!sendingRef.current) return;
       // Snapshot the raw mic (inputBuffer is reused, so copy) before sending.
       originalPcmRef.current.push(new Float32Array(ch));
       sendRawRef.current(ch.buffer);
@@ -166,7 +172,7 @@ export function useMeanVCPipeline(
     pcmStreamRef.current = null;
     pcmContextRef.current?.close();
     pcmContextRef.current = null;
-    setState(s => ({ ...s, vcStreaming: false, vcStatus: "" }));
+    setState(s => ({ ...s, vcStreaming: false, vcStatus: "", amplitude: 0 }));
   }, []);
 
   const setEnabled = useCallback((enabled: boolean) => {

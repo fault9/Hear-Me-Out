@@ -10,8 +10,9 @@ const SECTIONS: { key: string; label: string }[] = [
   { key: "final", label: "Final" },
 ]
 
-export function QuestionnaireBuilder({ token, studyId, questionnaires, onChange }: {
-  token: string; studyId: number; questionnaires: Record<string, Item[]>; onChange: () => void
+export function QuestionnaireBuilder({ token, studyId, questionnaires, scenarios = [], onChange }: {
+  token: string; studyId: number; questionnaires: Record<string, Item[]>
+  scenarios?: { title: string }[]; onChange: () => void
 }) {
   const [q, setQ] = useState<Record<string, Item[]>>(() =>
     Object.fromEntries(SECTIONS.map(s => [s.key, [...(questionnaires[s.key] || [])]])))
@@ -40,7 +41,8 @@ export function QuestionnaireBuilder({ token, studyId, questionnaires, onChange 
         ))}
       </div>
 
-      <ItemListEditor items={q[active] || []} onChange={items => setQ(prev => ({ ...prev, [active]: items }))} />
+      <ItemListEditor items={q[active] || []} scenarios={scenarios}
+        onChange={items => setQ(prev => ({ ...prev, [active]: items }))} />
 
       <div className="mt-4 flex items-center gap-3">
         <Button disabled={busy} onClick={save}>{busy ? "Saving…" : "Save questionnaires"}</Button>

@@ -18,6 +18,8 @@ export interface QItem {
   min_label?: string
   max_label?: string
   placeholder?: string
+  scenario_order?: number   // audio_playback: which scenario's recording
+  track?: string            // audio_playback: merged | participant
 }
 
 type Answers = Record<string, any>
@@ -69,7 +71,7 @@ export function QuestionnaireForm({
   submitLabel?: string
   busy?: boolean
   scenarioOptions?: string[]
-  playbackUrl?: string
+  playbackUrl?: (item: QItem) => string
 }) {
   const [answers, setAnswers] = useState<Answers>({})
   const [showErrors, setShowErrors] = useState(false)
@@ -128,16 +130,17 @@ function OtherBox({ item, answers, set }: { item: QItem; answers: Answers; set: 
 
 function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
   item: QItem; answers: Answers; set: (id: string, v: unknown) => void
-  scenarioOptions?: string[]; playbackUrl?: string
+  scenarioOptions?: string[]; playbackUrl?: (item: QItem) => string
 }) {
   const value = answers[item.id]
 
   if (item.type === "audio_playback") {
+    const src = playbackUrl?.(item)
     return (
       <div className="flex flex-col gap-2">
         {item.label && <p className="text-sm">{item.label}</p>}
-        {playbackUrl
-          ? <audio controls src={playbackUrl} className="w-full">Your browser cannot play this audio.</audio>
+        {src
+          ? <audio controls src={src} className="w-full">Your browser cannot play this audio.</audio>
           : <p className="text-sm text-muted-foreground">Recording not available.</p>}
       </div>
     )

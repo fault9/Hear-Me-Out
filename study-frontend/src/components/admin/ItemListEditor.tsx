@@ -9,7 +9,9 @@ export const newItemId = () => `q_${Date.now()}_${_uid++}`
 
 const csv = (s: string) => s.split(",").map(x => x.trim()).filter(Boolean)
 
-export function ItemListEditor({ items, onChange }: { items: Item[]; onChange: (items: Item[]) => void }) {
+export function ItemListEditor({ items, onChange, scenarios = [] }: {
+  items: Item[]; onChange: (items: Item[]) => void; scenarios?: { title: string }[]
+}) {
   const hasOptions = (t: string) => t === "radio" || t === "select" || t === "checkbox"
   const update = (i: number, patch: Item) => onChange(items.map((it, j) => j === i ? { ...it, ...patch } : it))
   const move = (i: number, dir: -1 | 1) => {
@@ -41,6 +43,22 @@ export function ItemListEditor({ items, onChange }: { items: Item[]; onChange: (
 
           <Input value={it.label || ""} onChange={e => update(i, { label: e.target.value })}
             placeholder={it.type === "audio_playback" ? "Instruction text shown above the player (optional)" : "Question label"} />
+
+          {it.type === "audio_playback" && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Play</span>
+              <select className="rounded-md border bg-background px-2 py-1 text-sm"
+                value={it.scenario_order ?? ""} onChange={e => update(i, { scenario_order: e.target.value ? Number(e.target.value) : undefined })}>
+                <option value="">Auto (VC→natural scenario)</option>
+                {scenarios.map((s, j) => <option key={j} value={j + 1}>{`Scenario ${j + 1}: ${s.title || "(untitled)"}`}</option>)}
+              </select>
+              <select className="rounded-md border bg-background px-2 py-1 text-sm"
+                value={it.track || "merged"} onChange={e => update(i, { track: e.target.value })}>
+                <option value="merged">Full conversation</option>
+                <option value="participant">Participant only</option>
+              </select>
+            </div>
+          )}
 
           {hasOptions(it.type) && (
             <>

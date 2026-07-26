@@ -6,6 +6,7 @@ import { CheckCircle2 } from "lucide-react"
 import { api, type EnterResult, type RunState } from "@/api"
 import { QuestionnaireForm, type QItem } from "@/components/QuestionnaireForm"
 import { ScenarioCall } from "@/components/ScenarioCall"
+import { AudioCheck } from "@/components/AudioCheck"
 
 type Phase =
   | "code" | "welcome"
@@ -186,8 +187,8 @@ export function ParticipantFlow() {
 
   if (phase === "consent" && data) {
     return Frame(
-      <QuestionnaireForm title="Audio check" items={q("consent")} submitLabel="Start scenarios" busy={busy}
-        onSubmit={async (ans) => {
+      <AudioCheck code={code} items={q("consent")}
+        onDone={async (ans) => {
           setBusy(true)
           try {
             await api.questionnaire(null, code, "consent", ans)
@@ -238,7 +239,7 @@ export function ParticipantFlow() {
     const scenarioOptions = data.scenarios.map(s => s.title).filter(Boolean)
     return Frame(
       <QuestionnaireForm title="Final questionnaire" items={q("final")} submitLabel="Submit study" busy={busy}
-        scenarioOptions={scenarioOptions} playbackUrl={api.playbackUrl(code)}
+        scenarioOptions={scenarioOptions} playbackUrl={(item) => api.playbackUrl(code, item.scenario_order, item.track)}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
