@@ -129,8 +129,18 @@ if [ "$APP_MODE" = "study" ]; then
         echo -e "  ${YELLOW}study${NC}      generated STUDY_ADMIN_TOKEN=${BOLD}$STUDY_ADMIN_TOKEN${NC}"
     fi
     export STUDY_ADMIN_TOKEN
-    export STUDY_DB_PATH="${STUDY_DB_PATH:-$HEARMEOUT_DIR/study.db}"
-    export STUDY_DATA_DIR="${STUDY_DATA_DIR:-$HEARMEOUT_DIR/study_data}"
+    # Storage for the study DB + audio. Put this on a MOUNTED VOLUME so it survives
+    # container restarts (the repo dir is ephemeral). One root holds both; override
+    # STUDY_DB_PATH / STUDY_DATA_DIR for finer control.
+    if [ -z "$STUDY_DATA_ROOT" ]; then
+        read -t 60 -p "  Study data dir (DB + audio) [/workspace/data]: " sdr < /dev/tty 2>/dev/tty || sdr=""
+        STUDY_DATA_ROOT="${sdr:-/workspace/data}"
+    fi
+    export STUDY_DATA_ROOT
+    export STUDY_DB_PATH="${STUDY_DB_PATH:-$STUDY_DATA_ROOT/study.db}"
+    export STUDY_DATA_DIR="${STUDY_DATA_DIR:-$STUDY_DATA_ROOT/media}"
+    mkdir -p "$STUDY_DATA_DIR" "$(dirname "$STUDY_DB_PATH")" 2>/dev/null || true
+    echo -e "  ${DIM}storage${NC}    db=$STUDY_DB_PATH  media=$STUDY_DATA_DIR"
     export STUDY_VC_HOST="${STUDY_VC_HOST:-127.0.0.1}"
     # Best-effort: locate the PersonaPlex voice prompts (.pt) in the HF cache so the
     # admin's assistant-voice dropdown (/api/study/voices) is populated.

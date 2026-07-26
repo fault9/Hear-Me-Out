@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE = Path(os.environ.get("WORKSPACE", str(REPO_ROOT.parent)))
-STUDY_DATA_DIR = Path(os.environ.get("STUDY_DATA_DIR", str(REPO_ROOT / "study_data")))
+_DATA_ROOT = os.environ.get("STUDY_DATA_ROOT", "/workspace/data")
+STUDY_DATA_DIR = Path(os.environ.get("STUDY_DATA_DIR", str(Path(_DATA_ROOT) / "media")))
 TARGETS_DIR = STUDY_DATA_DIR / "targets"
 SESSIONS_DIR = STUDY_DATA_DIR / "sessions"
 
