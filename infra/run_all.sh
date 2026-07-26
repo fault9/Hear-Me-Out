@@ -222,6 +222,16 @@ if [ "$VC_ENGINE" = "xvc" ]; then
     export XVC_CONFIG="$XVC_DIR/configs/xvc.yaml"
     export XVC_CKPT="$XVC_DIR/ckpts/xvc.pt"
     export MEANVC_PORT=5002
+    # Streaming window (ms). Smaller CHUNK -> cheaper per-window GPU work (less
+    # contention with PersonaPlex, so its audio stays smooth while the participant
+    # speaks); smaller FUTURE -> less look-ahead latency. Tuned below X-VC's stock
+    # 2400/120/20/100 for the shared-GPU study box; raise CHUNK back toward 2400 if
+    # conversion quality suffers. Any explicit env override wins.
+    export XVC_CHUNK_MS="${XVC_CHUNK_MS:-1800}"
+    export XVC_CURRENT_MS="${XVC_CURRENT_MS:-120}"
+    export XVC_SMOOTH_MS="${XVC_SMOOTH_MS:-20}"
+    export XVC_FUTURE_MS="${XVC_FUTURE_MS:-60}"
+    echo -e "  ${DIM}xvc window${NC} chunk=${XVC_CHUNK_MS} current=${XVC_CURRENT_MS} smooth=${XVC_SMOOTH_MS} future=${XVC_FUTURE_MS} ms"
     VC_LABEL="X-VC"
     { [ "$APP_MODE" = "study" ] || [ -d "$XVC_DIR" ]; } || { echo -e "  ${YELLOW}ERROR:${NC} X-VC not installed — rerun setup.sh with --xvc."; exit 1; }
 else
