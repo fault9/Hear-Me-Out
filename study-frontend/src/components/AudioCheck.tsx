@@ -121,7 +121,7 @@ export function AudioCheck({ code, items, onDone }: {
 
       {canContinue && (
         <div className="mt-6">
-          <QuestionnaireForm title="Please confirm" items={items} submitLabel="Start scenarios"
+          <QuestionnaireForm title="Please confirm" items={items} submitLabel="Continue"
             onSubmit={(ans) => onDone({ ...ans, _audio_check: { mic_ok: micOk, heard_ok: heardOk, overridden } })} />
         </div>
       )}

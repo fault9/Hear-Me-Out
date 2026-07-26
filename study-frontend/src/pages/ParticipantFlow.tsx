@@ -85,7 +85,7 @@ export function ParticipantFlow() {
     }
     if (p === "final") { setPhase("final"); return }
     setScenarioIdx(0)
-    setPhase("background")
+    setPhase("consent")
   }, [])
 
   const setStep = useCallback((current_step: Record<string, any>, completed: Record<string, any> = {}) => {
@@ -100,7 +100,7 @@ export function ParticipantFlow() {
       const secs = res?.run?.remaining_seconds ?? 3600
       setDeadline(Date.now() + secs * 1000)
       if (mode === "restart") {
-        setScenarioIdx(0); setStep({ phase: "background" }); setPhase("background")
+        setScenarioIdx(0); setStep({ phase: "consent" }); setPhase("consent")
       } else {
         goToRunStep(res.run)
       }
@@ -173,13 +173,14 @@ export function ParticipantFlow() {
 
   if (phase === "background" && data) {
     return Frame(
-      <QuestionnaireForm title="Background questionnaire" items={q("background")} submitLabel="Continue" busy={busy}
+      <QuestionnaireForm title="Background questionnaire" items={q("background")} submitLabel="Start scenarios" busy={busy}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
             await api.questionnaire(null, code, "background", ans)
-            setStep({ phase: "consent" })
-            setPhase("consent")
+            setScenarioIdx(0)
+            setStep({ phase: "scenario", scenario_order: 1 })
+            setPhase("scenario")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
     )
@@ -192,9 +193,8 @@ export function ParticipantFlow() {
           setBusy(true)
           try {
             await api.questionnaire(null, code, "consent", ans)
-            setScenarioIdx(0)
-            setStep({ phase: "scenario", scenario_order: 1 })
-            setPhase("scenario")
+            setStep({ phase: "background" })
+            setPhase("background")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
     )
