@@ -111,6 +111,12 @@ function SettingsPanel({ token, studyId, study, onChange }: any) {
   const [duration, setDuration] = useState(s.estimated_duration || "")
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Re-sync fields when the study reloads (e.g. after a YAML import). Safe because
+  // a reload only happens on a deliberate action, never mid-typing.
+  useEffect(() => {
+    const st = study.settings || {}
+    setName(study.name || ""); setWelcome(st.welcome_text || ""); setDuration(st.estimated_duration || "")
+  }, [study])
   return (
     <div className="flex flex-col gap-3">
       <Labeled label="Study name"><Input value={name} onChange={e => setName(e.target.value)} /></Labeled>

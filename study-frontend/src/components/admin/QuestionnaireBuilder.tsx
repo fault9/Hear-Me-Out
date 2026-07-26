@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@shared/ui/button"
 import { adminApi } from "@/api"
 import { ItemListEditor, type Item } from "@/components/admin/ItemListEditor"
@@ -16,6 +16,10 @@ export function QuestionnaireBuilder({ token, studyId, questionnaires, scenarios
 }) {
   const [q, setQ] = useState<Record<string, Item[]>>(() =>
     Object.fromEntries(SECTIONS.map(s => [s.key, [...(questionnaires[s.key] || [])]])))
+  // Re-sync when the study reloads (e.g. after a YAML import).
+  useEffect(() => {
+    setQ(Object.fromEntries(SECTIONS.map(s => [s.key, [...(questionnaires[s.key] || [])]])))
+  }, [questionnaires])
   const [active, setActive] = useState(SECTIONS[0].key)
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
