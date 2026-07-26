@@ -3,7 +3,7 @@
 # HOW TO USE
 #   1. Create a study in the admin, open it.
 #   2. In the Targets tab, upload the converted voice with Speaker ID: converted_voice
-#      (engine: meanvc). The scenarios below reference it by that Speaker ID.
+#      (engine: xvc). The scenarios below reference it by that Speaker ID.
 #   3. In Settings, use "Import from YAML" and pick this file.
 #   4. Review scenario cards / system prompts (some are drafts) and finalize wording.
 #
@@ -15,7 +15,7 @@ description: Four spoken scenarios with timed natural/converted voice, per-scena
 # Target voices this study expects (must be uploaded first, matched by Speaker ID = ref).
 targets:
   - ref: converted_voice
-    engine: meanvc
+    engine: xvc
 
 settings:
   estimated_duration: 20–30 minutes
@@ -243,7 +243,7 @@ scenarios:
       suggested_first_line: "I'm calling because the dish I received wasn't what I ordered."
       additional_details: *additional_details
     voice_schedule:
-      - { mode: vc, engine: meanvc, target_ref: converted_voice, start_s: 0, end_s: null }
+      - { mode: vc, engine: xvc, target_ref: converted_voice, start_s: 0, end_s: null }
     post_items:
       - { id: grounding_restaurant, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that the dish I received did not match the vegetarian dish I ordered." }
 
@@ -265,7 +265,7 @@ scenarios:
       additional_details: *additional_details
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: 25 }
-      - { mode: vc, engine: meanvc, target_ref: converted_voice, start_s: 25, end_s: null }
+      - { mode: vc, engine: xvc, target_ref: converted_voice, start_s: 25, end_s: null }
     post_items:
       - { id: grounding_assessment, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account the comparison and limitation that I said were present in my submitted work." }
 
@@ -287,7 +287,7 @@ scenarios:
       suggested_first_line: "I'm calling to correct the incident statement in my claim."
       additional_details: *additional_details
     voice_schedule:
-      - { mode: vc, engine: meanvc, target_ref: converted_voice, start_s: 0, end_s: 25 }
+      - { mode: vc, engine: xvc, target_ref: converted_voice, start_s: 0, end_s: 25 }
       - { mode: natural, start_s: 25, end_s: null }
     post_items:
       - { id: grounding_incident, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that another player made contact with me before I fell." }
