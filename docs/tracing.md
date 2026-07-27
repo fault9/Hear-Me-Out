@@ -1,8 +1,9 @@
 # Observability (study mode): traces + logs
 
-End-to-end OpenTelemetry across all processes of a participant's session — **traces**
-(spans) and **logs**, correlated by `trace_id`, viewed in an off-the-shelf OTel-native
-UI (no custom viewer of ours):
+End-to-end OpenTelemetry across every process of a participant's session — **traces**
+(spans) and **logs**, correlated by `trace_id` — viewed in a bundled OTel-native UI
+(OpenObserve) served **through app-api at `/logs` on :5001**. No separate container, no
+extra exposed port, no custom viewer of ours.
 
 ```
 browser ──▶ VC proxy :5002 (WebSocket) ──▶ app-api :5001 /condition ──▶ PersonaPlex :8000 (WS)
@@ -10,76 +11,70 @@ browser ──▶ VC proxy :5002 (WebSocket) ──▶ app-api :5001 /condition 
 analysis worker (offline batch)
 ```
 
-**Off by default.** Nothing is exported until you point the services at an OTLP
-collector, so prod is unaffected. When disabled, the tracing/logging code is a no-op.
+**Off by default.** Nothing is installed or exported unless you opt in; when disabled
+the tracing/logging code is a no-op.
 
-## 1. Run a backend (one container: Grafana + Tempo + Loki)
-
-Grafana's `otel-lgtm` bundles Grafana (UI), Tempo (traces) and Loki (logs) and accepts
-OTLP directly — the lightest way to see traces **and** logs together:
+## 1. Install the backend (once, via setup)
 
 ```bash
-docker run -d --name lgtm \
-  -p 3000:3000 -p 4318:4318 -p 4317:4317 \
-  grafana/otel-lgtm:latest
+bash infra/setup.sh --observability      # or answer "Y" to the observability prompt
 ```
 
-- `3000` — Grafana UI
-- `4318` / `4317` — OTLP HTTP / gRPC ingest (our services export to 4318)
+This downloads the **OpenObserve** single binary (traces + logs + UI, OTLP-native) to
+`$WORKSPACE/observability/`. Nothing else to run — it's a static binary, not a
+container. (Standalone: `bash infra/observability.sh install`; pin a release with
+`O2_VERSION=vX.Y.Z` if the default tag is unavailable for your platform.)
 
-(Traces-only alternative: Jaeger all-in-one with `COLLECTOR_OTLP_ENABLED=true` on
-`16686`/`4318` — but it doesn't store logs. Prefer LGTM for both. SigNoz/Uptrace are
-heavier all-in-one OTel platforms if you want metrics + long retention too.)
-
-## 2. Enable when starting the study stack
+## 2. Start the stack with observability on
 
 ```bash
-STUDY_TRACING=1 APP_MODE=study bash infra/run_all.sh
+STUDY_OBSERVABILITY=1 APP_MODE=study bash infra/run_all.sh
 ```
 
-Sets `OTEL_TRACES_EXPORTER=otlp` and `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`
-(override if the backend is elsewhere). Both **traces** (`/v1/traces`) and **logs**
-(`/v1/logs`) export to that endpoint. Inherited by app-api and, via `engine.py`, the
-on-demand VC engine. Each process self-names — `study-app-api`, `xvc`, `meanvc`,
-`study-analysis` — so **don't** set `OTEL_SERVICE_NAME` globally.
+run_all then:
+- starts OpenObserve (data under `$STUDY_DATA_ROOT/observability`, served under `/logs`),
+- points every service's OTLP exporter at it (traces `/v1/traces` + logs `/v1/logs`),
+- sets `STUDY_OBSERVABILITY_URL` so **app-api reverse-proxies the UI under `/logs`**.
 
-For local span debugging without a backend: `OTEL_TRACES_EXPORTER=console` prints spans
-to stdout (logs export stays off in that mode).
+Each process self-names — `study-app-api`, `xvc`, `meanvc`, `study-analysis` — so don't
+set `OTEL_SERVICE_NAME`. The OTLP vars are inherited by app-api and (via `engine.py`)
+the on-demand VC engine.
 
-## 3. Read a session in Grafana (http://<host>:3000)
+### Open the UI
 
-- **Traces** — Explore → Tempo. Search by service or by tag
-  **`study.session_id = P01002_S02`**. A scenario shows as one trace:
+`https://<host>:5001/logs` — OpenObserve, proxied by app-api on the same port the study
+runs on. Default login `admin@example.com` / `ChangeMe123` (override with
+`O2_ROOT_USER_EMAIL` / `O2_ROOT_USER_PASSWORD`).
 
-  ```
-  POST /session/start        (study-app-api)
-  GET  /chat-proxy           (xvc)        study.session_id=P01002_S02  study.chunks=914
-   ├─ personaplex.connect    (xvc, client)
-   └─ GET /condition         (study-app-api)
-  POST /session/{id}/save    (study-app-api)
-  ```
-  Plus `vc.ensure_engine → restart_engine / load_targets` (prepare) and
-  `analysis.session` spans (batch).
+- **Traces**: search by service or tag **`study.session_id = P01002_S02`**. A scenario
+  is one trace: `POST /session/start` → `GET /chat-proxy` (`study.chunks=914`,
+  `personaplex.connect`, `GET /condition`) → `POST /save`, plus `vc.ensure_engine`
+  (prepare) and `analysis.session` (batch).
+- **Logs**: every line carries `trace_id`, `span_id`, and (where set) `session_id` —
+  filter by any of them, or pivot from a span to its logs by `trace_id`.
 
-- **Logs** — Explore → Loki. Every log line carries `trace_id`, `span_id`, and (where
-  set) `session_id`. From a trace span, use Grafana's trace→logs correlation to jump to
-  the exact log lines for that request; or filter Loki by `service_name` / `trace_id`.
+### External collector instead
+
+If you'd rather use your own OTLP backend (Grafana Tempo/Loki, SigNoz, …) and not the
+bundled UI, skip `--observability` and use `STUDY_TRACING=1` with
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://your-collector:4318`.
 
 ## How it's wired
 
-- **Traces**: `services/common/otel.py` (FastAPI + requests + aiohttp-client
-  instrumentation, a WS-aware aiohttp middleware, manual spans).
+- **Traces**: `services/common/otel.py` — FastAPI + requests + aiohttp-client
+  instrumentation, a WS-aware aiohttp middleware (reads `traceparent` from the WS query,
+  since browsers can't set WS headers), and manual spans.
 - **Logs**: `services/common/logging_setup.py` attaches an OTel `LoggingHandler` to the
-  root logger, so stdlib `logging` calls export over OTLP with the active span's
-  trace/span id attached automatically; `set_log_session()` adds `session_id`.
-- **Propagation**: browser sends W3C `traceparent` (header on REST, query param on the
-  WS since browsers can't set WS headers); services continue the trace and inject it
-  onward. Console logs on stdout / `/tmp/hmo_vc_engine.log` are unchanged.
+  root logger, so stdlib `logging` exports over OTLP with the active span's trace/span
+  id attached; `set_log_session()` adds `session_id`. stdout / `/tmp/hmo_vc_engine.log`
+  stay human-readable.
+- **UI proxy**: `app.py` streams `/logs*` to `STUDY_OBSERVABILITY_URL` (only when set).
+- **Backend lifecycle**: `infra/observability.sh` (install/start/stop/status).
 
 ## Dependencies
 
-Declared (optional) in each service's `pyproject.toml`. Re-sync after pulling:
-`uv sync` in `services/app_api`, `services/xvc`, `services/meanvc`. If a resolver
-conflict appears (e.g. `protobuf` vs `tensorboard` in the xvc venv), pin `protobuf` or
-drop `opentelemetry-exporter-otlp-proto-http` there — observability is optional and its
-absence degrades to a no-op.
+OTel packages (+ `httpx` for the proxy) are declared in the service `pyproject.toml`s.
+Re-sync after pulling: `uv sync` in `services/app_api`, `services/xvc`, `services/meanvc`.
+If a resolver conflict appears (e.g. `protobuf` vs `tensorboard` in the xvc venv), pin
+`protobuf` or drop `opentelemetry-exporter-otlp-proto-http` there — observability is
+optional and its absence degrades to a no-op.

@@ -14,6 +14,7 @@ dependencies = [
     "websockets",
     "werkzeug",
     "requests",  # study engine-manager → VC engine load-target / health
+    "httpx",     # reverse-proxy the observability UI under /logs
     "pyyaml",    # study YAML template import/export
     # transcription + VAD
     "faster-whisper==1.2.1",

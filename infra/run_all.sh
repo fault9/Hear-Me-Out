@@ -149,20 +149,32 @@ if [ "$APP_MODE" = "study" ]; then
         exit 1
     fi
     echo -e "  ${DIM}storage${NC}    db=$STUDY_DB_PATH  media=$STUDY_DATA_DIR"
-    # Observability (OpenTelemetry traces + logs). OFF by default. Opt in with
-    # STUDY_TRACING=1 to export to any OTLP backend. Lightest one-container option is
-    # Grafana's otel-lgtm (Grafana + Tempo for traces + Loki for logs, correlated by
-    # trace_id):
-    #   docker run -d --name lgtm -p 3000:3000 -p 4318:4318 -p 4317:4317 \
-    #     grafana/otel-lgtm:latest
-    # then open Grafana at http://<host>:3000 (Explore → Tempo for traces, Loki for
-    # logs; jump between them by trace_id). These vars are inherited by app-api and
-    # (via engine.py) the on-demand VC engine; each service names itself
-    # (study-app-api / xvc / meanvc / study-analysis), so don't set OTEL_SERVICE_NAME.
-    if [ "$STUDY_TRACING" = "1" ] || [ "$STUDY_TRACING" = "true" ]; then
+    # Observability (OpenTelemetry traces + logs). OFF by default. Two ways to opt in:
+    #  • STUDY_OBSERVABILITY=1 — start the bundled OpenObserve backend (installed by
+    #    setup.sh --observability) here, wire OTLP to it, and proxy its UI under /logs
+    #    on this :5001 port (no extra container / exposed port).
+    #  • STUDY_TRACING=1 — just export OTLP to an external OTEL_EXPORTER_OTLP_ENDPOINT
+    #    (e.g. your own collector) without starting anything.
+    # Either way these vars are inherited by app-api and (via engine.py) the on-demand
+    # VC engine; each service self-names (study-app-api/xvc/meanvc/study-analysis), so
+    # don't set OTEL_SERVICE_NAME.
+    if [ "$STUDY_OBSERVABILITY" = "1" ] || [ "$STUDY_OBSERVABILITY" = "true" ]; then
+        O2_PORT="${O2_PORT:-5080}"
+        WORKSPACE="$WORKSPACE" STUDY_DATA_ROOT="$STUDY_DATA_ROOT" O2_PORT="$O2_PORT" \
+            bash "$SCRIPT_DIR/observability.sh" start || echo -e "  ${YELLOW}warn:${NC} observability backend failed to start (see log)"
+        # OpenObserve serves under ZO_BASE_URI=/logs; OTLP ingest is org-scoped + Basic auth.
+        _o2_email="${O2_ROOT_USER_EMAIL:-admin@example.com}"
+        _o2_pass="${O2_ROOT_USER_PASSWORD:-ChangeMe123}"
+        _o2_auth="$(printf '%s:%s' "$_o2_email" "$_o2_pass" | base64 | tr -d '\n')"
+        export OTEL_TRACES_EXPORTER="otlp"
+        export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$O2_PORT/logs/api/default"
+        export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $_o2_auth"
+        export STUDY_OBSERVABILITY_URL="http://127.0.0.1:$O2_PORT"   # app-api reverse-proxies /logs -> here
+        echo -e "  ${DIM}observ.${NC}    OpenObserve traces+logs  ${DIM}UI → http(s)://<host>:5001/logs  (login $_o2_email)${NC}"
+    elif [ "$STUDY_TRACING" = "1" ] || [ "$STUDY_TRACING" = "true" ]; then
         export OTEL_TRACES_EXPORTER="${OTEL_TRACES_EXPORTER:-otlp}"
         export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://127.0.0.1:4318}"
-        echo -e "  ${DIM}observ.${NC}    OpenTelemetry traces+logs → $OTEL_EXPORTER_OTLP_ENDPOINT  ${DIM}(Grafana UI :3000)${NC}"
+        echo -e "  ${DIM}observ.${NC}    OpenTelemetry traces+logs → $OTEL_EXPORTER_OTLP_ENDPOINT  ${DIM}(external collector)${NC}"
     fi
     export STUDY_VC_HOST="${STUDY_VC_HOST:-127.0.0.1}"
     # Best-effort: locate the PersonaPlex voice prompts (.pt) in the HF cache so the

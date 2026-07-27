@@ -28,12 +28,14 @@ MODELS_ONLY=false
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
 INSTALL_SYSTEM=true
 INSTALL_XVC="${INSTALL_XVC:-false}"
+INSTALL_OBSERVABILITY="${INSTALL_OBSERVABILITY:-false}"
 for a in "$@"; do
   case "$a" in
     --models-only)            MODELS_ONLY=true ;;
     --xvc)                    INSTALL_XVC=true ;;
+    --observability)          INSTALL_OBSERVABILITY=true ;;
     -y|--yes|--non-interactive) NONINTERACTIVE=1 ;;
-    -h|--help) echo "Usage: setup.sh [--models-only] [--xvc] [-y|--yes]"; exit 0 ;;
+    -h|--help) echo "Usage: setup.sh [--models-only] [--xvc] [--observability] [-y|--yes]"; exit 0 ;;
     *) warn "Unknown arg: $a" ;;
   esac
 done
@@ -88,6 +90,9 @@ fi
 if ! $MODELS_ONLY; then
   ask_yn   INSTALL_XVC    "Also install the X-VC engine? (own venv, GPU)" "N"
 fi
+if ! $MODELS_ONLY; then
+  ask_yn   INSTALL_OBSERVABILITY "Also install observability? (OpenObserve: OTel traces+logs UI at /logs)" "N"
+fi
 
 # Fixed upstreams (not prompted)
 MEANVC_URL="https://github.com/ASLP-lab/MeanVC.git"   # cloned for its speaker_verification source
@@ -126,6 +131,7 @@ echo -e "  ${BOLD}HF token${NC}     : $([ -n "$HF_TOKEN" ] && echo set || echo "
 echo -e "  ${BOLD}Models-only${NC}  : $MODELS_ONLY"
 $MODELS_ONLY || echo -e "  ${BOLD}System pkgs${NC}  : $INSTALL_SYSTEM"
 $MODELS_ONLY || echo -e "  ${BOLD}X-VC engine${NC}  : $INSTALL_XVC"
+$MODELS_ONLY || echo -e "  ${BOLD}Observability${NC}: $INSTALL_OBSERVABILITY"
 hr
 if [ "$NONINTERACTIVE" != "1" ]; then
   read -r -p "$(printf "${CYAN}?${NC} ${BOLD}Proceed?${NC} ${DIM}[Y/n]${NC} ")" __go
@@ -313,6 +319,13 @@ phase_runtime() {
     touch "$WORKSPACE/src/__init__.py" "$WORKSPACE/src/runtime/__init__.py"
   fi
   bash "$REPO_DIR/infra/generate-ssl.sh" || true
+
+  # Observability backend (OpenObserve single binary). Optional; run_all starts it and
+  # app-api proxies its UI under /logs. Non-fatal if the download fails.
+  if $INSTALL_OBSERVABILITY; then
+    WORKSPACE="$WORKSPACE" bash "$REPO_DIR/infra/observability.sh" install \
+      || warn "Observability install failed — set O2_VERSION to a valid release and rerun: bash infra/observability.sh install"
+  fi
 }
 
 # ===========================================================================

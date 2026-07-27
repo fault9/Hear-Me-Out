@@ -33,6 +33,32 @@ from common import otel  # noqa: E402
 from common import logging_setup  # noqa: E402
 
 logging_setup.init_logging("study-app-api")  # export logs over OTLP (trace-correlated) when observability is enabled
+
+
+def _mount_observability_proxy(app, upstream: str) -> None:
+    """Reverse-proxy every /logs* request to the observability UI (OpenObserve),
+    streaming both directions. Keeps the UI on :5001 so no extra port is exposed."""
+    import httpx
+    from fastapi import Request
+    from fastapi.responses import Response as _Resp
+
+    client = httpx.AsyncClient(base_url=upstream, timeout=None, follow_redirects=False)
+    _HOP = {"host", "content-length", "connection", "keep-alive", "transfer-encoding",
+            "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate"}
+
+    @app.api_route("/logs", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+    @app.api_route("/logs/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+    async def _obs_proxy(request: Request, path: str = ""):
+        url = "/logs" + (f"/{path}" if path else "")
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
+        body = await request.body()
+        try:
+            up = await client.request(request.method, url, params=request.query_params,
+                                      headers=headers, content=body)
+        except httpx.RequestError as e:
+            return JSONResponse({"error": f"observability backend unreachable: {e}"}, status_code=502)
+        resp_headers = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
+        return _Resp(content=up.content, status_code=up.status_code, headers=resp_headers)
 _default_static = REPO_ROOT / "frontend" / "dist"
 STATIC_PATH = Path(os.environ.get("FRONTEND_PATH", _default_static))
 SEED_VC_DIR = REPO_ROOT / "seed-vc"
@@ -143,6 +169,16 @@ def create_app():
     @app.get("/api/health")
     async def health_check():
         return JSONResponse({"status": "healthy", "service": "vc-api"})
+
+    # Reverse-proxy the observability UI (OpenObserve) under /logs, so traces + logs
+    # are reachable on this same :5001 port — no extra exposed port / container. Only
+    # mounted when STUDY_OBSERVABILITY_URL is set (run_all sets it when the backend is
+    # started). The upstream serves itself under /logs too (ZO_BASE_URI=/logs), so
+    # paths pass through unchanged.
+    _obs_url = os.environ.get("STUDY_OBSERVABILITY_URL")
+    if _obs_url:
+        _mount_observability_proxy(app, _obs_url.rstrip("/"))
+        logger.info(f"Observability UI proxied at /logs -> {_obs_url}")
 
     # In study mode, mount the participant-experiment API (admin + participant
     # endpoints, SQLite storage, VC-engine prepare lifecycle). HMO mode is unaffected.
