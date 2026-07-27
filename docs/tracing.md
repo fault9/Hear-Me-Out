@@ -59,6 +59,25 @@ If you'd rather use your own OTLP backend (Grafana Tempo/Loki, SigNoz, …) and 
 bundled UI, skip `--observability` and use `STUDY_TRACING=1` with
 `OTEL_EXPORTER_OTLP_ENDPOINT=http://your-collector:4318`.
 
+## Latency metrics
+
+Alongside traces/logs, the services emit OTel **metric histograms** (graphable in
+OpenObserve → Metrics; unit ms) so you can watch p50/p95 model + network latency:
+
+| Metric | Where measured | Meaning |
+|---|---|---|
+| `vc.inference_ms` `{engine}` | VC proxy, per window/chunk | X-VC / MeanVC GPU conversion time |
+| `personaplex.first_response_ms` `{engine}` | VC proxy | time from first converted audio sent → first PersonaPlex audio back |
+| `client.network_rtt_ms` | browser → app-api `/ping` | browser↔server network round-trip |
+| `client.connect_ms` | browser | call start → PersonaPlex handshake (via proxy) |
+| `client.first_audio_ms` | browser | call start → first model audio heard (end-to-end) |
+
+The same numbers also ride on the trace: the `GET /chat-proxy` span carries
+`study.first_response_ms` and `study.vc_inference_avg_ms`, and the browser posts its
+marks to `POST /api/study/telemetry` (recorded + logged, tagged with the session). So in
+a single trace you can see the network hop, the VC compute, and PersonaPlex's response
+time for that scenario.
+
 ## How it's wired
 
 - **Traces**: `services/common/otel.py` — FastAPI + requests + aiohttp-client

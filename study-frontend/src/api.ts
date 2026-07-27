@@ -97,6 +97,16 @@ export const api = {
     startTrace();
     return jpost("/audio-check/start", { code });
   },
+  telemetry: (session_id: string, marks: Record<string, number>) =>
+    jpost("/telemetry", { session_id, marks }).catch(() => {}),
+  // Round-trip the /ping endpoint to estimate browser↔server network latency (ms).
+  async pingRttMs(): Promise<number | null> {
+    try {
+      const t0 = performance.now();
+      await fetch(`${BASE}/ping`, { headers: traceHeaders() });
+      return performance.now() - t0;
+    } catch { return null; }
+  },
   playbackUrl: (code: string, scenarioOrder?: number, track?: string) => {
     const qs = new URLSearchParams()
     if (scenarioOrder) qs.set("scenario", String(scenarioOrder))

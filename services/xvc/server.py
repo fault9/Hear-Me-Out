@@ -363,9 +363,14 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     chunk_count = 0
     processed_samples = 0            # SR-rate samples consumed → elapsed time for the schedule
     opus_pcm_buf = np.zeros(0, dtype=np.float32)
+    # latency tracking
+    first_send_ts = None             # when the first converted audio was sent to PersonaPlex
+    first_model_done = False         # first PersonaPlex audio frame seen
+    vc_ms_total = 0.0                # sum of per-window X-VC inference time
+    vc_windows = 0
 
     async def browser_to_pplx():
-        nonlocal chunk_count, processed_samples, opus_pcm_buf
+        nonlocal chunk_count, processed_samples, opus_pcm_buf, first_send_ts, vc_ms_total, vc_windows
         async for msg in browser_ws:
             if msg.type == web.WSMsgType.BINARY:
                 incoming = np.frombuffer(msg.data, dtype=np.float32).copy()
@@ -379,11 +384,17 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     # Natural (or missing target): forward the raw mic window unmodified.
                     curs = [incoming]
                 else:
+                    _t0 = time.perf_counter()
                     try:
                         curs = await loop.run_in_executor(None, sess.feed, incoming)
                     except Exception as e:
                         logger.error(f"[xvc proxy] inference error: {e}")
                         continue
+                    if curs:  # X-VC GPU forward latency, per produced window
+                        dt = (time.perf_counter() - _t0) * 1000.0 / len(curs)
+                        vc_ms_total += dt * len(curs); vc_windows += len(curs)
+                        if otel:
+                            otel.record_latency("vc.inference_ms", dt, engine="xvc")
 
                 for cur in curs:
                     chunk_count += 1
@@ -399,6 +410,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                             encoded = opus_writer.read_bytes()
                             if len(encoded) == 0:
                                 break
+                            if first_send_ts is None:
+                                first_send_ts = time.perf_counter()
                             await pplx_ws.send_bytes(TAG_AUDIO + encoded)
                             if opus_reader_dbg is not None:
                                 opus_reader_dbg.append_bytes(encoded)
@@ -411,8 +424,18 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                 break
 
     async def pplx_to_browser():
+        nonlocal first_model_done
         async for msg in pplx_ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
+                # 0x01 = model Opus audio: measure time-to-first-response after we
+                # started sending converted user audio to PersonaPlex.
+                if not first_model_done and msg.data[:1] == b"\x01" and first_send_ts is not None:
+                    first_model_done = True
+                    _lat = (time.perf_counter() - first_send_ts) * 1000.0
+                    if otel:
+                        otel.record_latency("personaplex.first_response_ms", _lat, engine="xvc")
+                        otel.set_session_attributes(first_response_ms=round(_lat))
+                    logger.info(f"[xvc proxy] first PersonaPlex audio {_lat:.0f} ms after first send")
                 if not browser_ws.closed:
                     await browser_ws.send_bytes(msg.data)
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
@@ -451,6 +474,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
 
     if otel:
         otel.set_session_attributes(chunks=chunk_count)
+        if vc_windows:
+            otel.set_session_attributes(vc_inference_avg_ms=round(vc_ms_total / vc_windows, 1))
     logger.info(f"[xvc proxy] closed after {chunk_count} chunks")
     return browser_ws
 
@@ -473,6 +498,7 @@ def create_app() -> web.Application:
     # traceparent from headers or the ?traceparent= query (WebSocket handshakes),
     # so a browser session links to app-api's /condition span. No-op if disabled.
     if otel and otel.init_tracing("xvc"):
+        otel.init_metrics("xvc")          # latency histograms (vc.inference_ms, personaplex.first_response_ms)
         otel.instrument_aiohttp_client()  # traces the /condition GET to app-api
         mws.append(otel.aiohttp_middleware("xvc"))
         logger.info("OpenTelemetry tracing enabled (xvc)")

@@ -472,6 +472,8 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
 
     if otel:
         otel.set_session_attributes(chunks=chunk_count)
+        if vc_chunks:
+            otel.set_session_attributes(vc_inference_avg_ms=round(vc_ms_total / vc_chunks, 1))
     logger.info(f"Stream closed after {chunk_count} chunks")
     return ws
 
@@ -635,9 +637,15 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     # PersonaPlex itself feeds. Buffer the resampled audio and emit fixed frames.
     OPUS_FRAME = 1920
     opus_pcm_buf = np.array([], dtype=np.float32)
+    # latency tracking
+    first_send_ts = None
+    first_model_done = False
+    vc_ms_total = 0.0
+    vc_chunks = 0
 
     async def browser_to_pplx():
         nonlocal chunk_count, processed_samples, acc_samples, opus_pcm_buf
+        nonlocal first_send_ts, vc_ms_total, vc_chunks
         async for msg in browser_ws:
             if msg.type == web.WSMsgType.BINARY:
                 incoming = np.frombuffer(msg.data, dtype=np.float32).copy()
@@ -671,11 +679,16 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                         seg_counts[tid] = seg_counts.get(tid, 0) + 1
                         if seg_counts[tid] % 50 == 0:
                             sess.reset_cache()
+                        _t0 = time.perf_counter()
                         try:
                             vc_wav = await loop.run_in_executor(None, sess.inference_one_chunk, chunk)
                         except Exception as e:
                             logger.error(f"[proxy] Inference error chunk {chunk_count}: {e}")
                             continue
+                        _dt = (time.perf_counter() - _t0) * 1000.0
+                        vc_ms_total += _dt; vc_chunks += 1
+                        if otel:
+                            otel.record_latency("vc.inference_ms", _dt, engine="meanvc")
 
                     # (a) forward converted audio to PersonaPlex as Opus.
                     # sphn encodes at 24 kHz, so upsample the 16 kHz VC output,
@@ -694,6 +707,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                             encoded = opus_writer.read_bytes()
                             if len(encoded) == 0:
                                 break
+                            if first_send_ts is None:
+                                first_send_ts = time.perf_counter()
                             await pplx_ws.send_bytes(TAG_AUDIO + encoded)
                             if opus_reader_dbg is not None:
                                 opus_reader_dbg.append_bytes(encoded)
@@ -709,8 +724,16 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                 break
 
     async def pplx_to_browser():
+        nonlocal first_model_done
         async for msg in pplx_ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
+                if not first_model_done and msg.data[:1] == b"\x01" and first_send_ts is not None:
+                    first_model_done = True
+                    _lat = (time.perf_counter() - first_send_ts) * 1000.0
+                    if otel:
+                        otel.record_latency("personaplex.first_response_ms", _lat, engine="meanvc")
+                        otel.set_session_attributes(first_response_ms=round(_lat))
+                    logger.info(f"[proxy] first PersonaPlex audio {_lat:.0f} ms after first send")
                 if not browser_ws.closed:
                     await browser_ws.send_bytes(msg.data)
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
@@ -761,6 +784,7 @@ async def cors_middleware(request: web.Request, handler):
 def create_app() -> web.Application:
     mws = [cors_middleware]
     if otel and otel.init_tracing("meanvc"):
+        otel.init_metrics("meanvc")
         otel.instrument_aiohttp_client()
         mws.append(otel.aiohttp_middleware("meanvc"))
         logger.info("OpenTelemetry tracing enabled (meanvc)")

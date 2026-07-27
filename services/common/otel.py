@@ -104,6 +104,58 @@ def set_session_attributes(**attrs: Any) -> None:
             span.set_attribute(k if k.startswith("study.") else f"study.{k}", v)
 
 
+# ---- metrics (latency histograms, graphable in the observability UI) ----
+_METRICS_ENABLED = False
+_hist_cache: dict = {}
+
+
+def init_metrics(service_name: str) -> bool:
+    """Set up the OTLP metrics pipeline (same enable gate + endpoint as tracing).
+    Idempotent; returns True if metrics are active."""
+    global _METRICS_ENABLED
+    if _METRICS_ENABLED:
+        return True
+    if not _HAVE_OTEL or not _want_tracing():
+        return False
+    try:
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        if os.environ.get("OTEL_TRACES_EXPORTER", "otlp").lower() == "console":
+            from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
+            reader = PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=10000)
+        else:
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+            endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
+            reader = PeriodicExportingMetricReader(
+                OTLPMetricExporter(endpoint=f"{endpoint.rstrip('/')}/v1/metrics"),
+                export_interval_millis=10000)
+        metrics.set_meter_provider(MeterProvider(
+            resource=Resource.create({"service.name": os.environ.get("OTEL_SERVICE_NAME", service_name)}),
+            metric_readers=[reader]))
+        _METRICS_ENABLED = True
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def record_latency(name: str, value_ms: float, **attrs) -> None:
+    """Record a latency (ms) into a histogram. No-op unless metrics are active.
+    Attribute keys are namespaced under `study.` unless already dotted."""
+    if not _METRICS_ENABLED:
+        return
+    try:
+        from opentelemetry import metrics
+        h = _hist_cache.get(name)
+        if h is None:
+            h = metrics.get_meter("study").create_histogram(name, unit="ms", description=name)
+            _hist_cache[name] = h
+        clean = {(k if "." in k else f"study.{k}"): v for k, v in attrs.items() if v is not None}
+        h.record(value_ms, clean)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def extract_context(headers: Optional[dict] = None, traceparent: Optional[str] = None,
                     tracestate: Optional[str] = None):
     """Build a parent context from inbound headers and/or an explicit traceparent

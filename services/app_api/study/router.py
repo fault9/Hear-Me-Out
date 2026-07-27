@@ -551,6 +551,31 @@ def build_study_router() -> APIRouter:
                 f"(model_turns={len(model_turns)}) — VC/PersonaPlex path likely failed")
         return {"ok": True, "files": files, "analysis": "deferred"}
 
+    @router.get("/ping")
+    async def ping():
+        """Tiny endpoint the browser round-trips to measure network latency."""
+        return {"ok": True}
+
+    @router.post("/telemetry")
+    async def telemetry(body: dict):
+        """Client-measured latencies for a session (network RTT, connect, first-audio).
+        Recorded as `client.*` latency histograms + logged, tagged with the session."""
+        sid = body.get("session_id")
+        marks = body.get("marks") or {}
+        if logging_setup and sid:
+            logging_setup.set_log_session(sid)
+        if otel:
+            otel.set_session_attributes(session_id=sid)
+        for k, v in marks.items():
+            try:
+                val = float(v)
+            except (TypeError, ValueError):
+                continue
+            if otel:
+                otel.record_latency(f"client.{k}", val, session_id=sid)
+        logger.info(f"[study] client telemetry session={sid} marks={marks}")
+        return {"ok": True}
+
     @router.post("/session/{session_id}/end")
     async def session_end(session_id: str, body: dict):
         if not backend.get_session(session_id):

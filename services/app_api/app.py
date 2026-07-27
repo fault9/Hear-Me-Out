@@ -143,6 +143,7 @@ def create_app():
     # route + outbound `requests` call (e.g. engine.py -> :5002 load-target) and
     # continues traces started by the browser / VC proxy.
     if otel.init_tracing("study-app-api"):
+        otel.init_metrics("study-app-api")  # client-reported latency histograms (client.*)
         otel.instrument_fastapi(app)
         otel.instrument_requests()
         logger.info("OpenTelemetry tracing enabled (app-api)")
