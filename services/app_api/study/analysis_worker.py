@@ -13,14 +13,17 @@ responsive. Progress is reported via a small JSON status file that the API's
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
 import time
 from pathlib import Path
 
-# Make `study` + `metrics` importable when launched as `-m study.analysis_worker`.
+# Make `study` + `metrics` (parents[1] = services/app_api) and the shared `common`
+# package (parents[2] = services/) importable when launched as `-m study.analysis_worker`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # Leave CPU headroom for the live path (PersonaPlex/VC proxy) if this ever runs
 # alongside a session; the batch is deliberately deprioritised, not maximal.
@@ -33,6 +36,16 @@ except Exception:  # noqa: BLE001
 
 from study.analysis import _session_paths, run_session_analysis, status_path  # noqa: E402
 from study.storage import get_backend  # noqa: E402
+
+# Shared OTel helper (services/ is on sys.path via the insert above). No-op unless
+# OTEL_* is configured; the worker exports to the same collector as app-api.
+try:
+    from common import otel  # noqa: E402
+    otel.init_tracing("study-analysis")
+    _tracer = otel.get_tracer("study-analysis")
+except Exception:  # noqa: BLE001
+    otel = None
+    _tracer = None
 
 
 def _write(**kw) -> None:
@@ -61,8 +74,13 @@ def main() -> None:
     for s in pending:
         _write(running=True, done=done, total=total, current=s["session_id"], study_id=study_id)
         conv, raw, mt = _session_paths(s)
+        span_cm = (otel.start_span(_tracer, "analysis.session",
+                                   attributes={"study.session_id": s["session_id"],
+                                               "study.study_id": study_id})
+                   if otel else contextlib.nullcontext())
         try:
-            run_session_analysis(s["session_id"], conv, raw, mt)
+            with span_cm:
+                run_session_analysis(s["session_id"], conv, raw, mt)
         except Exception as e:  # noqa: BLE001 - one bad session shouldn't kill the batch
             print(f"[analysis_worker] error for {s['session_id']}: {e}", file=sys.stderr)
         done += 1

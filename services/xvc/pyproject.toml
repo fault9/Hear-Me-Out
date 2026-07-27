@@ -41,6 +41,10 @@ dependencies = [
     "aiohttp>=3.10",
     "huggingface-hub",
     "modelscope",
+    # Distributed tracing (OpenTelemetry) — optional; no-op unless OTEL_* is set.
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-aiohttp-client",
 ]
 
 [[tool.uv.index]]

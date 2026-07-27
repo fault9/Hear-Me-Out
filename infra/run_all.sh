@@ -149,6 +149,18 @@ if [ "$APP_MODE" = "study" ]; then
         exit 1
     fi
     echo -e "  ${DIM}storage${NC}    db=$STUDY_DB_PATH  media=$STUDY_DATA_DIR"
+    # Distributed tracing (OpenTelemetry). OFF by default. Opt in with STUDY_TRACING=1
+    # to export spans to a collector (Jaeger all-in-one accepts OTLP directly):
+    #   docker run -d --name jaeger -p 16686:16686 -p 4318:4318 \
+    #     -e COLLECTOR_OTLP_ENABLED=true jaegertracing/all-in-one:latest
+    # then open the UI at http://<host>:16686 (search by service or study.session_id).
+    # These vars are inherited by app-api and (via engine.py) the on-demand VC engine;
+    # each service names itself (study-app-api / xvc / meanvc), so don't set OTEL_SERVICE_NAME.
+    if [ "$STUDY_TRACING" = "1" ] || [ "$STUDY_TRACING" = "true" ]; then
+        export OTEL_TRACES_EXPORTER="${OTEL_TRACES_EXPORTER:-otlp}"
+        export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://127.0.0.1:4318}"
+        echo -e "  ${DIM}tracing${NC}    OpenTelemetry → $OTEL_EXPORTER_OTLP_ENDPOINT  ${DIM}(Jaeger UI :16686)${NC}"
+    fi
     export STUDY_VC_HOST="${STUDY_VC_HOST:-127.0.0.1}"
     # Best-effort: locate the PersonaPlex voice prompts (.pt) in the HF cache so the
     # admin's assistant-voice dropdown (/api/study/voices) is populated.

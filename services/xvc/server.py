@@ -27,6 +27,7 @@ Env:
   XVC_PROXY_DEBUG_DIR  optional: dump exactly-what-PersonaPlex-hears WAVs
 """
 import asyncio
+import contextlib
 import logging
 import os
 import sys
@@ -49,6 +50,16 @@ logger = logging.getLogger("xvc_server")
 XVC_DIR = os.environ.get("XVC_DIR", os.getcwd())
 if XVC_DIR not in sys.path:
     sys.path.insert(0, XVC_DIR)
+
+# Shared OpenTelemetry helper lives at <repo>/services/common (this file is
+# <repo>/services/xvc/server.py). No-op unless OTEL_* is configured.
+_SERVICES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SERVICES_DIR not in sys.path:
+    sys.path.insert(0, _SERVICES_DIR)
+try:
+    from common import otel
+except Exception:  # noqa: BLE001
+    otel = None
 
 from bins.infer_utils import (  # noqa: E402  (import after sys.path setup)
     load_xvc,
@@ -323,13 +334,20 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     opus_reader_dbg = sphn.OpusStreamReader(24000) if debug_dir else None
     debug_pcm: list[np.ndarray] = []
 
+    if otel:
+        otel.set_session_attributes(session_id=session_id or target_id, engine="xvc",
+                                    schedule=str([s.get("mode") for s in schedule]))
+
     qs = urlencode({"voice_prompt": voice_prompt, "text_prompt": text_prompt})
     pplx_url = f"wss://{PERSONAPLEX_HOST}:{PERSONAPLEX_PORT}/api/chat?{qs}"
     logger.info(f"[xvc proxy] connecting to PersonaPlex: {pplx_url}")
 
+    _tracer = otel.get_tracer("xvc") if otel else None
     client = aiohttp.ClientSession()
     try:
-        pplx_ws = await client.ws_connect(pplx_url, ssl=False, max_msg_size=0)
+        with (otel.start_span(_tracer, "personaplex.connect", kind="client") if otel
+              else contextlib.nullcontext()):
+            pplx_ws = await client.ws_connect(pplx_url, ssl=False, max_msg_size=0)
     except Exception as e:
         logger.error(f"[xvc proxy] PersonaPlex connect failed: {e}")
         await browser_ws.send_json({"error": f"PersonaPlex unavailable: {e}"})
@@ -426,6 +444,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         except Exception as e:
             logger.error(f"[xvc proxy] failed to save debug WAV: {e}")
 
+    if otel:
+        otel.set_session_attributes(chunks=chunk_count)
     logger.info(f"[xvc proxy] closed after {chunk_count} chunks")
     return browser_ws
 
@@ -443,7 +463,15 @@ async def cors_middleware(request: web.Request, handler):
 
 
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[cors_middleware], client_max_size=10 * 1024 * 1024)
+    mws = [cors_middleware]
+    # Tracing middleware opens a SERVER span per request and reads the W3C
+    # traceparent from headers or the ?traceparent= query (WebSocket handshakes),
+    # so a browser session links to app-api's /condition span. No-op if disabled.
+    if otel and otel.init_tracing("xvc"):
+        otel.instrument_aiohttp_client()  # traces the /condition GET to app-api
+        mws.append(otel.aiohttp_middleware("xvc"))
+        logger.info("OpenTelemetry tracing enabled (xvc)")
+    app = web.Application(middlewares=mws, client_max_size=10 * 1024 * 1024)
     app.router.add_post("/api/meanvc/load-target", handle_load_target)
     app.router.add_get("/api/meanvc/stream", handle_stream)
     app.router.add_get("/api/meanvc/chat-proxy", handle_chat_proxy)

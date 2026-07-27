@@ -21,7 +21,23 @@ from typing import Optional
 import requests
 import urllib3
 
+import contextlib
+
+try:
+    from common import otel  # shared OpenTelemetry helper (services/ on sys.path)
+except Exception:  # noqa: BLE001
+    otel = None
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _span(name: str, **attrs):
+    """Trace span if OTel is active, else a no-op context manager. Attribute keys
+    are namespaced under `study.` by the helper."""
+    if otel:
+        return otel.start_span(otel.get_tracer("study-app-api"), name,
+                               attributes={f"study.{k}": v for k, v in attrs.items()})
+    return contextlib.nullcontext()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VC_ENGINE_SCRIPT = REPO_ROOT / "infra" / "vc_engine.sh"
@@ -168,14 +184,18 @@ class VCEngineManager:
 
             self._reset_steps()
             try:
+              with _span("vc.ensure_engine", study_id=study_id, engine=target_engine,
+                         force_restart=force, targets=len(targets)):
                 if force or not (self.is_engine_up() and self._current_engine == target_engine):
                     s = self._step(f"Starting {target_engine} voice engine")
-                    self._restart_to(target_engine)
+                    with _span("vc.restart_engine", engine=target_engine):
+                        self._restart_to(target_engine)
                     self._finish_step(s)
 
                 s = self._step(f"Loading {len(targets)} target voice(s)")
                 backend.clear_engine_target_ids(study_id, target_engine)
-                self._load_targets(backend, targets)
+                with _span("vc.load_targets", targets=len(targets)):
+                    self._load_targets(backend, targets)
                 self._loaded_engine = target_engine
                 self._finish_step(s)
 

@@ -20,6 +20,10 @@ dependencies = [
     # s3prl (wavlm_large SV) runs from the torch-hub cache; its upstreams import these.
     "omegaconf",
     "pyyaml",
+    # Distributed tracing (OpenTelemetry) — optional; no-op unless OTEL_* is set.
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-aiohttp-client",
 ]
 
 [[tool.uv.index]]

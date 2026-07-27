@@ -25,6 +25,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("meanvc-server")
 
+# Shared OpenTelemetry helper (<repo>/services/common); no-op unless OTEL_* is set.
+import contextlib  # noqa: E402
+_SERVICES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SERVICES_DIR not in sys.path:
+    sys.path.insert(0, _SERVICES_DIR)
+try:
+    from common import otel
+except Exception:  # noqa: BLE001
+    otel = None
+
 
 # Replicate MeanVC's Mel spectrogram and fbank extractors ------------------------------------------------
 def _amp_to_db(x, min_level_db):
@@ -457,6 +467,8 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
         elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
             break
 
+    if otel:
+        otel.set_session_attributes(chunks=chunk_count)
     logger.info(f"Stream closed after {chunk_count} chunks")
     return ws
 
@@ -589,13 +601,19 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     opus_reader_dbg = sphn.OpusStreamReader(24000) if debug_dir else None
     debug_pcm: list[np.ndarray] = []
 
+    if otel:
+        otel.set_session_attributes(session_id=session_id or "direct", engine="meanvc")
+
     qs = urlencode({"voice_prompt": voice_prompt, "text_prompt": text_prompt})
     pplx_url = f"wss://{PERSONAPLEX_HOST}:{PERSONAPLEX_PORT}/api/chat?{qs}"
     logger.info(f"[proxy] Connecting to PersonaPlex: {pplx_url}")
 
+    _tracer = otel.get_tracer("meanvc") if otel else None
     client = aiohttp.ClientSession()
     try:
-        pplx_ws = await client.ws_connect(pplx_url, ssl=False, max_msg_size=0)
+        with (otel.start_span(_tracer, "personaplex.connect", kind="client") if otel
+              else contextlib.nullcontext()):
+            pplx_ws = await client.ws_connect(pplx_url, ssl=False, max_msg_size=0)
     except Exception as e:
         logger.error(f"[proxy] Failed to connect to PersonaPlex: {e}")
         await browser_ws.send_json({"error": f"PersonaPlex unavailable: {e}"})
@@ -736,9 +754,12 @@ async def cors_middleware(request: web.Request, handler):
 
 
 def create_app() -> web.Application:
-    app = web.Application(
-        middlewares=[cors_middleware], client_max_size=10 * 1024 * 1024
-    )
+    mws = [cors_middleware]
+    if otel and otel.init_tracing("meanvc"):
+        otel.instrument_aiohttp_client()
+        mws.append(otel.aiohttp_middleware("meanvc"))
+        logger.info("OpenTelemetry tracing enabled (meanvc)")
+    app = web.Application(middlewares=mws, client_max_size=10 * 1024 * 1024)
     app.router.add_post("/api/meanvc/load-target", handle_load_target)
     app.router.add_get("/api/meanvc/stream", handle_stream)
     app.router.add_get("/api/meanvc/chat-proxy", handle_chat_proxy)

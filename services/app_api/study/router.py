@@ -33,7 +33,18 @@ from .models import (REQUIRED_CARD_FIELDS, CreateStudyRequest, EnterRequest,
                      SubmitRequest, UpdateStudyRequest, default_questionnaires)
 from .storage import get_backend
 
+try:
+    from common import otel  # shared OpenTelemetry helper (services/ is on sys.path)
+except Exception:  # noqa: BLE001 - tracing is optional
+    otel = None
+
 logger = logging.getLogger(__name__)
+_tracer = otel.get_tracer("study-app-api") if otel else None
+
+
+def _trace_session(**attrs):
+    if otel:
+        otel.set_session_attributes(**attrs)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE = Path(os.environ.get("WORKSPACE", str(REPO_ROOT.parent)))
@@ -420,6 +431,8 @@ def build_study_router() -> APIRouter:
         manager.start_prepare_async(backend, p["study_id"], engine)
 
         session_id = f"{p['participant_id']}_S{body.scenario_order:02d}"
+        _trace_session(session_id=session_id, participant_id=p["participant_id"],
+                       study_id=p["study_id"], scenario_order=body.scenario_order, engine=engine)
         # target speaker id from the first vc segment (for metadata)
         target_speaker = ""
         for seg in scenario.get("voice_schedule") or []:
@@ -447,6 +460,7 @@ def build_study_router() -> APIRouter:
     async def get_condition(session_id: str):
         """Internal: the active VC engine resolves the hidden prompt + voice
         schedule here (localhost). Never called by the browser."""
+        _trace_session(session_id=session_id)
         # Audio-check session: generic natural pass-through, not a real scenario.
         if session_id.endswith("_CHECK"):
             return {
@@ -498,6 +512,9 @@ def build_study_router() -> APIRouter:
         session = backend.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Unknown session")
+        _trace_session(session_id=session_id, participant_id=session["participant_id"],
+                       scenario_order=session.get("scenario_order"),
+                       voice_condition=session.get("voice_condition"))
         out_dir = SESSIONS_DIR / session["participant_id"] / session_id
         out_dir.mkdir(parents=True, exist_ok=True)
         files = {}

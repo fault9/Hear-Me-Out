@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 # This file lives at <repo>/services/app_api/app.py, so the repo root is parents[2].
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Make the shared `common` package (OpenTelemetry bootstrap) importable.
+_SERVICES_DIR = str(Path(__file__).resolve().parents[1])
+if _SERVICES_DIR not in sys.path:
+    sys.path.insert(0, _SERVICES_DIR)
+from common import otel  # noqa: E402
 _default_static = REPO_ROOT / "frontend" / "dist"
 STATIC_PATH = Path(os.environ.get("FRONTEND_PATH", _default_static))
 SEED_VC_DIR = REPO_ROOT / "seed-vc"
@@ -104,6 +109,14 @@ class SPAStaticFiles(StaticFiles):
 
 def create_app():
     app = FastAPI()
+
+    # Distributed tracing (no-op unless OTEL_* is configured). Instruments every
+    # route + outbound `requests` call (e.g. engine.py -> :5002 load-target) and
+    # continues traces started by the browser / VC proxy.
+    if otel.init_tracing("study-app-api"):
+        otel.instrument_fastapi(app)
+        otel.instrument_requests()
+        logger.info("OpenTelemetry tracing enabled (app-api)")
 
     @app.on_event("startup")
     async def preload_models():

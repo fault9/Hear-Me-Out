@@ -1,6 +1,8 @@
 // Study API client (v2 — multi-study). Participant calls are same-origin; admin
 // calls carry the X-Study-Admin-Token header.
 
+import { traceHeaders, startTrace } from "@/lib/trace";
+
 const BASE = "/api/study";
 
 async function asError(r: Response): Promise<Error> {
@@ -13,7 +15,7 @@ async function asError(r: Response): Promise<Error> {
 
 async function jpost(path: string, body: unknown, headers: Record<string, string> = {}) {
   const r = await fetch(`${BASE}${path}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json", ...traceHeaders(), ...headers }, body: JSON.stringify(body),
   });
   if (!r.ok) throw await asError(r);
   return r.json();
@@ -21,20 +23,20 @@ async function jpost(path: string, body: unknown, headers: Record<string, string
 
 async function jput(path: string, body: unknown, headers: Record<string, string> = {}) {
   const r = await fetch(`${BASE}${path}`, {
-    method: "PUT", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
+    method: "PUT", headers: { "Content-Type": "application/json", ...traceHeaders(), ...headers }, body: JSON.stringify(body),
   });
   if (!r.ok) throw await asError(r);
   return r.json();
 }
 
 async function jget(path: string, headers: Record<string, string> = {}) {
-  const r = await fetch(`${BASE}${path}`, { headers });
+  const r = await fetch(`${BASE}${path}`, { headers: { ...traceHeaders(), ...headers } });
   if (!r.ok) throw await asError(r);
   return r.json();
 }
 
 async function jdel(path: string, headers: Record<string, string> = {}) {
-  const r = await fetch(`${BASE}${path}`, { method: "DELETE", headers });
+  const r = await fetch(`${BASE}${path}`, { method: "DELETE", headers: { ...traceHeaders(), ...headers } });
   if (!r.ok) throw await asError(r);
   return r.json();
 }
@@ -82,15 +84,19 @@ export const api = {
   runStart: (code: string, mode: "resume" | "restart") => jpost("/run/start", { code, mode }),
   progress: (code: string, current_step: Record<string, any>, completed: Record<string, any>) =>
     jpost("/run/progress", { code, current_step, completed }),
-  sessionStart: (code: string, scenario_order: number): Promise<{ session_id: string; scenario: ScenarioInfo; prepare: PrepareState }> =>
-    jpost("/session/start", { code, scenario_order }),
+  sessionStart: (code: string, scenario_order: number): Promise<{ session_id: string; scenario: ScenarioInfo; prepare: PrepareState }> => {
+    startTrace(); // one trace per scenario: session/start + chat-proxy WS + save group together
+    return jpost("/session/start", { code, scenario_order });
+  },
   prepareStatus: (): Promise<PrepareState> => jget("/run/prepare/status"),
   sessionEnd: (sessionId: string, reason: string) => jpost(`/session/${sessionId}/end`, { reason }),
   questionnaire: (sessionId: string | null, code: string, kind: string, payload: Record<string, any>) =>
     jpost(`/session/${sessionId ?? "none"}/questionnaire`, { code, kind, payload }),
   submit: (code: string) => jpost("/run/submit", { code }),
-  audioCheckStart: (code: string): Promise<{ session_id: string; prepare: PrepareState }> =>
-    jpost("/audio-check/start", { code }),
+  audioCheckStart: (code: string): Promise<{ session_id: string; prepare: PrepareState }> => {
+    startTrace();
+    return jpost("/audio-check/start", { code });
+  },
   playbackUrl: (code: string, scenarioOrder?: number, track?: string) => {
     const qs = new URLSearchParams()
     if (scenarioOrder) qs.set("scenario", String(scenarioOrder))
@@ -109,7 +115,7 @@ export const api = {
     if (arts.model) fd.append("model", arts.model, "model.wav");
     if (arts.merged) fd.append("merged", arts.merged, "merged.wav");
     fd.append("model_transcript", JSON.stringify(arts.model_transcript ?? null));
-    const r = await fetch(`${BASE}/session/${sessionId}/save`, { method: "POST", body: fd });
+    const r = await fetch(`${BASE}/session/${sessionId}/save`, { method: "POST", headers: traceHeaders(), body: fd });
     if (!r.ok) throw await asError(r);
     return r.json();
   },
