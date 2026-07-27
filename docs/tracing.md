@@ -78,6 +78,15 @@ marks to `POST /api/study/telemetry` (recorded + logged, tagged with the session
 a single trace you can see the network hop, the VC compute, and PersonaPlex's response
 time for that scenario.
 
+### GPU metrics
+
+OTel does **not** collect GPU stats on its own — we add them as the source. app-api polls
+**NVML** (needs the NVIDIA driver + `nvidia-ml-py`) and emits observable gauges every ~10 s,
+per device (`{gpu}`): `gpu.utilization` (%), `gpu.memory.used_mib`, `gpu.memory.total_mib`,
+`gpu.temperature_c`, `gpu.power_w`. Since the GPU is shared by PersonaPlex + X-VC, graph
+these against `vc.inference_ms` / `personaplex.first_response_ms` to see how GPU load tracks
+latency (e.g. contention when the analysis batch runs). No-op on CPU-only boxes.
+
 ## How it's wired
 
 - **Traces**: `services/common/otel.py` — FastAPI + requests + aiohttp-client

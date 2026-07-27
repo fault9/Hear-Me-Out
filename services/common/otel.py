@@ -139,6 +139,52 @@ def init_metrics(service_name: str) -> bool:
     return True
 
 
+def init_gpu_metrics(service_name: str) -> bool:
+    """Emit NVIDIA GPU metrics (utilization / memory / temp / power) as OTel observable
+    gauges, polled from NVML at export time. OTel does NOT collect GPU stats itself —
+    this is the source. No-op unless metrics are enabled and NVML is available (needs
+    the NVIDIA driver + `nvidia-ml-py`); safe on CPU-only / dev boxes.
+
+    Device-level metrics describe the whole GPU regardless of which process reads them,
+    so call this from ONE always-on process (app-api) to avoid double-counting."""
+    if not init_metrics(service_name):
+        return False
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
+        handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(count)]
+    except Exception:  # noqa: BLE001 - no driver / not installed
+        return False
+
+    from opentelemetry import metrics
+    from opentelemetry.metrics import Observation
+
+    def _obs(fn):
+        def _cb(_options):
+            out = []
+            for i, h in enumerate(handles):
+                try:
+                    out.append(Observation(fn(h), {"gpu": i}))
+                except Exception:  # noqa: BLE001 - one bad read shouldn't drop the rest
+                    pass
+            return out
+        return _cb
+
+    m = metrics.get_meter("study.gpu")
+    m.create_observable_gauge("gpu.utilization", unit="%",
+        callbacks=[_obs(lambda h: pynvml.nvmlDeviceGetUtilizationRates(h).gpu)])
+    m.create_observable_gauge("gpu.memory.used_mib", unit="MiB",
+        callbacks=[_obs(lambda h: pynvml.nvmlDeviceGetMemoryInfo(h).used / (1024 * 1024))])
+    m.create_observable_gauge("gpu.memory.total_mib", unit="MiB",
+        callbacks=[_obs(lambda h: pynvml.nvmlDeviceGetMemoryInfo(h).total / (1024 * 1024))])
+    m.create_observable_gauge("gpu.temperature_c", unit="Cel",
+        callbacks=[_obs(lambda h: pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU))])
+    m.create_observable_gauge("gpu.power_w", unit="W",
+        callbacks=[_obs(lambda h: pynvml.nvmlDeviceGetPowerUsage(h) / 1000.0)])
+    return True
+
+
 def record_latency(name: str, value_ms: float, **attrs) -> None:
     """Record a latency (ms) into a histogram. No-op unless metrics are active.
     Attribute keys are namespaced under `study.` unless already dotted."""

@@ -144,6 +144,7 @@ def create_app():
     # continues traces started by the browser / VC proxy.
     if otel.init_tracing("study-app-api"):
         otel.init_metrics("study-app-api")  # client-reported latency histograms (client.*)
+        otel.init_gpu_metrics("study-app-api")  # NVML GPU gauges (util/mem/temp/power)
         otel.instrument_fastapi(app)
         otel.instrument_requests()
         logger.info("OpenTelemetry tracing enabled (app-api)")

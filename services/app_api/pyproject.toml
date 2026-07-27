@@ -52,6 +52,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http",
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-instrumentation-requests",
+    "nvidia-ml-py",  # NVML GPU metrics (utilization/memory/temp/power) via OTel gauges
 ]
 
 # PyTorch CUDA 12.1 wheels (shared with meanvc/personaplex via uv's global cache).
