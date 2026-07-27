@@ -32,8 +32,11 @@ if _SERVICES_DIR not in sys.path:
     sys.path.insert(0, _SERVICES_DIR)
 try:
     from common import otel
+    from common import logging_setup
+    logging_setup.init_logging("meanvc")  # export logs over OTLP (trace-correlated) when observability is enabled
 except Exception:  # noqa: BLE001
     otel = None
+    logging_setup = None
 
 
 # Replicate MeanVC's Mel spectrogram and fbank extractors ------------------------------------------------
@@ -601,6 +604,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     opus_reader_dbg = sphn.OpusStreamReader(24000) if debug_dir else None
     debug_pcm: list[np.ndarray] = []
 
+    if logging_setup:
+        logging_setup.set_log_session(session_id or "direct")
     if otel:
         otel.set_session_attributes(session_id=session_id or "direct", engine="meanvc")
 

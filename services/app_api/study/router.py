@@ -35,16 +35,21 @@ from .storage import get_backend
 
 try:
     from common import otel  # shared OpenTelemetry helper (services/ is on sys.path)
-except Exception:  # noqa: BLE001 - tracing is optional
+    from common import logging_setup
+except Exception:  # noqa: BLE001 - tracing/structured logging are optional
     otel = None
+    logging_setup = None
 
 logger = logging.getLogger(__name__)
 _tracer = otel.get_tracer("study-app-api") if otel else None
 
 
 def _trace_session(**attrs):
+    """Stamp span attributes AND tag this request's logs with the session id."""
     if otel:
         otel.set_session_attributes(**attrs)
+    if logging_setup and attrs.get("session_id"):
+        logging_setup.set_log_session(attrs["session_id"])
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE = Path(os.environ.get("WORKSPACE", str(REPO_ROOT.parent)))

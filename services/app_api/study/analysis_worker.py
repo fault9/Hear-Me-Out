@@ -41,10 +41,13 @@ from study.storage import get_backend  # noqa: E402
 # OTEL_* is configured; the worker exports to the same collector as app-api.
 try:
     from common import otel  # noqa: E402
+    from common import logging_setup  # noqa: E402
     otel.init_tracing("study-analysis")
+    logging_setup.init_logging("study-analysis")
     _tracer = otel.get_tracer("study-analysis")
 except Exception:  # noqa: BLE001
     otel = None
+    logging_setup = None
     _tracer = None
 
 
@@ -73,6 +76,8 @@ def main() -> None:
 
     for s in pending:
         _write(running=True, done=done, total=total, current=s["session_id"], study_id=study_id)
+        if logging_setup:
+            logging_setup.set_log_session(s["session_id"])
         conv, raw, mt = _session_paths(s)
         span_cm = (otel.start_span(_tracer, "analysis.session",
                                    attributes={"study.session_id": s["session_id"],

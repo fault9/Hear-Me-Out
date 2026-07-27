@@ -30,6 +30,9 @@ _SERVICES_DIR = str(Path(__file__).resolve().parents[1])
 if _SERVICES_DIR not in sys.path:
     sys.path.insert(0, _SERVICES_DIR)
 from common import otel  # noqa: E402
+from common import logging_setup  # noqa: E402
+
+logging_setup.init_logging("study-app-api")  # export logs over OTLP (trace-correlated) when observability is enabled
 _default_static = REPO_ROOT / "frontend" / "dist"
 STATIC_PATH = Path(os.environ.get("FRONTEND_PATH", _default_static))
 SEED_VC_DIR = REPO_ROOT / "seed-vc"
