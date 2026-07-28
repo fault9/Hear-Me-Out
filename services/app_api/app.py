@@ -18,7 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
-import torch
+
+APP_MODE = os.environ.get("APP_MODE", "hmo").lower()
+if APP_MODE != "study":
+    import torch
+else:
+    torch = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -174,6 +179,9 @@ def create_app():
 
     @app.on_event("startup")
     async def preload_models():
+        if APP_MODE == "study":
+            logger.info("APP_MODE=study: skipping HMO Whisper/VAD preload")
+            return
         logger.info("Pre-loading Whisper model...")
         _init_whisper()
         logger.info("Pre-loading VAD model...")
@@ -207,7 +215,7 @@ def create_app():
 
     # In study mode, mount the participant-experiment API (admin + participant
     # endpoints, SQLite storage, VC-engine prepare lifecycle). HMO mode is unaffected.
-    if os.environ.get("APP_MODE", "hmo").lower() == "study":
+    if APP_MODE == "study":
         from study import build_study_router
 
         app.include_router(build_study_router())
