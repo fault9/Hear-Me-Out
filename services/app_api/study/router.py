@@ -96,6 +96,22 @@ def _scenario_engine(scenario: dict) -> Optional[str]:
     return None
 
 
+def _validate_required_answers(items: list[dict], payload: dict) -> None:
+    for item in items:
+        if not item.get("required"):
+            continue
+        value = payload.get(item.get("id"))
+        answered = value is not None and value != ""
+        if item.get("type") == "switch":
+            answered = value is True
+        elif item.get("type") == "checkbox":
+            answered = isinstance(value, list) and bool(value)
+        if not answered:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Required questionnaire item {item.get('id')!r} is missing")
+
+
 def _schedule_label(scenario: dict) -> str:
     segs = scenario.get("voice_schedule") or []
     if not segs:
@@ -590,6 +606,10 @@ def build_study_router() -> APIRouter:
                 status_code=409,
                 detail="Complete the background questionnaire before starting a scenario")
         run = _guard_window(p["participant_id"])
+        if not backend.has_answer(p["participant_id"], run["id"], "background"):
+            raise HTTPException(
+                status_code=409,
+                detail="Complete consent, audio check, and background questions before a scenario")
         scenario = _resolve_scenario(backend, p, body.scenario_order)
         engine = _scenario_engine(scenario)
         # Prepare the engine this scenario needs (may restart :5002); the client
@@ -641,7 +661,11 @@ def build_study_router() -> APIRouter:
         """Warm the default VC engine and hand back a throwaway '_CHECK' session so
         the participant can run a short PersonaPlex exchange through the proxy."""
         p = _require_participant(body.code)
-        _guard_window(p["participant_id"])
+        run = _guard_window(p["participant_id"])
+        if not backend.has_answer(p["participant_id"], run["id"], "consent"):
+            raise HTTPException(
+                status_code=403,
+                detail="Consent must be recorded before microphone access or audio testing")
         manager.start_prepare_async(backend, p["study_id"], None)
         return {"session_id": f"{p['participant_id']}_CHECK", "prepare": manager.get_state()}
 
@@ -863,12 +887,21 @@ def build_study_router() -> APIRouter:
     @router.post("/session/{session_id}/questionnaire")
     async def session_questionnaire(session_id: str, body: QuestionnaireRequest):
         p = _require_participant(body.code)
+        run = _guard_window(p["participant_id"])
         if session_id != "none":
             session = backend.get_session(session_id)
             if not session or session["participant_id"] != p["participant_id"]:
                 raise HTTPException(status_code=404, detail="Unknown participant session")
         study = backend.get_study(p["study_id"])
         settings = (study or {}).get("settings") or {}
+        questionnaires = (study or {}).get("questionnaires") or {}
+        _validate_required_answers(questionnaires.get(body.kind) or [], body.payload)
+        prerequisite = {"audio_check": "consent", "background": "audio_check"}.get(body.kind)
+        if prerequisite and not backend.has_answer(
+                p["participant_id"], run["id"], prerequisite):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Complete {prerequisite.replace('_', ' ')} before {body.kind.replace('_', ' ')}")
         target_config = target_assignment_configuration(settings)
         assigned = None
         if target_config and body.kind == str(

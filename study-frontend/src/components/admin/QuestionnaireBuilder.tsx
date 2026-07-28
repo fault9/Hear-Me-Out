@@ -4,7 +4,8 @@ import { adminApi } from "@/api"
 import { ItemListEditor, type Item } from "@/components/admin/ItemListEditor"
 
 const SECTIONS: { key: string; label: string }[] = [
-  { key: "consent", label: "Audio check" },
+  { key: "consent", label: "Consent" },
+  { key: "audio_check", label: "Audio check" },
   { key: "background", label: "Background" },
   { key: "post", label: "Post (shared)" },
   { key: "final", label: "Final" },

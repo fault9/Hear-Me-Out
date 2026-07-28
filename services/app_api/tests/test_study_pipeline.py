@@ -39,6 +39,23 @@ class ArtifactTests(unittest.TestCase):
 
 
 class StorageTests(unittest.TestCase):
+    def test_consent_is_scoped_to_the_current_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            backend = SqliteBackend(str(Path(temp) / "study.db"))
+            study = backend.create_study("test")
+            participant = backend.generate_participants(study["id"], 1, [10])[0]
+            first = backend.start_run(participant["participant_id"], "restart")
+            self.assertFalse(backend.has_answer(
+                participant["participant_id"], first["id"], "consent"))
+            backend.save_answer(participant["participant_id"], None, "consent", {
+                "consent_participation": True,
+            })
+            self.assertTrue(backend.has_answer(
+                participant["participant_id"], first["id"], "consent"))
+            second = backend.start_run(participant["participant_id"], "restart")
+            self.assertFalse(backend.has_answer(
+                participant["participant_id"], second["id"], "consent"))
+
     def test_restarted_scenario_gets_a_new_attempt(self):
         with tempfile.TemporaryDirectory() as temp:
             backend = SqliteBackend(str(Path(temp) / "study.db"))

@@ -47,6 +47,7 @@ class QuestionnaireItem(BaseModel):
 
 class Questionnaires(BaseModel):
     consent: list[QuestionnaireItem] = Field(default_factory=list)
+    audio_check: list[QuestionnaireItem] = Field(default_factory=list)
     background: list[QuestionnaireItem] = Field(default_factory=list)
     post: list[QuestionnaireItem] = Field(default_factory=list)
     final: list[QuestionnaireItem] = Field(default_factory=list)
@@ -158,7 +159,7 @@ class SessionStartRequest(BaseModel):
 
 class QuestionnaireRequest(BaseModel):
     code: str
-    kind: Literal["consent", "background", "post", "final"]
+    kind: Literal["consent", "audio_check", "background", "post", "final"]
     payload: dict[str, Any] = Field(default_factory=dict)
     session_id: Optional[str] = None
 
@@ -182,6 +183,7 @@ def default_questionnaires() -> dict:
         QuestionnaireItem(id="consent_logs", type="switch",
                           label="I consent to transcripts and interaction logs being saved.", required=True),
     ]
+    audio_check: list[QuestionnaireItem] = []
     background = [
         QuestionnaireItem(id="age", type="number", label="Age", min=0, max=120),
         QuestionnaireItem(id="native_language", type="text", label="Native language"),
@@ -204,4 +206,5 @@ def default_questionnaires() -> dict:
                           label="Did you notice differences between the voices? Describe."),
         QuestionnaireItem(id="overall_comments", type="textarea", label="Overall comments"),
     ]
-    return Questionnaires(consent=consent, background=background, post=post, final=final).model_dump()
+    return Questionnaires(consent=consent, audio_check=audio_check, background=background,
+                          post=post, final=final).model_dump()

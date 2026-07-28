@@ -10,7 +10,7 @@ import { AudioCheck } from "@/components/AudioCheck"
 
 type Phase =
   | "code" | "welcome"
-  | "consent" | "background" | "scenario" | "post" | "final" | "completion"
+  | "consent" | "audio_check" | "background" | "scenario" | "post" | "final" | "completion"
 
 export function ParticipantFlow() {
   const [code, setCode] = useState("")
@@ -74,6 +74,7 @@ export function ParticipantFlow() {
     const step = run.current_step || {}
     const p = step.phase as Phase | undefined
     if (p === "background") { setPhase("background"); return }
+    if (p === "audio_check") { setPhase("audio_check"); return }
     if (p === "consent") { setPhase("consent"); return }
     if (p === "scenario" || p === "post") {
       setScenarioIdx(Math.max(0, (step.scenario_order ?? 1) - 1))
@@ -187,11 +188,25 @@ export function ParticipantFlow() {
 
   if (phase === "consent" && data) {
     return Frame(
-      <AudioCheck code={code} items={q("consent")}
-        onDone={async (ans) => {
+      <QuestionnaireForm title="Consent" items={q("consent")} submitLabel="Continue to audio check" busy={busy}
+        onSubmit={async (ans) => {
           setBusy(true)
           try {
             await api.questionnaire(null, code, "consent", ans)
+            setStep({ phase: "audio_check" })
+            setPhase("audio_check")
+          } catch (e) { handleErr(e) } finally { setBusy(false) }
+        }} />
+    )
+  }
+
+  if (phase === "audio_check" && data) {
+    return Frame(
+      <AudioCheck code={code} items={q("audio_check")}
+        onDone={async (ans) => {
+          setBusy(true)
+          try {
+            await api.questionnaire(null, code, "audio_check", ans)
             setStep({ phase: "background" })
             setPhase("background")
           } catch (e) { handleErr(e) } finally { setBusy(false) }

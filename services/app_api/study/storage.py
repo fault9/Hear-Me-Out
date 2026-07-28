@@ -122,6 +122,8 @@ class StorageBackend(abc.ABC):
     def save_answer(self, participant_id: str, session_id: Optional[str], kind: str, payload: Any) -> None: ...
     @abc.abstractmethod
     def list_answers(self, study_id: int) -> list[dict]: ...
+    @abc.abstractmethod
+    def has_answer(self, participant_id: str, run_id: int, kind: str) -> bool: ...
 
 
 _SCHEMA = """
@@ -617,6 +619,13 @@ class SqliteBackend(StorageBackend):
         with self._conn() as c:
             rows = c.execute("SELECT * FROM answer WHERE study_id=? ORDER BY created_at", (study_id,)).fetchall()
         return [_loads(r, ("payload_json",)) for r in rows]
+
+    def has_answer(self, participant_id, run_id, kind) -> bool:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT 1 FROM answer WHERE participant_id=? AND run_id=? AND kind=? LIMIT 1",
+                (participant_id, run_id, kind)).fetchone()
+        return row is not None
 
 
 def _gen_code() -> str:

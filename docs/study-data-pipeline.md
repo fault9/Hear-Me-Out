@@ -2,6 +2,10 @@
 
 ## Collection contract
 
+Each run enforces `consent -> audio check -> background -> scenarios`. Consent
+answers are persisted before the audio-check endpoint permits microphone access;
+answers from an earlier restarted run do not satisfy this guard.
+
 Each scenario attempt has a unique session ID and directory:
 
 `sessions/study_<id>/<participant>/run_<n>/scenario_<n>/attempt_<n>_<session-id>/`

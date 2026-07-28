@@ -60,8 +60,16 @@ settings:
     Estimated total study duration: 20–30 minutes.
 
 questionnaires:
-  # ---- Audio check (the "consent" section) ----
+  # ---- Consent: saved before microphone access or audio testing ----
   consent:
+    - { id: consent_information, type: switch, required: true, label: "I confirm that I have read and understood the participant information for this study." }
+    - { id: consent_participation, type: switch, required: true, label: "I voluntarily consent to participate in this study." }
+    - { id: consent_audio, type: switch, required: true, label: "I consent to my audio being recorded and used for this research." }
+    - { id: consent_logs, type: switch, required: true, label: "I consent to transcripts, questionnaire responses, and interaction logs being saved and used for this research." }
+    - { id: consent_withdrawal, type: switch, required: true, label: "I understand that participation is voluntary and that I may stop at any time without giving a reason." }
+
+  # ---- Equipment and audio check: runs only after consent is saved ----
+  audio_check:
     - { id: mic_working, type: switch, required: true, label: "My microphone is working." }
     - { id: can_hear, type: switch, required: true, label: "I can hear the assistant clearly." }
     - { id: understand_voice_change, type: switch, required: true, label: "I understand that my transmitted voice may be natural, converted, or change during an interaction." }
