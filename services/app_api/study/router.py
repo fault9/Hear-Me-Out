@@ -45,11 +45,11 @@ _tracer = otel.get_tracer("study-app-api") if otel else None
 
 
 def _trace_session(**attrs):
-    """Stamp span attributes AND tag this request's logs with the session id."""
+    """Stamp span attributes AND tag this request's logs with session id + study id."""
     if otel:
         otel.set_session_attributes(**attrs)
     if logging_setup and attrs.get("session_id"):
-        logging_setup.set_log_session(attrs["session_id"])
+        logging_setup.set_log_session(attrs["session_id"], attrs.get("study_id"))
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE = Path(os.environ.get("WORKSPACE", str(REPO_ROOT.parent)))
@@ -479,6 +479,7 @@ def build_study_router() -> APIRouter:
         session = backend.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Unknown session")
+        _trace_session(session_id=session_id, study_id=session["study_id"])
         study = backend.get_study(session["study_id"])
         participants = {pp["participant_id"]: pp for pp in backend.list_participants(session["study_id"])}
         p = participants.get(session["participant_id"])
@@ -505,7 +506,8 @@ def build_study_router() -> APIRouter:
             "You are a helpful conversational partner. Keep your replies concise.")
         return {"text_prompt": text_prompt,
                 "voice_prompt": scenario.get("voice_prompt") or default_voice,
-                "schedule": resolved}
+                "schedule": resolved,
+                "study_id": session["study_id"]}
 
     @router.post("/session/{session_id}/save")
     async def session_save(session_id: str,
@@ -518,6 +520,7 @@ def build_study_router() -> APIRouter:
         if not session:
             raise HTTPException(status_code=404, detail="Unknown session")
         _trace_session(session_id=session_id, participant_id=session["participant_id"],
+                       study_id=session.get("study_id"),
                        scenario_order=session.get("scenario_order"),
                        voice_condition=session.get("voice_condition"))
         out_dir = SESSIONS_DIR / session["participant_id"] / session_id

@@ -77,7 +77,7 @@ def main() -> None:
     for s in pending:
         _write(running=True, done=done, total=total, current=s["session_id"], study_id=study_id)
         if logging_setup:
-            logging_setup.set_log_session(s["session_id"])
+            logging_setup.set_log_session(s["session_id"], study_id)
         conv, raw, mt = _session_paths(s)
         span_cm = (otel.start_span(_tracer, "analysis.session",
                                    attributes={"study.session_id": s["session_id"],

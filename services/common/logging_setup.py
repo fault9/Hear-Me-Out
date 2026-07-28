@@ -33,12 +33,15 @@ except Exception:  # noqa: BLE001
     _HAVE_OTEL_LOGS = False
 
 _session_var: ContextVar = ContextVar("study_log_session", default=None)
+_study_var: ContextVar = ContextVar("study_log_study", default=None)
 _configured: set = set()
 
 
-def set_log_session(session_id) -> None:
-    """Associate subsequent log records on this task/thread with a session id."""
+def set_log_session(session_id, study_id=None) -> None:
+    """Associate subsequent log records on this task/thread with a session id (and
+    study id when known). Both ride along as log attributes."""
     _session_var.set(session_id or None)
+    _study_var.set(str(study_id) if study_id is not None else None)
 
 
 # Loggers to DROP from OTLP export (they don't reach the observability backend, but
@@ -60,6 +63,9 @@ class _SessionFilter(logging.Filter):
         sid = _session_var.get()
         if sid:
             record.session_id = sid
+        stid = _study_var.get()
+        if stid:
+            record.study_id = stid
         return True
 
 

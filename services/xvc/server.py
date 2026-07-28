@@ -295,6 +295,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     browser_ws = web.WebSocketResponse()
     await browser_ws.prepare(request)
 
+    study_id = None
     # Study mode: resolve the hidden prompt + timed voice schedule via session_id.
     if session_id:
         cond = await resolve_study_condition(session_id)
@@ -305,6 +306,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         text_prompt = cond.get("text_prompt", "")
         voice_prompt = cond.get("voice_prompt") or voice_prompt
         schedule = cond.get("schedule") or [{"mode": "natural", "start_s": 0, "end_s": None}]
+        study_id = cond.get("study_id")
     else:
         schedule = [{"mode": "vc", "start_s": 0, "end_s": None, "engine_target_id": target_id}]
 
@@ -338,9 +340,10 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     debug_pcm: list[np.ndarray] = []
 
     if logging_setup:
-        logging_setup.set_log_session(session_id or target_id)
+        logging_setup.set_log_session(session_id or target_id, study_id)
     if otel:
         otel.set_session_attributes(session_id=session_id or target_id, engine="xvc",
+                                    study_id=study_id,
                                     schedule=str([s.get("mode") for s in schedule]))
 
     qs = urlencode({"voice_prompt": voice_prompt, "text_prompt": text_prompt})
