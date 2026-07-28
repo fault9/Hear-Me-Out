@@ -132,4 +132,3 @@ def append_jsonl(path: str | Path, rows: list[dict]) -> None:
             stream.write(json.dumps(row, separators=(",", ":"), ensure_ascii=False) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
-
