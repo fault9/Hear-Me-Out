@@ -19,7 +19,7 @@ try:
     AUDIOBOX_AVAILABLE = True
 except ImportError:
     AUDIOBOX_AVAILABLE = False
-    print("Warning: audiobox_aesthetics not available. Aesthetic metrics will use mock values.")
+    print("AudioBox aesthetics is not installed; aesthetic metrics will remain null.")
 
 # These metrics are offline/post-conversation analysis. Run them on CPU so they never
 # contend with PersonaPlex (7B) for GPU memory — repeatedly loading them on cuda after
@@ -239,32 +239,12 @@ def analyze_voices(audio_path_a, audio_path_b):
 
         except Exception as e:
             print(f"Error calculating aesthetic metrics: {e}")
-    else:
-        # Use mock values when audiobox_aesthetics is not available
-        print("Using mock aesthetic metrics (audiobox_aesthetics not available)")
-        aesthetic_metrics = {
-            "response_a": {
-                "production_quality": 6.5,
-                "content_usefulness": 7.2,
-                "content_enjoyment": 6.8,
-                "production_complexity": 5.5,
-            },
-            "response_b": {
-                "production_quality": 7.1,
-                "content_usefulness": 6.9,
-                "content_enjoyment": 7.5,
-                "production_complexity": 6.2,
-            }
-        }
-
-
     return {
         "response_a": metrics_a,
         "response_b": metrics_b,
         "comparison": comparison_metrics,
         "aesthetics": aesthetic_metrics,
-        # False => aesthetics are placeholder/mock values (audiobox not installed);
-        # the study saver records this so mock aesthetics aren't analyzed as real.
+        # False means the fields above are null because the optional model is absent.
         "audiobox_available": AUDIOBOX_AVAILABLE,
     }
 

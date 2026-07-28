@@ -225,6 +225,10 @@ function TargetsPanel({ token, studyId, targets, engines, onChange }: any) {
 function ParticipantsPanel({ token, studyId, participants, hasScenarios, onChange }: any) {
   const [count, setCount] = useState(5)
   const [err, setErr] = useState<string | null>(null)
+  const [balance, setBalance] = useState<any>(null)
+  useEffect(() => {
+    adminApi.counterbalance(token, studyId).then(setBalance).catch((e: any) => setErr(e?.message || String(e)))
+  }, [token, studyId, participants.length])
   return (
     <div>
       <div className="mb-4 flex items-end gap-2">
@@ -236,14 +240,23 @@ function ParticipantsPanel({ token, studyId, participants, hasScenarios, onChang
         {!hasScenarios && <span className="text-xs text-muted-foreground">Add a scenario first.</span>}
         {err && <span className="text-xs text-destructive">{err}</span>}
       </div>
+      {balance?.configured && (
+        <div className="mb-4 rounded-md border p-3 text-xs">
+          <div className="mb-1 font-semibold">Counterbalance allocation</div>
+          <div className="font-mono">{Object.entries(balance.variant_counts || {}).map(([id, n]) => `${id}: ${n}`).join(" · ")}</div>
+          {(balance.warnings || []).map((warning: string) => <p key={warning} className="mt-1 text-destructive">{warning}</p>)}
+        </div>
+      )}
       <div className="max-h-72 overflow-auto rounded-md border">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-left"><tr><th className="p-2">Participant</th><th className="p-2">Code</th></tr></thead>
+          <thead className="bg-muted/50 text-left"><tr><th className="p-2">Participant</th><th className="p-2">Code</th><th className="p-2">Variant</th><th className="p-2">Target</th></tr></thead>
           <tbody>
             {participants.map((p: any) => (
               <tr key={p.participant_id} className="border-t">
                 <td className="p-2">{p.participant_id}</td>
                 <td className="p-2 font-mono">{p.code}</td>
+                <td className="p-2 font-mono">{p.variant_id || "manual"}</td>
+                <td className="p-2 font-mono">{p.target_ref || "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -257,10 +270,13 @@ function DataPanel({ token, studyId }: any) {
   const [runs, setRuns] = useState<any[]>([])
   const [sessions, setSessions] = useState<any[]>([])
   const [status, setStatus] = useState<any>(null)
+  const [vcStatus, setVcStatus] = useState<any>(null)
+  const [vcScope, setVcScope] = useState("all")
   const load = () => {
     adminApi.runs(token, studyId).then(r => setRuns(r.runs || [])).catch(() => {})
     adminApi.sessions(token, studyId).then(r => setSessions(r.sessions || [])).catch(() => {})
     adminApi.analyzeStatus(token, studyId).then(setStatus).catch(() => {})
+    adminApi.vcQualityStatus(token, studyId).then(setVcStatus).catch(() => {})
   }
   useEffect(() => { load() }, [token, studyId]) // eslint-disable-line
   const download = async (fmt: "json" | "zip") => {
@@ -279,6 +295,19 @@ function DataPanel({ token, studyId }: any) {
   }
   const pending = sessions.filter(s => !s.metrics).length
   const running = status?.running
+  const vcRunning = vcStatus?.running
+  const runVCQuality = async (force: boolean) => {
+    const body: { participant_id?: string; session_id?: string; force?: boolean } = { force }
+    if (vcScope.startsWith("participant:")) body.participant_id = vcScope.slice("participant:".length)
+    if (vcScope.startsWith("session:")) body.session_id = vcScope.slice("session:".length)
+    await adminApi.vcQuality(token, studyId, body)
+    const poll = setInterval(async () => {
+      const s = await adminApi.vcQualityStatus(token, studyId)
+      setVcStatus(s)
+      if (!s.running) { clearInterval(poll); load() }
+    }, 1500)
+  }
+  const participants = Array.from(new Set(sessions.map(s => s.participant_id)))
 
   return (
     <div>
@@ -289,7 +318,7 @@ function DataPanel({ token, studyId }: any) {
       </div>
 
       <div className="mb-4 rounded-lg border p-3">
-        <div className="mb-1 text-sm font-semibold">Analysis (transcription + VC-quality metrics)</div>
+        <div className="mb-1 text-sm font-semibold">Session preprocessing and diagnostics</div>
         <p className="mb-2 text-xs text-muted-foreground">
           Run this <b>after data collection</b> — it's model inference and competes with live study sessions.
         </p>
@@ -302,11 +331,31 @@ function DataPanel({ token, studyId }: any) {
         </div>
       </div>
 
+      <div className="mb-4 rounded-lg border p-3">
+        <div className="mb-1 text-sm font-semibold">Voice-conversion quality</div>
+        <p className="mb-2 text-xs text-muted-foreground">
+          Uses frozen target, raw microphone, transmitted audio, and route events. Run after data collection.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="rounded-md border bg-background px-2 py-1.5 text-sm" value={vcScope}
+            onChange={e => setVcScope(e.target.value)} disabled={vcRunning}>
+            <option value="all">All study sessions</option>
+            {participants.map(pid => <option key={pid} value={`participant:${pid}`}>Participant {pid}</option>)}
+            {sessions.map(s => <option key={s.session_id} value={`session:${s.session_id}`}>Session {s.session_id}</option>)}
+          </select>
+          <Button size="sm" disabled={vcRunning} onClick={() => runVCQuality(false)}>
+            {vcRunning ? `Scoring ${vcStatus.done}/${vcStatus.total}…` : "Run VC quality"}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={vcRunning} onClick={() => runVCQuality(true)}>Create new snapshot</Button>
+          {vcRunning && vcStatus.current && <span className="text-xs text-muted-foreground">{vcStatus.current}</span>}
+        </div>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-2">
         <Table title="Runs" head={["Participant", "Status", "Left"]}
           rows={runs.map(r => [r.participant_id, r.status, r.remaining_seconds ? `${Math.floor(r.remaining_seconds / 60)}m` : "—"])} />
-        <Table title="Sessions" head={["Session", "Condition", "Analysis"]}
-          rows={sessions.map(s => [s.session_id, s.voice_condition, s.metrics ? "✓ analyzed" : "pending"])} />
+        <Table title="Sessions" head={["Session", "Condition", "Preprocess", "VC quality"]}
+          rows={sessions.map(s => [s.session_id, s.voice_condition, s.metrics ? "analyzed" : "pending", s.vc_quality_status || "pending"])} />
       </div>
     </div>
   )

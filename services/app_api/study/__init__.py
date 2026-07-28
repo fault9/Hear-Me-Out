@@ -7,6 +7,10 @@ The larger participant/voice pipeline (PersonaPlex + the active VC engine) is
 unchanged; this package only adds the study wrapper and reliable persistence.
 """
 
-from .router import build_study_router
+def build_study_router(*args, **kwargs):
+    """Import FastAPI only when the web application actually builds the router."""
+    from .router import build_study_router as factory
+
+    return factory(*args, **kwargs)
 
 __all__ = ["build_study_router"]

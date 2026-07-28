@@ -1,4 +1,4 @@
-"""Per-session analysis (Whisper transcription + VC-quality metrics).
+"""Per-session whole-recording preprocessing (transcription + diagnostics).
 
 This is model inference and competes with the live PersonaPlex/VC on the same
 box, so it is NOT run during the study. The researcher triggers it as a batch
@@ -16,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+
+from .artifacts import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,11 @@ def run_session_analysis(session_id: str, converted_wav: str | None,
             from metrics import analyze_voices
 
             metrics = analyze_voices(clip_a, clip_b)
+            metrics["_provenance"] = {
+                "scope": "whole_session",
+                "route_warning": "Natural and VC intervals are mixed for switching sessions.",
+                "vc_quality": False,
+            }
             transcript["participant"] = (metrics.get("response_b") or {}).get("transcript")
             audiobox = bool(metrics.get("audiobox_available"))
     except Exception as e:  # noqa: BLE001 - analysis is best-effort; audio is already saved
@@ -54,12 +61,14 @@ def run_session_analysis(session_id: str, converted_wav: str | None,
 
     try:
         backend.update_session_analysis(session_id, transcript, metrics, audiobox)
-        # Mirror JSON next to the WAVs so the ZIP export is self-contained.
+        # Derived outputs are versioned; reruns never replace an earlier result.
         base = converted_wav or raw_wav
         if base:
-            out_dir = Path(base).parent
-            (out_dir / "transcript.json").write_text(json.dumps(transcript, indent=2))
-            (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+            analysis_id = f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}.{time.time_ns() % 1_000_000_000:09d}Z"
+            out_dir = Path(base).parent / "analysis" / "preprocessing" / analysis_id
+            out_dir.mkdir(parents=True, exist_ok=False)
+            atomic_write_json(out_dir / "transcript.json", transcript, exclusive=True)
+            atomic_write_json(out_dir / "metrics.json", metrics, exclusive=True)
         logger.info(f"[study] analysis complete for {session_id} (audiobox={audiobox})")
     except Exception as e:  # noqa: BLE001
         logger.error(f"[study] could not persist analysis for {session_id}: {e}")

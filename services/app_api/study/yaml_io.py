@@ -15,6 +15,8 @@ from pathlib import Path
 import yaml
 from fastapi import HTTPException
 
+from .counterbalance import CounterbalanceError, validate_and_compile
+
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "pilot_study.yaml"
 
 
@@ -22,10 +24,12 @@ def study_to_dict(backend, study_id: int) -> dict:
     study = backend.get_study(study_id)
     scenarios = backend.list_scenarios(study_id)
     targets = backend.list_targets(study_id)
+    settings = study.get("settings") or {}
     return {
         "name": study["name"],
         "description": study.get("description", ""),
-        "settings": study.get("settings") or {},
+        "settings": settings,
+        "counterbalancing": settings.get("counterbalancing") or {},
         "questionnaires": study.get("questionnaires") or {},
         "targets": [{"ref": t["ref"], "engine": t["engine"], "speaker_id": t["speaker_id"]} for t in targets],
         "scenarios": [{
@@ -56,6 +60,11 @@ def _target_problems(backend, study_id: int, data: dict) -> list[str]:
                     problems.append(f"missing target voice '{ref}' (upload it with Speaker ID '{ref}')")
                 elif seg.get("engine") and t["engine"] != seg["engine"]:
                     problems.append(f"target '{ref}' is {t['engine']} but the scenario expects {seg['engine']}")
+    config = data.get("counterbalancing") or (data.get("settings") or {}).get("counterbalancing") or {}
+    for variant in config.get("variants", []) or []:
+        ref = variant.get("target_ref")
+        if ref and ref not in tmap:
+            problems.append(f"missing counterbalance target voice '{ref}'")
     return sorted(set(problems))
 
 
@@ -66,8 +75,17 @@ def apply_import(backend, study_id: int, data: dict) -> None:
     if problems:
         raise HTTPException(status_code=422,
                             detail="Upload the target voices first — " + "; ".join(problems))
+    settings = dict(data.get("settings") or {})
+    if "counterbalancing" in data:
+        settings["counterbalancing"] = data.get("counterbalancing") or {}
+    try:
+        pseudo_scenarios = [{**scenario, "id": index + 1, "order_idx": index}
+                            for index, scenario in enumerate(data.get("scenarios", []) or [])]
+        validate_and_compile(settings, pseudo_scenarios, backend.list_targets(study_id))
+    except CounterbalanceError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid counterbalancing: {exc}") from exc
     backend.update_study(study_id, data.get("name"), data.get("description"),
-                         data.get("questionnaires"), data.get("settings"))
+                         data.get("questionnaires"), settings)
     for s in backend.list_scenarios(study_id):
         backend.delete_scenario(s["id"])
     for i, sc in enumerate(data.get("scenarios", []) or []):

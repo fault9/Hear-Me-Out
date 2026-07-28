@@ -12,15 +12,12 @@ type Phase =
   | "code" | "welcome"
   | "consent" | "background" | "scenario" | "post" | "final" | "completion"
 
-function sessionIdFor(pid: string, order: number) {
-  return `${pid}_S${String(order).padStart(2, "0")}`
-}
-
 export function ParticipantFlow() {
   const [code, setCode] = useState("")
   const [data, setData] = useState<EnterResult | null>(null)
   const [phase, setPhase] = useState<Phase>("code")
   const [scenarioIdx, setScenarioIdx] = useState(0)
+  const [postSessionId, setPostSessionId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deadline, setDeadline] = useState<number | null>(null)
@@ -80,6 +77,7 @@ export function ParticipantFlow() {
     if (p === "consent") { setPhase("consent"); return }
     if (p === "scenario" || p === "post") {
       setScenarioIdx(Math.max(0, (step.scenario_order ?? 1) - 1))
+      setPostSessionId(typeof step.session_id === "string" ? step.session_id : null)
       setPhase(p)
       return
     }
@@ -100,7 +98,7 @@ export function ParticipantFlow() {
       const secs = res?.run?.remaining_seconds ?? 3600
       setDeadline(Date.now() + secs * 1000)
       if (mode === "restart") {
-        setScenarioIdx(0); setStep({ phase: "consent" }); setPhase("consent")
+        setScenarioIdx(0); setPostSessionId(null); setStep({ phase: "consent" }); setPhase("consent")
       } else {
         goToRunStep(res.run)
       }
@@ -203,8 +201,9 @@ export function ParticipantFlow() {
   if (phase === "scenario" && data) {
     const scenario = data.scenarios[scenarioIdx]
     return Frame(
-      <ScenarioCall code={code} scenario={scenario} onDone={() => {
-        setStep({ phase: "post", scenario_order: scenario.scenario_order })
+      <ScenarioCall code={code} scenario={scenario} onDone={(sessionId) => {
+        setPostSessionId(sessionId)
+        setStep({ phase: "post", scenario_order: scenario.scenario_order, session_id: sessionId })
         setPhase("post")
       }} />
     )
@@ -212,7 +211,7 @@ export function ParticipantFlow() {
 
   if (phase === "post" && data) {
     const scenario = data.scenarios[scenarioIdx]
-    const sid = sessionIdFor(data.participant_id, scenario.scenario_order)
+    const sid = postSessionId
     const postItems = [...q("post"), ...((scenario.post_items as QItem[]) || [])]
     return Frame(
       <QuestionnaireForm title={`After scenario ${scenario.scenario_order}`} items={postItems}
@@ -220,10 +219,12 @@ export function ParticipantFlow() {
         onSubmit={async (ans) => {
           setBusy(true)
           try {
+            if (!sid) throw new Error("Could not identify the completed scenario session")
             await api.questionnaire(sid, code, "post", ans)
             if (scenarioIdx < data.scenarios.length - 1) {
               const next = scenarioIdx + 1
               setScenarioIdx(next)
+              setPostSessionId(null)
               setStep({ phase: "scenario", scenario_order: data.scenarios[next].scenario_order })
               setPhase("scenario")
             } else {

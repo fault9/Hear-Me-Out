@@ -427,6 +427,12 @@ export function useWebSocket() {
     }
   }, []);
 
+  const sendControl = useCallback((data: Record<string, unknown>) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(data));
+    }
+  }, []);
+
   const disconnect = useCallback(() => {
     runIdRef.current += 1;
     intentionalClose.current = true;
@@ -577,6 +583,7 @@ export function useWebSocket() {
     disconnect,
     sendAudio,
     sendRawAudio,
+    sendControl,
     getVcUserWav,
     setPersonaplexSink,
     configureFeedback,

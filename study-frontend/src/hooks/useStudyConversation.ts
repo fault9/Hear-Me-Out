@@ -88,6 +88,7 @@ export function useStudyConversation() {
   const stopAndAssemble = useCallback(async (): Promise<SessionArtifacts> => {
     streamingRef.current = false
     clearConnectTimer()
+    ws.sendControl({ type: "capture_summary", ...vc.getCaptureStats() })
     setStatus("processing")
     vc.stopVCStream()
     ws.disconnect()

@@ -14,7 +14,7 @@ function fmt(s: number) {
 type Phase = "preparing" | "ready" | "connecting" | "active" | "processing" | "error"
 
 export function ScenarioCall({ code, scenario, onDone }: {
-  code: string; scenario: ScenarioInfo; onDone: () => void
+  code: string; scenario: ScenarioInfo; onDone: (sessionId: string) => void
 }) {
   const conv = useStudyConversation()
   const [phase, setPhase] = useState<Phase>("preparing")
@@ -73,11 +73,19 @@ export function ScenarioCall({ code, scenario, onDone }: {
     try {
       const arts = await conv.stopAndAssemble()
       if (sid) { await api.saveSession(sid, arts); await api.sessionEnd(sid, reason) }
-      onDone()
+      if (!sid) throw new Error("The session identifier was lost before saving")
+      onDone(sid)
     } catch (e: any) {
       setErrMsg("Saving failed: " + (e?.message || e) + ". You can continue."); setPhase("error")
     }
   }, [conv, onDone])
+
+  const skipAfterError = useCallback(async () => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    try { await api.sessionEnd(sid, "technical_problem") } catch { /* preserve forward progress */ }
+    onDone(sid)
+  }, [onDone])
 
   // Auto-end when the scenario time limit is reached.
   useEffect(() => {
@@ -150,7 +158,7 @@ export function ScenarioCall({ code, scenario, onDone }: {
         {phase === "error" && (
           <div className="flex flex-col gap-2">
             <Button variant="secondary" className="w-full" onClick={() => window.location.reload()}>Try again</Button>
-            <Button variant="ghost" className="w-full" onClick={onDone}>Skip / continue</Button>
+            <Button variant="ghost" className="w-full" onClick={skipAfterError}>Skip / continue</Button>
           </div>
         )}
 

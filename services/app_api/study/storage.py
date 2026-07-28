@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 RUN_WINDOW_SECONDS = 3600
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 
 def _now() -> float:
@@ -68,7 +68,8 @@ class StorageBackend(abc.ABC):
     def clear_engine_target_ids(self, study_id: int, engine: str) -> None: ...
     # participants
     @abc.abstractmethod
-    def generate_participants(self, study_id: int, count: int, scenario_order: list[int]) -> list[dict]: ...
+    def generate_participants(self, study_id: int, count: int, scenario_order: list[int],
+                              allocations: Optional[list[dict]] = None) -> list[dict]: ...
     @abc.abstractmethod
     def get_participant_by_code(self, code: str) -> Optional[dict]: ...
     @abc.abstractmethod
@@ -89,7 +90,11 @@ class StorageBackend(abc.ABC):
     # sessions
     @abc.abstractmethod
     def create_session(self, session_id: str, participant_id: str, scenario_id: str,
-                       scenario_order: int, voice_condition: str, target_speaker_id: str) -> dict: ...
+                       scenario_order: int, voice_condition: str, target_speaker_id: str,
+                       run_id: int, run_attempt: int, scenario_attempt: int,
+                       schedule: list, config_snapshot: dict) -> dict: ...
+    @abc.abstractmethod
+    def next_session_attempt(self, participant_id: str, run_id: int, scenario_order: int) -> int: ...
     @abc.abstractmethod
     def save_session(self, session_id: str, files: dict, transcript: Any, metrics: Any,
                      audiobox_available: bool) -> None: ...
@@ -97,11 +102,18 @@ class StorageBackend(abc.ABC):
     def update_session_analysis(self, session_id: str, transcript: Any, metrics: Any,
                                 audiobox_available: bool) -> None: ...
     @abc.abstractmethod
+    def update_session_artifacts(self, session_id: str, manifest: dict) -> None: ...
+    @abc.abstractmethod
+    def update_session_vc_quality(self, session_id: str, status: str, result: Any) -> None: ...
+    @abc.abstractmethod
     def end_session(self, session_id: str, end_reason: str) -> None: ...
     @abc.abstractmethod
     def get_session(self, session_id: str) -> Optional[dict]: ...
     @abc.abstractmethod
     def list_sessions(self, study_id: int) -> list[dict]: ...
+    @abc.abstractmethod
+    def get_latest_session(self, participant_id: str, scenario_order: int,
+                           run_id: Optional[int] = None) -> Optional[dict]: ...
     # answers
     @abc.abstractmethod
     def save_answer(self, participant_id: str, session_id: Optional[str], kind: str, payload: Any) -> None: ...
@@ -148,6 +160,10 @@ CREATE TABLE IF NOT EXISTS participant (
   code TEXT NOT NULL UNIQUE,
   study_id INTEGER NOT NULL,
   scenario_order_json TEXT NOT NULL DEFAULT '[]',
+  variant_id TEXT,
+  target_ref TEXT,
+  assignment_json TEXT NOT NULL DEFAULT '{}',
+  allocation_status TEXT NOT NULL DEFAULT 'issued',
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS run (
@@ -170,18 +186,27 @@ CREATE TABLE IF NOT EXISTS session (
   scenario_order INTEGER NOT NULL,
   voice_condition TEXT NOT NULL DEFAULT '',
   target_speaker_id TEXT NOT NULL DEFAULT '',
+  run_id INTEGER,
+  run_attempt INTEGER NOT NULL DEFAULT 1,
+  scenario_attempt INTEGER NOT NULL DEFAULT 1,
+  schedule_json TEXT NOT NULL DEFAULT '[]',
+  config_snapshot_json TEXT NOT NULL DEFAULT '{}',
   started_at REAL NOT NULL,
   ended_at REAL,
   end_reason TEXT,
   files_json TEXT,
   transcript_json TEXT,
   metrics_json TEXT,
-  audiobox_available INTEGER
+  audiobox_available INTEGER,
+  artifact_manifest_json TEXT,
+  vc_quality_json TEXT,
+  vc_quality_status TEXT NOT NULL DEFAULT 'pending'
 );
 CREATE TABLE IF NOT EXISTS answer (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   participant_id TEXT NOT NULL,
   study_id INTEGER NOT NULL,
+  run_id INTEGER,
   session_id TEXT,
   kind TEXT NOT NULL,
   payload_json TEXT NOT NULL,
@@ -224,6 +249,23 @@ class SqliteBackend(StorageBackend):
             if ver < 3:
                 self._add_column(c, "study", "settings_json", "TEXT NOT NULL DEFAULT '{}'")
                 self._add_column(c, "scenario", "post_items_json", "TEXT NOT NULL DEFAULT '[]'")
+            if ver < 4:
+                self._add_column(c, "participant", "variant_id", "TEXT")
+                self._add_column(c, "participant", "target_ref", "TEXT")
+                self._add_column(c, "participant", "assignment_json", "TEXT NOT NULL DEFAULT '{}'")
+                self._add_column(c, "participant", "allocation_status", "TEXT NOT NULL DEFAULT 'issued'")
+                self._add_column(c, "session", "run_id", "INTEGER")
+                self._add_column(c, "session", "run_attempt", "INTEGER NOT NULL DEFAULT 1")
+                self._add_column(c, "session", "scenario_attempt", "INTEGER NOT NULL DEFAULT 1")
+                self._add_column(c, "session", "schedule_json", "TEXT NOT NULL DEFAULT '[]'")
+                self._add_column(c, "session", "config_snapshot_json", "TEXT NOT NULL DEFAULT '{}'")
+                self._add_column(c, "answer", "run_id", "INTEGER")
+            if ver < 5:
+                self._add_column(c, "session", "artifact_manifest_json", "TEXT")
+                self._add_column(c, "session", "vc_quality_json", "TEXT")
+                self._add_column(c, "session", "vc_quality_status", "TEXT NOT NULL DEFAULT 'pending'")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS session_attempt_unique ON session("
+                      "participant_id, run_id, scenario_order, scenario_attempt)")
             c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
                       (str(SCHEMA_VERSION),))
 
@@ -359,7 +401,7 @@ class SqliteBackend(StorageBackend):
                       (study_id, engine))
 
     # ---------- participants ----------
-    def generate_participants(self, study_id, count, scenario_order) -> list[dict]:
+    def generate_participants(self, study_id, count, scenario_order, allocations=None) -> list[dict]:
         created = []
         with self._conn() as c:
             n = c.execute("SELECT COUNT(*) AS n FROM participant WHERE study_id=?", (study_id,)).fetchone()["n"]
@@ -368,26 +410,34 @@ class SqliteBackend(StorageBackend):
                 code = _gen_code()
                 while c.execute("SELECT 1 FROM participant WHERE code=?", (code,)).fetchone():
                     code = _gen_code()
+                allocation = (allocations or [{}])[i] if allocations else {}
+                assigned_order = allocation.get("scenario_order") or scenario_order
                 c.execute("INSERT INTO participant(participant_id, code, study_id, scenario_order_json, "
-                          "created_at) VALUES(?,?,?,?,?)",
-                          (pid, code, study_id, json.dumps(scenario_order), _now()))
-                created.append({"participant_id": pid, "code": code, "scenario_order": scenario_order})
+                          "variant_id, target_ref, assignment_json, allocation_status, created_at) "
+                          "VALUES(?,?,?,?,?,?,?,?,?)",
+                          (pid, code, study_id, json.dumps(assigned_order),
+                           allocation.get("variant_id"), allocation.get("target_ref"),
+                           json.dumps(allocation.get("assignment") or {}), "issued", _now()))
+                created.append({"participant_id": pid, "code": code,
+                                "scenario_order": assigned_order,
+                                "variant_id": allocation.get("variant_id"),
+                                "target_ref": allocation.get("target_ref")})
         return created
 
     def get_participant_by_code(self, code) -> Optional[dict]:
         with self._conn() as c:
             row = c.execute("SELECT * FROM participant WHERE code=?", (code.strip(),)).fetchone()
-        return _loads(row, ("scenario_order_json",)) if row else None
+        return _loads(row, ("scenario_order_json", "assignment_json")) if row else None
 
     def _participant_by_id(self, c, participant_id) -> Optional[dict]:
         row = c.execute("SELECT * FROM participant WHERE participant_id=?", (participant_id,)).fetchone()
-        return _loads(row, ("scenario_order_json",)) if row else None
+        return _loads(row, ("scenario_order_json", "assignment_json")) if row else None
 
     def list_participants(self, study_id) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM participant WHERE study_id=? ORDER BY participant_id",
                              (study_id,)).fetchall()
-        return [_loads(r, ("scenario_order_json",)) for r in rows]
+        return [_loads(r, ("scenario_order_json", "assignment_json")) for r in rows]
 
     # ---------- runs ----------
     def get_latest_run(self, participant_id) -> Optional[dict]:
@@ -448,16 +498,27 @@ class SqliteBackend(StorageBackend):
         return d
 
     # ---------- sessions ----------
+    def next_session_attempt(self, participant_id, run_id, scenario_order) -> int:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(scenario_attempt) AS n FROM session WHERE participant_id=? "
+                            "AND run_id=? AND scenario_order=?",
+                            (participant_id, run_id, scenario_order)).fetchone()
+        return int(row["n"] or 0) + 1
+
     def create_session(self, session_id, participant_id, scenario_id, scenario_order,
-                        voice_condition, target_speaker_id) -> dict:
+                       voice_condition, target_speaker_id, run_id, run_attempt,
+                       scenario_attempt, schedule, config_snapshot) -> dict:
         with self._conn() as c:
             prow = c.execute("SELECT study_id FROM participant WHERE participant_id=?",
                              (participant_id,)).fetchone()
             study_id = prow["study_id"]
-            c.execute("INSERT OR REPLACE INTO session(session_id, participant_id, study_id, scenario_id, "
-                      "scenario_order, voice_condition, target_speaker_id, started_at) VALUES(?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO session(session_id, participant_id, study_id, scenario_id, "
+                      "scenario_order, voice_condition, target_speaker_id, run_id, run_attempt, "
+                      "scenario_attempt, schedule_json, config_snapshot_json, started_at) "
+                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (session_id, participant_id, study_id, scenario_id, scenario_order,
-                       voice_condition, target_speaker_id, _now()))
+                       voice_condition, target_speaker_id, run_id, run_attempt,
+                       scenario_attempt, json.dumps(schedule), json.dumps(config_snapshot), _now()))
             row = c.execute("SELECT * FROM session WHERE session_id=?", (session_id,)).fetchone()
         return dict(row)
 
@@ -475,6 +536,16 @@ class SqliteBackend(StorageBackend):
                       (json.dumps(transcript), json.dumps(metrics),
                        1 if audiobox_available else 0, session_id))
 
+    def update_session_artifacts(self, session_id, manifest) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE session SET artifact_manifest_json=? WHERE session_id=?",
+                      (json.dumps(manifest), session_id))
+
+    def update_session_vc_quality(self, session_id, status, result) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE session SET vc_quality_status=?, vc_quality_json=? WHERE session_id=?",
+                      (status, json.dumps(result), session_id))
+
     def end_session(self, session_id, end_reason) -> None:
         with self._conn() as c:
             c.execute("UPDATE session SET ended_at=?, end_reason=? WHERE session_id=?",
@@ -483,12 +554,26 @@ class SqliteBackend(StorageBackend):
     def get_session(self, session_id) -> Optional[dict]:
         with self._conn() as c:
             row = c.execute("SELECT * FROM session WHERE session_id=?", (session_id,)).fetchone()
-        return _loads(row, ("files_json", "transcript_json", "metrics_json")) if row else None
+        return _loads(row, ("files_json", "transcript_json", "metrics_json", "schedule_json",
+                            "config_snapshot_json", "artifact_manifest_json", "vc_quality_json")) if row else None
 
     def list_sessions(self, study_id) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM session WHERE study_id=? ORDER BY started_at", (study_id,)).fetchall()
-        return [_loads(r, ("files_json", "transcript_json", "metrics_json")) for r in rows]
+        return [_loads(r, ("files_json", "transcript_json", "metrics_json", "schedule_json",
+                           "config_snapshot_json", "artifact_manifest_json", "vc_quality_json")) for r in rows]
+
+    def get_latest_session(self, participant_id, scenario_order, run_id=None) -> Optional[dict]:
+        query = "SELECT * FROM session WHERE participant_id=? AND scenario_order=?"
+        args: list[Any] = [participant_id, scenario_order]
+        if run_id is not None:
+            query += " AND run_id=?"
+            args.append(run_id)
+        query += " ORDER BY run_attempt DESC, scenario_attempt DESC LIMIT 1"
+        with self._conn() as c:
+            row = c.execute(query, args).fetchone()
+        return _loads(row, ("files_json", "transcript_json", "metrics_json", "schedule_json",
+                            "config_snapshot_json", "artifact_manifest_json", "vc_quality_json")) if row else None
 
     # ---------- answers ----------
     def save_answer(self, participant_id, session_id, kind, payload) -> None:
@@ -496,9 +581,12 @@ class SqliteBackend(StorageBackend):
             prow = c.execute("SELECT study_id FROM participant WHERE participant_id=?",
                              (participant_id,)).fetchone()
             study_id = prow["study_id"] if prow else 0
-            c.execute("INSERT INTO answer(participant_id, study_id, session_id, kind, payload_json, created_at) "
-                      "VALUES(?,?,?,?,?,?)",
-                      (participant_id, study_id, session_id, kind, json.dumps(payload), _now()))
+            run = c.execute("SELECT id FROM run WHERE participant_id=? ORDER BY attempt DESC LIMIT 1",
+                            (participant_id,)).fetchone()
+            c.execute("INSERT INTO answer(participant_id, study_id, run_id, session_id, kind, payload_json, created_at) "
+                      "VALUES(?,?,?,?,?,?,?)",
+                      (participant_id, study_id, run["id"] if run else None,
+                       session_id, kind, json.dumps(payload), _now()))
 
     def list_answers(self, study_id) -> list[dict]:
         with self._conn() as c:

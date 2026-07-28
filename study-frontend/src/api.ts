@@ -178,10 +178,14 @@ export const adminApi = {
   deleteTarget: (t: string, id: number, tid: number) => jdel(`/studies/${id}/targets/${tid}`, adminHeaders(t)),
 
   generate: (t: string, id: number, count: number) => jpost(`/studies/${id}/participants/generate`, { count }, adminHeaders(t)),
+  counterbalance: (t: string, id: number) => jget(`/studies/${id}/counterbalance`, adminHeaders(t)),
   runs: (t: string, id: number) => jget(`/studies/${id}/runs`, adminHeaders(t)),
   sessions: (t: string, id: number) => jget(`/studies/${id}/sessions`, adminHeaders(t)),
   analyze: (t: string, id: number, force = false) => jpost(`/studies/${id}/analyze${force ? "?force=true" : ""}`, {}, adminHeaders(t)),
   analyzeStatus: (t: string, id: number) => jget(`/studies/${id}/analyze/status`, adminHeaders(t)),
+  vcQuality: (t: string, id: number, body: { participant_id?: string; session_id?: string; force?: boolean }) =>
+    jpost(`/studies/${id}/vc-quality`, body, adminHeaders(t)),
+  vcQualityStatus: (t: string, id: number) => jget(`/studies/${id}/vc-quality/status`, adminHeaders(t)),
   exportUrl: (id: number, format: "json" | "zip") => `${BASE}/studies/${id}/export?format=${format}`,
 
   templateUrl: () => `${BASE}/template`,
