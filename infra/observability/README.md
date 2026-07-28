@@ -3,8 +3,11 @@
 Three ready-made OpenObserve dashboards for the study stack. Traces and logs are also
 explorable directly (Traces / Logs menus) — these dashboards are the at-a-glance views.
 
-They are already created in the running OpenObserve (via the API). The JSON here in
-`dashboards/` is the version-controlled copy so they can be re-imported / recreated.
+**Auto-provisioned:** when observability starts, `run_all` runs `provision.py`, which
+idempotently creates any dashboard in `dashboards/` that isn't already present. So a
+fresh box (or a wiped data dir) comes up with all three dashboards ready — no manual
+import. Existing ones are left untouched (matched by title). The JSON in `dashboards/`
+is the version-controlled source.
 
 | File | Dashboard | Panels |
 |---|---|---|

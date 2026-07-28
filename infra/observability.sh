@@ -80,10 +80,17 @@ stop_o2() {
   echo "observability stopped"
 }
 
+provision_dashboards() {
+  # Idempotently create the bundled dashboards (skips ones already present).
+  O2_URL="http://127.0.0.1:$O2_PORT/logs" O2_ORG=default \
+    python3 "$(cd "$(dirname "$0")" && pwd)/observability/provision.py"
+}
+
 case "$ACTION" in
-  install) install_o2 ;;
-  start)   start_o2 ;;
-  stop)    stop_o2 ;;
-  status)  port_open && echo "observability: up (:$O2_PORT)" || echo "observability: down" ;;
-  *) echo "Usage: observability.sh <install|start|stop|status>"; exit 1 ;;
+  install)   install_o2 ;;
+  start)     start_o2 ;;
+  stop)      stop_o2 ;;
+  provision) provision_dashboards ;;
+  status)    port_open && echo "observability: up (:$O2_PORT)" || echo "observability: down" ;;
+  *) echo "Usage: observability.sh <install|start|stop|provision|status>"; exit 1 ;;
 esac

@@ -183,6 +183,10 @@ if [ "$APP_MODE" = "study" ]; then
             O2_PORT="${O2_PORT:-5080}"
             WORKSPACE="$WORKSPACE" STUDY_DATA_ROOT="$STUDY_DATA_ROOT" O2_PORT="$O2_PORT" \
                 bash "$SCRIPT_DIR/observability.sh" start || echo -e "  ${YELLOW}warn:${NC} observability backend failed to start (see log)"
+            # Idempotently provision the bundled dashboards (latency / tracing / session logs).
+            O2_PORT="$O2_PORT" O2_ROOT_USER_EMAIL="${O2_ROOT_USER_EMAIL:-admin@example.com}" \
+                O2_ROOT_USER_PASSWORD="${O2_ROOT_USER_PASSWORD:-ChangeMe123}" \
+                bash "$SCRIPT_DIR/observability.sh" provision 2>/dev/null || true
             # OpenObserve serves under ZO_BASE_URI=/logs; OTLP ingest is org-scoped + Basic auth.
             _o2_email="${O2_ROOT_USER_EMAIL:-admin@example.com}"
             _o2_pass="${O2_ROOT_USER_PASSWORD:-ChangeMe123}"
