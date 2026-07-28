@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 RUN_WINDOW_SECONDS = 3600
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _now() -> float:
@@ -74,6 +74,9 @@ class StorageBackend(abc.ABC):
     def get_participant_by_code(self, code: str) -> Optional[dict]: ...
     @abc.abstractmethod
     def list_participants(self, study_id: int) -> list[dict]: ...
+    @abc.abstractmethod
+    def assign_participant(self, participant_id: str, allocation: dict,
+                           allocation_stratum: str) -> dict: ...
     # runs
     @abc.abstractmethod
     def get_latest_run(self, participant_id: str) -> Optional[dict]: ...
@@ -164,6 +167,7 @@ CREATE TABLE IF NOT EXISTS participant (
   target_ref TEXT,
   assignment_json TEXT NOT NULL DEFAULT '{}',
   allocation_status TEXT NOT NULL DEFAULT 'issued',
+  allocation_stratum TEXT,
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS run (
@@ -264,6 +268,8 @@ class SqliteBackend(StorageBackend):
                 self._add_column(c, "session", "artifact_manifest_json", "TEXT")
                 self._add_column(c, "session", "vc_quality_json", "TEXT")
                 self._add_column(c, "session", "vc_quality_status", "TEXT NOT NULL DEFAULT 'pending'")
+            if ver < 6:
+                self._add_column(c, "participant", "allocation_stratum", "TEXT")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS session_attempt_unique ON session("
                       "participant_id, run_id, scenario_order, scenario_attempt)")
             c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
@@ -413,15 +419,18 @@ class SqliteBackend(StorageBackend):
                 allocation = (allocations or [{}])[i] if allocations else {}
                 assigned_order = allocation.get("scenario_order") or scenario_order
                 c.execute("INSERT INTO participant(participant_id, code, study_id, scenario_order_json, "
-                          "variant_id, target_ref, assignment_json, allocation_status, created_at) "
-                          "VALUES(?,?,?,?,?,?,?,?,?)",
+                          "variant_id, target_ref, assignment_json, allocation_status, "
+                          "allocation_stratum, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                           (pid, code, study_id, json.dumps(assigned_order),
                            allocation.get("variant_id"), allocation.get("target_ref"),
-                           json.dumps(allocation.get("assignment") or {}), "issued", _now()))
+                           json.dumps(allocation.get("assignment") or {}),
+                           allocation.get("allocation_status") or "issued",
+                           allocation.get("allocation_stratum"), _now()))
                 created.append({"participant_id": pid, "code": code,
                                 "scenario_order": assigned_order,
                                 "variant_id": allocation.get("variant_id"),
-                                "target_ref": allocation.get("target_ref")})
+                                "target_ref": allocation.get("target_ref"),
+                                "allocation_status": allocation.get("allocation_status") or "issued"})
         return created
 
     def get_participant_by_code(self, code) -> Optional[dict]:
@@ -438,6 +447,22 @@ class SqliteBackend(StorageBackend):
             rows = c.execute("SELECT * FROM participant WHERE study_id=? ORDER BY participant_id",
                              (study_id,)).fetchall()
         return [_loads(r, ("scenario_order_json", "assignment_json")) for r in rows]
+
+    def assign_participant(self, participant_id, allocation, allocation_stratum) -> dict:
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE participant SET scenario_order_json=?, variant_id=?, target_ref=?, "
+                "assignment_json=?, allocation_status='assigned', allocation_stratum=? "
+                "WHERE participant_id=? AND allocation_status='awaiting_profile'",
+                (json.dumps(allocation.get("scenario_order") or []),
+                 allocation.get("variant_id"), allocation.get("target_ref"),
+                 json.dumps(allocation.get("assignment") or {}), allocation_stratum,
+                 participant_id))
+            if cur.rowcount != 1:
+                raise ValueError("participant is not awaiting target assignment")
+            row = c.execute("SELECT * FROM participant WHERE participant_id=?",
+                            (participant_id,)).fetchone()
+        return _loads(row, ("scenario_order_json", "assignment_json"))
 
     # ---------- runs ----------
     def get_latest_run(self, participant_id) -> Optional[dict]:

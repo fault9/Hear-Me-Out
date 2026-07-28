@@ -10,7 +10,8 @@ from pathlib import Path
 import numpy as np
 
 from study.artifacts import atomic_write_bytes, sha256_file
-from study.counterbalance import allocate, balance_report
+from study.counterbalance import (CounterbalanceError, allocate, balance_report,
+                                  resolve_target_assignment)
 from study.storage import SqliteBackend
 from study.transition_analysis import prepare_session_analysis, route_regions
 
@@ -56,6 +57,22 @@ class StorageTests(unittest.TestCase):
                 backend.create_session("s2", participant["participant_id"], "scenario_1", 1,
                                        "natural", "", run["id"], run["attempt"], 1, [], {})
 
+    def test_deferred_participant_assignment_is_persisted_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            backend = SqliteBackend(str(Path(temp) / "study.db"))
+            study = backend.create_study("test")
+            participant = backend.generate_participants(
+                study["id"], 1, [10], [{"allocation_status": "awaiting_profile"}])[0]
+            assigned = backend.assign_participant(participant["participant_id"], {
+                "variant_id": "A", "target_ref": "masculine_presenting",
+                "scenario_order": [10], "assignment": {"10": {"condition": "vc"}},
+            }, "Woman")
+            self.assertEqual(assigned["allocation_status"], "assigned")
+            self.assertEqual(assigned["allocation_stratum"], "Woman")
+            self.assertEqual(assigned["target_ref"], "masculine_presenting")
+            with self.assertRaises(ValueError):
+                backend.assign_participant(participant["participant_id"], {}, "Man")
+
 
 class CounterbalanceTests(unittest.TestCase):
     def setUp(self):
@@ -82,6 +99,78 @@ class CounterbalanceTests(unittest.TestCase):
         report = balance_report(self.settings, self.scenarios, self.targets, participants)
         self.assertEqual(report["variant_counts"], {"v1": 3, "v2": 2})
         self.assertEqual(report["allocated_targets"], {"a": 3, "b": 2})
+
+    def test_gender_answer_selects_opposite_presenting_target(self):
+        settings = {"counterbalancing": {"target_assignment": {
+            "questionnaire_kind": "background",
+            "answer_id": "gender_identity",
+            "target_by_answer": {
+                "Woman": "masculine_presenting",
+                "Man": "feminine_presenting",
+            },
+        }}}
+        woman = resolve_target_assignment(
+            settings, "background", {"gender_identity": "Woman"})
+        man = resolve_target_assignment(
+            settings, "background", {"gender_identity": "Man"})
+        self.assertEqual(woman, {
+            "allocation_stratum": "Woman", "target_ref": "masculine_presenting"})
+        self.assertEqual(man, {
+            "allocation_stratum": "Man", "target_ref": "feminine_presenting"})
+        default = allocate(settings, [{
+            "id": 10, "order_idx": 0,
+            "voice_schedule": [{"mode": "vc", "engine": "xvc",
+                                "start_s": 0, "end_s": None}],
+        }], [{"ref": "masculine_presenting"},
+             {"ref": "feminine_presenting"}], [], 1,
+            target_ref=woman["target_ref"],
+            allocation_stratum=woman["allocation_stratum"])[0]
+        self.assertEqual(default["variant_id"], "default")
+        self.assertEqual(
+            default["assignment"]["10"]["voice_schedule"][0]["target_ref"],
+            "masculine_presenting")
+        with self.assertRaises(CounterbalanceError):
+            resolve_target_assignment(settings, "background", {
+                "gender_identity": "Prefer not to answer"})
+
+    def test_variants_balance_independently_within_gender_groups(self):
+        settings = {"counterbalancing": {
+            "target_assignment": {
+                "answer_id": "gender_identity",
+                "target_by_answer": {
+                    "Woman": "masculine_presenting",
+                    "Man": "feminine_presenting",
+                },
+            },
+            "conditions": self.settings["counterbalancing"]["conditions"],
+            "variants": [
+                {"id": "A", "scenario_order": [1, 2],
+                 "condition_assignment": {1: "A", 2: "B"}},
+                {"id": "B", "scenario_order": [2, 1],
+                 "condition_assignment": {1: "B", 2: "A"}},
+            ],
+        }}
+        targets = [{"ref": "masculine_presenting"},
+                   {"ref": "feminine_presenting"}]
+        participants = [
+            {"variant_id": "A", "allocation_stratum": "Woman"},
+            {"variant_id": "B", "allocation_stratum": "Woman"},
+            {"variant_id": "A", "allocation_stratum": "Man"},
+        ]
+        woman = allocate(settings, self.scenarios, targets, participants, 1,
+                         target_ref="masculine_presenting", allocation_stratum="Woman")[0]
+        man = allocate(settings, self.scenarios, targets, participants, 1,
+                       target_ref="feminine_presenting", allocation_stratum="Man")[0]
+        self.assertEqual(woman["variant_id"], "A")
+        self.assertEqual(woman["target_ref"], "masculine_presenting")
+        self.assertEqual(man["variant_id"], "B")
+        self.assertEqual(man["target_ref"], "feminine_presenting")
+        for allocation in (woman, man):
+            for override in allocation["assignment"].values():
+                vc = [segment for segment in override["voice_schedule"]
+                      if segment.get("mode") == "vc"]
+                self.assertTrue(all(segment["target_ref"] == allocation["target_ref"]
+                                    for segment in vc))
 
 
 class TransitionTests(unittest.TestCase):

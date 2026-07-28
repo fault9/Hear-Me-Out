@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -31,7 +32,10 @@ from .artifacts import (append_jsonl, atomic_write_bytes, atomic_write_json,
                         canonical_json_bytes, file_record, git_revision,
                         immutable_copy, sha256_bytes)
 from .counterbalance import (CounterbalanceError, allocate as allocate_variants,
-                             balance_report)
+                             balance_report, has_deferred_target_assignment,
+                             resolve_target_assignment,
+                             target_assignment_configuration,
+                             validate_and_compile)
 from .engine import get_manager
 from . import yaml_io
 from .models import (REQUIRED_CARD_FIELDS, CreateStudyRequest, EnterRequest,
@@ -253,6 +257,7 @@ def build_study_router() -> APIRouter:
     router = APIRouter(prefix="/api/study")
     backend = get_backend()
     manager = get_manager()
+    allocation_lock = threading.Lock()
     TARGETS_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -389,8 +394,15 @@ def build_study_router() -> APIRouter:
         participants = backend.list_participants(study_id)
         count = max(1, body.count)
         try:
-            allocations = allocate_variants(study.get("settings") or {}, scenarios,
-                                            backend.list_targets(study_id), participants, count)
+            settings = study.get("settings") or {}
+            targets = backend.list_targets(study_id)
+            if has_deferred_target_assignment(settings):
+                validate_and_compile(settings, scenarios, targets)
+                allocations = [{"allocation_status": "awaiting_profile"}
+                               for _ in range(count)]
+            else:
+                allocations = allocate_variants(
+                    settings, scenarios, targets, participants, count)
         except CounterbalanceError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         created = backend.generate_participants(study_id, count, scenario_ids,
@@ -571,6 +583,12 @@ def build_study_router() -> APIRouter:
     @router.post("/session/start")
     async def session_start(body: SessionStartRequest):
         p = _require_participant(body.code)
+        study = backend.get_study(p["study_id"])
+        if (has_deferred_target_assignment((study or {}).get("settings") or {}) and
+                (p.get("allocation_status") != "assigned" or not p.get("target_ref"))):
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the background questionnaire before starting a scenario")
         run = _guard_window(p["participant_id"])
         scenario = _resolve_scenario(backend, p, body.scenario_order)
         engine = _scenario_engine(scenario)
@@ -849,9 +867,43 @@ def build_study_router() -> APIRouter:
             session = backend.get_session(session_id)
             if not session or session["participant_id"] != p["participant_id"]:
                 raise HTTPException(status_code=404, detail="Unknown participant session")
+        study = backend.get_study(p["study_id"])
+        settings = (study or {}).get("settings") or {}
+        target_config = target_assignment_configuration(settings)
+        assigned = None
+        if target_config and body.kind == str(
+                target_config.get("questionnaire_kind") or "background"):
+            try:
+                resolved = resolve_target_assignment(settings, body.kind, body.payload)
+                with allocation_lock:
+                    latest = backend.get_participant_by_code(body.code)
+                    if latest.get("allocation_status") == "awaiting_profile":
+                        allocation = allocate_variants(
+                            settings, backend.list_scenarios(p["study_id"]),
+                            backend.list_targets(p["study_id"]),
+                            backend.list_participants(p["study_id"]), 1,
+                            target_ref=resolved["target_ref"],
+                            allocation_stratum=resolved["allocation_stratum"],
+                        )[0]
+                        assigned = backend.assign_participant(
+                            p["participant_id"], allocation,
+                            resolved["allocation_stratum"])
+                    else:
+                        assigned = latest
+                        if assigned.get("target_ref") != resolved["target_ref"]:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="The voice target for this participant is already fixed")
+            except CounterbalanceError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         backend.save_answer(p["participant_id"], session_id if session_id != "none" else None,
                             body.kind, body.payload)
-        return {"ok": True}
+        return {"ok": True, "allocation": ({
+            "status": assigned.get("allocation_status"),
+            "stratum": assigned.get("allocation_stratum"),
+            "variant_id": assigned.get("variant_id"),
+            "target_ref": assigned.get("target_ref"),
+        } if assigned else None)}
 
     @router.get("/playback/{code}")
     async def playback(code: str, scenario: int = 0, track: str = "merged"):

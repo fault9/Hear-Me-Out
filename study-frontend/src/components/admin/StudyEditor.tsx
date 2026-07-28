@@ -244,18 +244,23 @@ function ParticipantsPanel({ token, studyId, participants, hasScenarios, onChang
         <div className="mb-4 rounded-md border p-3 text-xs">
           <div className="mb-1 font-semibold">Counterbalance allocation</div>
           <div className="font-mono">{Object.entries(balance.variant_counts || {}).map(([id, n]) => `${id}: ${n}`).join(" · ")}</div>
+          {balance.awaiting_profile > 0 && <div className="mt-1">Awaiting gender response: {balance.awaiting_profile}</div>}
+          {Object.entries(balance.stratum_variant_counts || {}).map(([stratum, counts]: [string, any]) => (
+            <div key={stratum} className="mt-1 font-mono">{stratum}: {Object.entries(counts).map(([id, n]) => `${id}=${n}`).join(" · ")}</div>
+          ))}
           {(balance.warnings || []).map((warning: string) => <p key={warning} className="mt-1 text-destructive">{warning}</p>)}
         </div>
       )}
       <div className="max-h-72 overflow-auto rounded-md border">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-left"><tr><th className="p-2">Participant</th><th className="p-2">Code</th><th className="p-2">Variant</th><th className="p-2">Target</th></tr></thead>
+          <thead className="bg-muted/50 text-left"><tr><th className="p-2">Participant</th><th className="p-2">Code</th><th className="p-2">Gender group</th><th className="p-2">Variant</th><th className="p-2">Target</th></tr></thead>
           <tbody>
             {participants.map((p: any) => (
               <tr key={p.participant_id} className="border-t">
                 <td className="p-2">{p.participant_id}</td>
                 <td className="p-2 font-mono">{p.code}</td>
-                <td className="p-2 font-mono">{p.variant_id || "manual"}</td>
+                <td className="p-2">{p.allocation_stratum || (p.allocation_status === "awaiting_profile" ? "Awaiting response" : "—")}</td>
+                <td className="p-2 font-mono">{p.variant_id || (p.allocation_status === "awaiting_profile" ? "pending" : "manual")}</td>
                 <td className="p-2 font-mono">{p.target_ref || "—"}</td>
               </tr>
             ))}

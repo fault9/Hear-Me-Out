@@ -176,6 +176,7 @@ export function ParticipantFlow() {
           setBusy(true)
           try {
             await api.questionnaire(null, code, "background", ans)
+            setData(await api.enter(code))
             setScenarioIdx(0)
             setStep({ phase: "scenario", scenario_order: 1 })
             setPhase("scenario")
