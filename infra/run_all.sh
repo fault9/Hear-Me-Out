@@ -158,19 +158,41 @@ if [ "$APP_MODE" = "study" ]; then
     # Either way these vars are inherited by app-api and (via engine.py) the on-demand
     # VC engine; each service self-names (study-app-api/xvc/meanvc/study-analysis), so
     # don't set OTEL_SERVICE_NAME.
-    if [ "$STUDY_OBSERVABILITY" = "1" ] || [ "$STUDY_OBSERVABILITY" = "true" ]; then
-        O2_PORT="${O2_PORT:-5080}"
-        WORKSPACE="$WORKSPACE" STUDY_DATA_ROOT="$STUDY_DATA_ROOT" O2_PORT="$O2_PORT" \
-            bash "$SCRIPT_DIR/observability.sh" start || echo -e "  ${YELLOW}warn:${NC} observability backend failed to start (see log)"
-        # OpenObserve serves under ZO_BASE_URI=/logs; OTLP ingest is org-scoped + Basic auth.
-        _o2_email="${O2_ROOT_USER_EMAIL:-admin@example.com}"
-        _o2_pass="${O2_ROOT_USER_PASSWORD:-ChangeMe123}"
-        _o2_auth="$(printf '%s:%s' "$_o2_email" "$_o2_pass" | base64 | tr -d '\n')"
-        export OTEL_TRACES_EXPORTER="otlp"
-        export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$O2_PORT/logs/api/default"
-        export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $_o2_auth"
-        export STUDY_OBSERVABILITY_URL="http://127.0.0.1:$O2_PORT"   # app-api reverse-proxies /logs -> here
-        echo -e "  ${DIM}observ.${NC}    OpenObserve traces+logs  ${DIM}UI → http(s)://<host>:5001/logs  (login $_o2_email)${NC}"
+    # Decide whether to run the bundled OpenObserve backend:
+    #   installed on the volume  -> auto-on (no prompt, survives restarts)
+    #   STUDY_OBSERVABILITY=1/0   -> force on / off
+    #   otherwise (fresh box)     -> ASK, and install on first yes
+    _o2_bin="${STUDY_DATA_ROOT}/observability/bin/openobserve"
+    _o2_enable="no"
+    if [ "$STUDY_OBSERVABILITY" = "0" ] || [ "$STUDY_OBSERVABILITY" = "false" ]; then
+        _o2_enable="no"
+    elif [ "$STUDY_OBSERVABILITY" = "1" ] || [ "$STUDY_OBSERVABILITY" = "true" ] || [ -x "$_o2_bin" ]; then
+        _o2_enable="yes"
+    else
+        read -t 60 -p "  Enable observability UI (traces + logs at :5001/logs)? [y/N]: " _o2ans < /dev/tty 2>/dev/tty || _o2ans=""
+        case "$_o2ans" in [Yy]*) _o2_enable="yes" ;; *) _o2_enable="no" ;; esac
+    fi
+
+    if [ "$_o2_enable" = "yes" ]; then
+        if [ ! -x "$_o2_bin" ]; then   # one-time install onto the volume
+            echo -e "  ${DIM}observ.${NC}    installing OpenObserve (one-time, persists on the volume)…"
+            WORKSPACE="$WORKSPACE" STUDY_DATA_ROOT="$STUDY_DATA_ROOT" bash "$SCRIPT_DIR/observability.sh" install \
+                || echo -e "  ${YELLOW}warn:${NC} observability install failed — set O2_VERSION and retry: bash infra/observability.sh install"
+        fi
+        if [ -x "$_o2_bin" ]; then
+            O2_PORT="${O2_PORT:-5080}"
+            WORKSPACE="$WORKSPACE" STUDY_DATA_ROOT="$STUDY_DATA_ROOT" O2_PORT="$O2_PORT" \
+                bash "$SCRIPT_DIR/observability.sh" start || echo -e "  ${YELLOW}warn:${NC} observability backend failed to start (see log)"
+            # OpenObserve serves under ZO_BASE_URI=/logs; OTLP ingest is org-scoped + Basic auth.
+            _o2_email="${O2_ROOT_USER_EMAIL:-admin@example.com}"
+            _o2_pass="${O2_ROOT_USER_PASSWORD:-ChangeMe123}"
+            _o2_auth="$(printf '%s:%s' "$_o2_email" "$_o2_pass" | base64 | tr -d '\n')"
+            export OTEL_TRACES_EXPORTER="otlp"
+            export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$O2_PORT/logs/api/default"
+            export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $_o2_auth"
+            export STUDY_OBSERVABILITY_URL="http://127.0.0.1:$O2_PORT"   # app-api reverse-proxies /logs -> here
+            echo -e "  ${DIM}observ.${NC}    OpenObserve traces+logs  ${DIM}UI → http(s)://<host>:5001/logs  (login $_o2_email)${NC}"
+        fi
     elif [ "$STUDY_TRACING" = "1" ] || [ "$STUDY_TRACING" = "true" ]; then
         export OTEL_TRACES_EXPORTER="${OTEL_TRACES_EXPORTER:-otlp}"
         export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://127.0.0.1:4318}"

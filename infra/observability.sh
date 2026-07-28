@@ -18,9 +18,12 @@ ACTION="${1:-status}"
 WORKSPACE="${WORKSPACE:-$(cd "$(dirname "$0")/.." && pwd)}"
 O2_VERSION="${O2_VERSION:-v0.14.4}"
 O2_PORT="${O2_PORT:-5080}"
-O2_DIR="$WORKSPACE/observability"
+# Everything under the persistent volume (STUDY_DATA_ROOT, e.g. /workspace/data) so the
+# binary AND data survive container restarts — install once, no reinstall each time.
+O2_ROOT="${STUDY_DATA_ROOT:-/workspace/data}/observability"
+O2_DIR="$O2_ROOT/bin"
 O2_BIN="$O2_DIR/openobserve"
-O2_DATA="${STUDY_DATA_ROOT:-/workspace/data}/observability"
+O2_DATA="$O2_ROOT/data"
 PIDFILE="${TMPDIR:-/tmp}/hmo_observability.pid"
 LOG="${OBSERVABILITY_LOG:-${TMPDIR:-/tmp}/hmo_observability.log}"
 

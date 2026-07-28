@@ -14,24 +14,27 @@ analysis worker (offline batch)
 **Off by default.** Nothing is installed or exported unless you opt in; when disabled
 the tracing/logging code is a no-op.
 
-## 1. Install the backend (once, via setup)
+## 1. Install the backend — ONCE (persists across restarts)
 
 ```bash
 bash infra/setup.sh --observability      # or answer "Y" to the observability prompt
 ```
 
 This downloads the **OpenObserve** single binary (traces + logs + UI, OTLP-native) to
-`$WORKSPACE/observability/`. Nothing else to run — it's a static binary, not a
-container. (Standalone: `bash infra/observability.sh install`; pin a release with
-`O2_VERSION=vX.Y.Z` if the default tag is unavailable for your platform.)
+**`$STUDY_DATA_ROOT/observability/bin/`** — i.e. onto the same mounted volume as the DB
+and media, so it survives container restarts. You do NOT reinstall each time.
+(Standalone: `bash infra/observability.sh install`; pin a release with `O2_VERSION=vX.Y.Z`
+if the default tag is unavailable for your platform.)
 
-## 2. Start the stack with observability on
+## 2. Start the stack — it auto-starts
 
 ```bash
-STUDY_OBSERVABILITY=1 APP_MODE=study bash infra/run_all.sh
+APP_MODE=study bash infra/run_all.sh
 ```
 
-run_all then:
+Once the binary is installed on the volume, run_all **auto-starts** observability every
+run (no flag needed). Force it off with `STUDY_OBSERVABILITY=0`, or on (before install)
+with `STUDY_OBSERVABILITY=1`. run_all then:
 - starts OpenObserve (data under `$STUDY_DATA_ROOT/observability`, served under `/logs`),
 - points every service's OTLP exporter at it (traces `/v1/traces` + logs `/v1/logs`),
 - sets `STUDY_OBSERVABILITY_URL` so **app-api reverse-proxies the UI under `/logs`**.
