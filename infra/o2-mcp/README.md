@@ -17,7 +17,7 @@ claude mcp add openobserve \
   --env O2_USER=admin@example.com \
   --env O2_PASSWORD=ChangeMe123 \
   --env O2_ORG=default \
-  -- uv run --with "mcp[cli]" --with httpx python "$(pwd)/infra/o2-mcp/server.py"
+  -- uv run --with fastmcp --with httpx python "$(pwd)/infra/o2-mcp/server.py"
 ```
 
 …or add it to `.mcp.json` at the repo root:
@@ -27,7 +27,7 @@ claude mcp add openobserve \
   "mcpServers": {
     "openobserve": {
       "command": "uv",
-      "args": ["run", "--with", "mcp[cli]", "--with", "httpx",
+      "args": ["run", "--with", "fastmcp", "--with", "httpx",
                "python", "infra/o2-mcp/server.py"],
       "env": {
         "O2_URL": "https://130.237.3.103:5001/logs",

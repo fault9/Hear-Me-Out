@@ -21,7 +21,7 @@ import os
 import time
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 O2_URL = os.environ.get("O2_URL", "https://127.0.0.1:5001/logs").rstrip("/")
 O2_ORG = os.environ.get("O2_ORG", "default")
