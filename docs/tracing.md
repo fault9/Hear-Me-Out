@@ -87,6 +87,14 @@ per device (`{gpu}`): `gpu.utilization` (%), `gpu.memory.used_mib`, `gpu.memory.
 these against `vc.inference_ms` / `personaplex.first_response_ms` to see how GPU load tracks
 latency (e.g. contention when the analysis batch runs). No-op on CPU-only boxes.
 
+### Dashboard (metrics)
+
+Traces and logs need no dashboard — explore them directly. For the metric graphs
+(latency + GPU) there's a ready-to-import OpenObserve dashboard at
+`infra/observability/dashboard.json`: **Dashboards → Import** it in the UI. See
+`infra/observability/README.md` for the panel queries (and how to adjust metric names
+if a panel comes up empty).
+
 ## How it's wired
 
 - **Traces**: `services/common/otel.py` — FastAPI + requests + aiohttp-client
