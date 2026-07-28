@@ -41,9 +41,22 @@ def set_log_session(session_id) -> None:
     _session_var.set(session_id or None)
 
 
+# Loggers to DROP from OTLP export (they don't reach the observability backend, but
+# still print to stdout). httpx/httpcore/urllib3 are the HTTP clients used by the OTLP
+# exporter and the app-api /logs reverse-proxy — every proxied UI request logs an
+# "HTTP Request: …" line that would otherwise flood the logs stream and feed back on
+# itself. Override with STUDY_LOG_SUPPRESS (comma-separated logger-name prefixes; empty
+# to disable).
+_SUPPRESS_PREFIXES = tuple(
+    p.strip() for p in os.environ.get(
+        "STUDY_LOG_SUPPRESS", "httpx,httpcore,urllib3").split(",") if p.strip())
+
+
 class _SessionFilter(logging.Filter):
-    """Stamp the current session id onto the record so it's exported as an attribute."""
+    """Drop noisy HTTP-client logs from export; stamp the session id on the rest."""
     def filter(self, record: logging.LogRecord) -> bool:
+        if _SUPPRESS_PREFIXES and record.name.startswith(_SUPPRESS_PREFIXES):
+            return False
         sid = _session_var.get()
         if sid:
             record.session_id = sid
