@@ -60,9 +60,12 @@ _tracer = otel.get_tracer("study-app-api") if otel else None
 
 
 def _trace_session(**attrs):
-    """Stamp span attributes AND tag this request's logs with session id + study id."""
+    """Stamp span attributes AND tag this request's logs with session id + study id.
+    Also record the active session so device-level GPU metrics are attributed to it."""
     if otel:
         otel.set_session_attributes(**attrs)
+        if attrs.get("session_id"):
+            otel.set_active_session(attrs["session_id"], attrs.get("study_id"))
     if logging_setup and attrs.get("session_id"):
         logging_setup.set_log_session(attrs["session_id"], attrs.get("study_id"))
 

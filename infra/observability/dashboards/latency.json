@@ -10,7 +10,7 @@
       "name": "Default",
       "panels": [
         {
-          "id": "p1",
+          "id": "Panel_1",
           "type": "line",
           "title": "PersonaPlex first-response (ms)",
           "description": "",
@@ -19,13 +19,61 @@
             "legends_position": null,
             "unit": "milliseconds",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as x_axis_1, avg(CAST(study_first_response_ms AS DOUBLE)) as y_axis_1 FROM \"default\" WHERE study_first_response_ms IS NOT NULL GROUP BY x_axis_1 ORDER BY x_axis_1",
+              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", avg(CAST(study_first_response_ms AS DOUBLE)) as \"y_axis_1\" FROM \"default\" WHERE study_first_response_ms IS NOT NULL GROUP BY x_axis_1 ORDER BY x_axis_1",
               "vrlFunctionQuery": "",
               "customQuery": true,
               "fields": {
@@ -36,7 +84,9 @@
                     "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
-                    "color": null
+                    "color": null,
+                    "aggregationFunction": "histogram",
+                    "isDerived": false
                   }
                 ],
                 "y": [
@@ -44,8 +94,9 @@
                     "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#3aa0a0",
-                    "aggregationFunction": "avg"
+                    "color": "#5960b2",
+                    "aggregationFunction": "avg",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
@@ -59,7 +110,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -69,10 +124,13 @@
             "w": 24,
             "h": 9,
             "i": 1
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p2",
+          "id": "Panel_2",
           "type": "line",
           "title": "VC inference avg (ms)",
           "description": "",
@@ -81,13 +139,61 @@
             "legends_position": null,
             "unit": "milliseconds",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as x_axis_1, avg(CAST(study_vc_inference_avg_ms AS DOUBLE)) as y_axis_1 FROM \"default\" WHERE study_vc_inference_avg_ms IS NOT NULL GROUP BY x_axis_1 ORDER BY x_axis_1",
+              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", avg(CAST(study_vc_inference_avg_ms AS DOUBLE)) as \"y_axis_1\" FROM \"default\" WHERE study_vc_inference_avg_ms IS NOT NULL GROUP BY x_axis_1 ORDER BY x_axis_1",
               "vrlFunctionQuery": "",
               "customQuery": true,
               "fields": {
@@ -98,7 +204,9 @@
                     "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
-                    "color": null
+                    "color": null,
+                    "aggregationFunction": "histogram",
+                    "isDerived": false
                   }
                 ],
                 "y": [
@@ -106,8 +214,9 @@
                     "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#2f9e44",
-                    "aggregationFunction": "avg"
+                    "color": "#5960b2",
+                    "aggregationFunction": "avg",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
@@ -121,7 +230,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -131,45 +244,98 @@
             "w": 24,
             "h": 9,
             "i": 2
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p3",
+          "id": "Panel_3",
           "type": "bar",
-          "title": "Session duration by session (\u00b5s)",
+          "title": "Span latency by operation (\u00b5s)",
           "description": "",
           "config": {
             "show_legends": true,
             "legends_position": null,
             "unit": "microseconds",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT study_session_id as x_axis_1, avg(duration) as y_axis_1 FROM \"default\" WHERE operation_name='GET /api/meanvc/chat-proxy' AND study_session_id IS NOT NULL GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "query": "SELECT operation_name as \"x_axis_1\", avg(duration) as \"y_axis_1\"  FROM \"default\"  GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
               "vrlFunctionQuery": "",
-              "customQuery": true,
+              "customQuery": false,
               "fields": {
                 "stream": "default",
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "",
+                    "label": "Operation",
                     "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
+                    "column": "operation_name",
+                    "color": null,
+                    "isDerived": false
                   }
                 ],
                 "y": [
                   {
-                    "label": "",
+                    "label": "duration",
                     "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#e8a33d",
-                    "aggregationFunction": "avg"
+                    "column": "duration",
+                    "color": "#5960b2",
+                    "aggregationFunction": "avg",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
@@ -183,7 +349,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -193,49 +363,111 @@
             "w": 24,
             "h": 9,
             "i": 3
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p4",
-          "type": "bar",
-          "title": "Span latency by operation (\u00b5s)",
+          "id": "Panel_4",
+          "type": "line",
+          "title": "GPU utilization %",
           "description": "",
           "config": {
             "show_legends": true,
             "legends_position": null,
-            "unit": "microseconds",
+            "unit": "percent",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT operation_name as x_axis_1, avg(duration) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", avg(value) as \"y_axis_1\", gpu as \"breakdown_1\"  FROM \"gpu_utilization\"  GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
               "vrlFunctionQuery": "",
-              "customQuery": true,
+              "customQuery": false,
               "fields": {
-                "stream": "default",
-                "stream_type": "traces",
+                "stream": "gpu_utilization",
+                "stream_type": "metrics",
                 "x": [
                   {
-                    "label": "",
+                    "label": "Timestamp",
                     "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
+                    "column": "_timestamp",
+                    "color": null,
+                    "aggregationFunction": "histogram",
+                    "isDerived": false
                   }
                 ],
                 "y": [
                   {
-                    "label": "",
+                    "label": "value",
                     "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#c23531",
-                    "aggregationFunction": "avg"
+                    "column": "value",
+                    "color": "#5960b2",
+                    "aggregationFunction": "avg",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
-                "breakdown": [],
+                "breakdown": [
+                  {
+                    "label": "gpu",
+                    "alias": "breakdown_1",
+                    "column": "gpu",
+                    "color": null,
+                    "isDerived": false
+                  }
+                ],
                 "filter": {
                   "filterType": "group",
                   "logicalOperator": "AND",
@@ -245,7 +477,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -255,79 +491,13 @@
             "w": 24,
             "h": 9,
             "i": 4
-          }
-        },
-        {
-          "id": "p5",
-          "type": "line",
-          "title": "GPU utilization %",
-          "description": "",
-          "config": {
-            "show_legends": true,
-            "legends_position": null,
-            "unit": "percent",
-            "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
           },
-          "queryType": "sql",
-          "queries": [
-            {
-              "query": "SELECT histogram(_timestamp) as x_axis_1, avg(value) as y_axis_1, gpu as breakdown_1 FROM \"gpu_utilization\" GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
-              "vrlFunctionQuery": "",
-              "customQuery": true,
-              "fields": {
-                "stream": "gpu_utilization",
-                "stream_type": "metrics",
-                "x": [
-                  {
-                    "label": "",
-                    "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
-                  }
-                ],
-                "y": [
-                  {
-                    "label": "",
-                    "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#8e44ad",
-                    "aggregationFunction": "avg"
-                  }
-                ],
-                "z": [],
-                "breakdown": [
-                  {
-                    "label": "",
-                    "alias": "breakdown_1",
-                    "column": "breakdown_1",
-                    "color": null
-                  }
-                ],
-                "filter": {
-                  "filterType": "group",
-                  "logicalOperator": "AND",
-                  "conditions": []
-                }
-              },
-              "config": {
-                "promql_legend": "",
-                "layer_type": "scatter",
-                "weight_fixed": 1.0
-              }
-            }
-          ],
-          "layout": {
-            "x": 0,
-            "y": 18,
-            "w": 24,
-            "h": 9,
-            "i": 5
-          }
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p6",
+          "id": "Panel_5",
           "type": "line",
           "title": "GPU memory used (MiB)",
           "description": "",
@@ -336,33 +506,84 @@
             "legends_position": null,
             "unit": "megabytes",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as x_axis_1, avg(value) as y_axis_1 FROM \"gpu_memory_used_mib\" GROUP BY x_axis_1 ORDER BY x_axis_1",
+              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", avg(value) as \"y_axis_1\"  FROM \"gpu_memory_used_mib\"  GROUP BY x_axis_1 ORDER BY x_axis_1",
               "vrlFunctionQuery": "",
-              "customQuery": true,
+              "customQuery": false,
               "fields": {
                 "stream": "gpu_memory_used_mib",
                 "stream_type": "metrics",
                 "x": [
                   {
-                    "label": "",
+                    "label": "Timestamp",
                     "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
+                    "column": "_timestamp",
+                    "color": null,
+                    "aggregationFunction": "histogram",
+                    "isDerived": false
                   }
                 ],
                 "y": [
                   {
-                    "label": "",
+                    "label": "value",
                     "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#d6749a",
-                    "aggregationFunction": "avg"
+                    "column": "value",
+                    "color": "#5960b2",
+                    "aggregationFunction": "avg",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
@@ -376,7 +597,131 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 18,
+            "w": 24,
+            "h": 9,
+            "i": 5
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
+        },
+        {
+          "id": "Panel_6",
+          "type": "line",
+          "title": "VC inference throughput (count)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", max(value) as \"y_axis_1\"  FROM \"vc_inference_ms_count\"  GROUP BY x_axis_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": false,
+              "fields": {
+                "stream": "vc_inference_ms_count",
+                "stream_type": "metrics",
+                "x": [
+                  {
+                    "label": "Timestamp",
+                    "alias": "x_axis_1",
+                    "column": "_timestamp",
+                    "color": null,
+                    "aggregationFunction": "histogram",
+                    "isDerived": false
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "value",
+                    "alias": "y_axis_1",
+                    "column": "value",
+                    "color": "#5960b2",
+                    "aggregationFunction": "max",
+                    "isDerived": false
+                  }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -386,7 +731,10 @@
             "w": 24,
             "h": 9,
             "i": 6
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         }
       ]
     }
