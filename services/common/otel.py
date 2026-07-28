@@ -108,6 +108,15 @@ def set_session_attributes(**attrs: Any) -> None:
 _METRICS_ENABLED = False
 _hist_cache: dict = {}
 
+# The currently-active study session (single live run), used to tag device-level GPU
+# metrics so they can be sliced per session/study in dashboards.
+_active_session: dict = {"session_id": None, "study_id": None}
+
+
+def set_active_session(session_id, study_id=None) -> None:
+    _active_session["session_id"] = session_id or None
+    _active_session["study_id"] = str(study_id) if study_id is not None else None
+
 
 def init_metrics(service_name: str) -> bool:
     """Set up the OTLP metrics pipeline (same enable gate + endpoint as tracing).
@@ -163,9 +172,18 @@ def init_gpu_metrics(service_name: str) -> bool:
     def _obs(fn):
         def _cb(_options):
             out = []
+            # Tag with the active session/study (only one runs at a time), so GPU load
+            # is attributable per session in dashboards.
+            sid = _active_session.get("session_id")
+            stid = _active_session.get("study_id")
             for i, h in enumerate(handles):
+                attrs = {"gpu": i}
+                if sid:
+                    attrs["study.session_id"] = sid
+                if stid:
+                    attrs["study.study_id"] = stid
                 try:
-                    out.append(Observation(fn(h), {"gpu": i}))
+                    out.append(Observation(fn(h), attrs))
                 except Exception:  # noqa: BLE001 - one bad read shouldn't drop the rest
                     pass
             return out
