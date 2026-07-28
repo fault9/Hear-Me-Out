@@ -1,7 +1,7 @@
 {
   "version": 5,
   "title": "HMO \u2014 Session Logs",
-  "description": "Structured logs for user + study sessions: volume by severity/service/session, errors, recent lines.",
+  "description": "Logs for user + study sessions.",
   "role": "",
   "owner": "admin@example.com",
   "tabs": [
@@ -33,25 +33,25 @@
                 "stream_type": "logs",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
-                    "color": null,
-                    "aggregationFunction": "histogram"
+                    "color": null
                   }
                 ],
                 "y": [
                   {
-                    "label": "Log volume by severity",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#3aa0a0"
+                    "color": "#3aa0a0",
+                    "aggregationFunction": "count"
                   }
                 ],
                 "z": [],
                 "breakdown": [
                   {
-                    "label": "series",
+                    "label": "",
                     "alias": "breakdown_1",
                     "column": "breakdown_1",
                     "color": null
@@ -102,7 +102,7 @@
                 "stream_type": "logs",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
                     "color": null
@@ -110,10 +110,11 @@
                 ],
                 "y": [
                   {
-                    "label": "Logs by service",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#2f9e44"
+                    "color": "#2f9e44",
+                    "aggregationFunction": "count"
                   }
                 ],
                 "z": [],
@@ -163,7 +164,7 @@
                 "stream_type": "logs",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
                     "color": null
@@ -171,10 +172,11 @@
                 ],
                 "y": [
                   {
-                    "label": "Logs by study/user session",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#e8a33d"
+                    "color": "#e8a33d",
+                    "aggregationFunction": "count"
                   }
                 ],
                 "z": [],
@@ -224,7 +226,7 @@
                 "stream_type": "logs",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
                     "color": null
@@ -232,10 +234,11 @@
                 ],
                 "y": [
                   {
-                    "label": "Warnings/errors by service",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#c23531"
+                    "color": "#c23531",
+                    "aggregationFunction": "count"
                   }
                 ],
                 "z": [],

@@ -1,7 +1,7 @@
 {
   "version": 5,
   "title": "HMO \u2014 Latency",
-  "description": "Model + GPU latency: X-VC/MeanVC inference, PersonaPlex response, span durations, GPU load.",
+  "description": "Model + GPU latency.",
   "role": "",
   "owner": "admin@example.com",
   "tabs": [
@@ -33,19 +33,19 @@
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
-                    "color": null,
-                    "aggregationFunction": "histogram"
+                    "color": null
                   }
                 ],
                 "y": [
                   {
-                    "label": "PersonaPlex first-response (ms)",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#3aa0a0"
+                    "color": "#3aa0a0",
+                    "aggregationFunction": "avg"
                   }
                 ],
                 "z": [],
@@ -95,19 +95,19 @@
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
-                    "color": null,
-                    "aggregationFunction": "histogram"
+                    "color": null
                   }
                 ],
                 "y": [
                   {
-                    "label": "VC inference avg (ms)",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#2f9e44"
+                    "color": "#2f9e44",
+                    "aggregationFunction": "avg"
                   }
                 ],
                 "z": [],
@@ -157,7 +157,7 @@
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
                     "color": null
@@ -165,10 +165,11 @@
                 ],
                 "y": [
                   {
-                    "label": "Session duration by session (\u00b5s)",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#e8a33d"
+                    "color": "#e8a33d",
+                    "aggregationFunction": "avg"
                   }
                 ],
                 "z": [],
@@ -218,7 +219,7 @@
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
                     "color": null
@@ -226,10 +227,11 @@
                 ],
                 "y": [
                   {
-                    "label": "Span latency by operation (\u00b5s)",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#c23531"
+                    "color": "#c23531",
+                    "aggregationFunction": "avg"
                   }
                 ],
                 "z": [],
@@ -279,25 +281,25 @@
                 "stream_type": "metrics",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
-                    "color": null,
-                    "aggregationFunction": "histogram"
+                    "color": null
                   }
                 ],
                 "y": [
                   {
-                    "label": "GPU utilization %",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#8e44ad"
+                    "color": "#8e44ad",
+                    "aggregationFunction": "avg"
                   }
                 ],
                 "z": [],
                 "breakdown": [
                   {
-                    "label": "series",
+                    "label": "",
                     "alias": "breakdown_1",
                     "column": "breakdown_1",
                     "color": null
@@ -348,19 +350,19 @@
                 "stream_type": "metrics",
                 "x": [
                   {
-                    "label": "x",
+                    "label": "",
                     "alias": "x_axis_1",
                     "column": "x_axis_1",
-                    "color": null,
-                    "aggregationFunction": "histogram"
+                    "color": null
                   }
                 ],
                 "y": [
                   {
-                    "label": "GPU memory used (MiB)",
+                    "label": "",
                     "alias": "y_axis_1",
                     "column": "y_axis_1",
-                    "color": "#d6749a"
+                    "color": "#d6749a",
+                    "aggregationFunction": "avg"
                   }
                 ],
                 "z": [],
