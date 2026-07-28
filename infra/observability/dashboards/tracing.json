@@ -10,7 +10,7 @@
       "name": "Default",
       "panels": [
         {
-          "id": "p1",
+          "id": "Panel_1",
           "type": "line",
           "title": "Spans over time by service",
           "description": "",
@@ -19,42 +19,94 @@
             "legends_position": null,
             "unit": "default",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as x_axis_1, count(*) as y_axis_1, service_name as breakdown_1 FROM \"default\" GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", count(_timestamp) as \"y_axis_1\", service_name as \"breakdown_1\"  FROM \"default\"  GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
               "vrlFunctionQuery": "",
-              "customQuery": true,
+              "customQuery": false,
               "fields": {
                 "stream": "default",
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "",
+                    "label": "Timestamp",
                     "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
+                    "column": "_timestamp",
+                    "color": null,
+                    "aggregationFunction": "histogram",
+                    "isDerived": false
                   }
                 ],
                 "y": [
                   {
-                    "label": "",
+                    "label": "Count",
                     "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#3aa0a0",
-                    "aggregationFunction": "count"
+                    "column": "_timestamp",
+                    "color": "#5960b2",
+                    "aggregationFunction": "count",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
                 "breakdown": [
                   {
-                    "label": "",
+                    "label": "service",
                     "alias": "breakdown_1",
-                    "column": "breakdown_1",
-                    "color": null
+                    "column": "service_name",
+                    "color": null,
+                    "isDerived": false
                   }
                 ],
                 "filter": {
@@ -66,7 +118,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -76,10 +132,13 @@
             "w": 24,
             "h": 9,
             "i": 1
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p2",
+          "id": "Panel_2",
           "type": "bar",
           "title": "Span count by service",
           "description": "",
@@ -88,33 +147,83 @@
             "legends_position": null,
             "unit": "default",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT service_name as x_axis_1, count(*) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "query": "SELECT service_name as \"x_axis_1\", count(_timestamp) as \"y_axis_1\"  FROM \"default\"  GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
               "vrlFunctionQuery": "",
-              "customQuery": true,
+              "customQuery": false,
               "fields": {
                 "stream": "default",
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "",
+                    "label": "Service",
                     "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
+                    "column": "service_name",
+                    "color": null,
+                    "isDerived": false
                   }
                 ],
                 "y": [
                   {
-                    "label": "",
+                    "label": "Count",
                     "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#2f9e44",
-                    "aggregationFunction": "count"
+                    "column": "_timestamp",
+                    "color": "#5960b2",
+                    "aggregationFunction": "count",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
@@ -128,7 +237,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -138,10 +251,13 @@
             "w": 24,
             "h": 9,
             "i": 2
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p3",
+          "id": "Panel_3",
           "type": "bar",
           "title": "Avg span duration by operation (\u00b5s)",
           "description": "",
@@ -150,33 +266,83 @@
             "legends_position": null,
             "unit": "microseconds",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT operation_name as x_axis_1, avg(duration) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "query": "SELECT operation_name as \"x_axis_1\", avg(duration) as \"y_axis_1\"  FROM \"default\"  GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
               "vrlFunctionQuery": "",
-              "customQuery": true,
+              "customQuery": false,
               "fields": {
                 "stream": "default",
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "",
+                    "label": "Operation",
                     "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
+                    "column": "operation_name",
+                    "color": null,
+                    "isDerived": false
                   }
                 ],
                 "y": [
                   {
-                    "label": "",
+                    "label": "duration",
                     "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#e8a33d",
-                    "aggregationFunction": "avg"
+                    "column": "duration",
+                    "color": "#5960b2",
+                    "aggregationFunction": "avg",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
@@ -190,7 +356,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -200,10 +370,13 @@
             "w": 24,
             "h": 9,
             "i": 3
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p4",
+          "id": "Panel_4",
           "type": "bar",
           "title": "Max span duration by operation (\u00b5s)",
           "description": "",
@@ -212,33 +385,83 @@
             "legends_position": null,
             "unit": "microseconds",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
             {
-              "query": "SELECT operation_name as x_axis_1, max(duration) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "query": "SELECT operation_name as \"x_axis_1\", max(duration) as \"y_axis_1\"  FROM \"default\"  GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
               "vrlFunctionQuery": "",
-              "customQuery": true,
+              "customQuery": false,
               "fields": {
                 "stream": "default",
                 "stream_type": "traces",
                 "x": [
                   {
-                    "label": "",
+                    "label": "Operation",
                     "alias": "x_axis_1",
-                    "column": "x_axis_1",
-                    "color": null
+                    "column": "operation_name",
+                    "color": null,
+                    "isDerived": false
                   }
                 ],
                 "y": [
                   {
-                    "label": "",
+                    "label": "duration",
                     "alias": "y_axis_1",
-                    "column": "y_axis_1",
-                    "color": "#c23531",
-                    "aggregationFunction": "max"
+                    "column": "duration",
+                    "color": "#5960b2",
+                    "aggregationFunction": "max",
+                    "isDerived": false
                   }
                 ],
                 "z": [],
@@ -252,7 +475,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -262,20 +489,71 @@
             "w": 24,
             "h": 9,
             "i": 4
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         },
         {
-          "id": "p5",
+          "id": "Panel_5",
           "type": "table",
           "title": "Slowest spans",
           "description": "",
           "config": {
-            "show_legends": false,
+            "show_legends": true,
             "legends_position": null,
             "unit": "default",
             "decimals": 2.0,
-            "base_map": null,
-            "map_view": null
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0.0
+            },
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1.0,
+              "lat": 0.0,
+              "lng": 0.0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1.0,
+                "max": 100.0
+              },
+              "size_fixed": 2.0
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#53ca53"
+              ],
+              "seriesBy": "last"
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1
+            }
           },
           "queryType": "sql",
           "queries": [
@@ -291,31 +569,36 @@
                     "label": "operation_name",
                     "alias": "operation_name",
                     "column": "operation_name",
-                    "color": null
+                    "color": null,
+                    "isDerived": false
                   },
                   {
                     "label": "service_name",
                     "alias": "service_name",
                     "column": "service_name",
-                    "color": null
+                    "color": null,
+                    "isDerived": false
                   },
                   {
                     "label": "duration",
                     "alias": "duration",
                     "column": "duration",
-                    "color": null
+                    "color": null,
+                    "isDerived": false
                   },
                   {
                     "label": "study_session_id",
                     "alias": "study_session_id",
                     "column": "study_session_id",
-                    "color": null
+                    "color": null,
+                    "isDerived": false
                   },
                   {
                     "label": "trace_id",
                     "alias": "trace_id",
                     "column": "trace_id",
-                    "color": null
+                    "color": null,
+                    "isDerived": false
                   }
                 ],
                 "y": [],
@@ -330,7 +613,11 @@
               "config": {
                 "promql_legend": "",
                 "layer_type": "scatter",
-                "weight_fixed": 1.0
+                "weight_fixed": 1.0,
+                "limit": 0.0,
+                "min": 0.0,
+                "max": 100.0,
+                "time_shift": []
               }
             }
           ],
@@ -340,7 +627,10 @@
             "w": 24,
             "h": 9,
             "i": 5
-          }
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": " // ECharts custom option (unused for bar/line)\noption = {};\n"
         }
       ]
     }
