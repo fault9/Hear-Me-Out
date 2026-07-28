@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Spinner } from "@/components/ui/spinner"
+import { Button } from "@shared/ui/button"
+import { Spinner } from "@shared/ui/spinner"
 import { Download, Play, Pause, BarChart3, FileJson, Activity, ChevronDown } from "lucide-react"
-import { formatTime } from "@/lib/utils"
-import type { VcQualityMetric } from "@/services/api"
+import { formatTime } from "@shared/lib/utils"
+import type { VcQualityMetric } from "@shared/services/api"
 
 // Metric checkboxes in the "Analyze VC quality" dropdown. SECS is the
 // heaviest (WavLM-large forward pass per segment); skipping it is the single

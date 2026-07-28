@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { X } from "lucide-react"
 import { MetricsResultView } from "@/components/MetricsResultView"
-import type { MetricsResult } from "@/services/api"
+import type { MetricsResult } from "@shared/services/api"
 
 interface Props {
   data: MetricsResult

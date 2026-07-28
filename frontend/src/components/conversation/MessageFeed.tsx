@@ -1,11 +1,11 @@
-import { Skeleton } from "@/components/ui/skeleton"
-import { Spinner } from "@/components/ui/spinner"
-import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
+import { Skeleton } from "@shared/ui/skeleton"
+import { Spinner } from "@shared/ui/spinner"
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription } from "@shared/ui/empty"
+import { Alert, AlertDescription } from "@shared/ui/alert"
+import { Button } from "@shared/ui/button"
 import { MessageSquareText, AlertCircle } from "lucide-react"
-import { cn, formatTime } from "@/lib/utils"
-import type { Transcript } from "@/hooks/useWebSocket"
+import { cn, formatTime } from "@shared/lib/utils"
+import type { Transcript } from "@shared/hooks/useWebSocket"
 import type { DiarizedTurn } from "@/hooks/useConversation"
 
 interface Props {

@@ -47,8 +47,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { OPUS_ENCODER_CONFIG, PP_SAMPLE_RATE } from "@/lib/soundboardConfig"
 import type { Slot } from "@/lib/soundboardDb"
-import type { useWebSocket } from "@/hooks/useWebSocket"
-import { transcribeWavBlob } from "@/services/api"
+import type { useWebSocket } from "@shared/hooks/useWebSocket"
+import { transcribeWavBlob } from "@shared/services/api"
 import { putSlot } from "@/lib/soundboardDb"
 import { captureClip } from "@/lib/soundboardCapture"
 

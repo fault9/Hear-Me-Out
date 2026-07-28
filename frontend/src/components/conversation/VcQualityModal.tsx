@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { X, AlertTriangle, ChevronRight, ChevronDown, User, Bot } from "lucide-react"
-import type { VcQualityResult, VcQualitySegment, VcQualityAnomaly } from "@/services/api"
+import type { VcQualityResult, VcQualitySegment, VcQualityAnomaly } from "@shared/services/api"
 import type { DiarizedTurn } from "@/hooks/useConversation"
 
 interface Props {

@@ -28,12 +28,14 @@ MODELS_ONLY=false
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
 INSTALL_SYSTEM=true
 INSTALL_XVC="${INSTALL_XVC:-false}"
+INSTALL_OBSERVABILITY="${INSTALL_OBSERVABILITY:-false}"
 for a in "$@"; do
   case "$a" in
     --models-only)            MODELS_ONLY=true ;;
     --xvc)                    INSTALL_XVC=true ;;
+    --observability)          INSTALL_OBSERVABILITY=true ;;
     -y|--yes|--non-interactive) NONINTERACTIVE=1 ;;
-    -h|--help) echo "Usage: setup.sh [--models-only] [--xvc] [-y|--yes]"; exit 0 ;;
+    -h|--help) echo "Usage: setup.sh [--models-only] [--xvc] [--observability] [-y|--yes]"; exit 0 ;;
     *) warn "Unknown arg: $a" ;;
   esac
 done
@@ -74,7 +76,7 @@ echo
 
 # Workspace defaults to the current directory — cd into your target folder first.
 WORKSPACE="${WORKSPACE:-$(pwd)}"
-REPO_URL="${REPO_URL:-https://github.com/syedfahimabrar/Hear-Me-Out.git}"
+REPO_URL="${REPO_URL:-https://github.com/smfabrar/Hear-Me-Out.git}"
 
 ask        WORKSPACE "Workspace directory" "$WORKSPACE"
 ask        REPO_URL  "Git repo URL"        "$REPO_URL"
@@ -87,6 +89,9 @@ if ! $MODELS_ONLY; then
 fi
 if ! $MODELS_ONLY; then
   ask_yn   INSTALL_XVC    "Also install the X-VC engine? (own venv, GPU)" "N"
+fi
+if ! $MODELS_ONLY; then
+  ask_yn   INSTALL_OBSERVABILITY "Also install observability? (OpenObserve: OTel traces+logs UI at /logs)" "N"
 fi
 
 # Fixed upstreams (not prompted)
@@ -126,6 +131,7 @@ echo -e "  ${BOLD}HF token${NC}     : $([ -n "$HF_TOKEN" ] && echo set || echo "
 echo -e "  ${BOLD}Models-only${NC}  : $MODELS_ONLY"
 $MODELS_ONLY || echo -e "  ${BOLD}System pkgs${NC}  : $INSTALL_SYSTEM"
 $MODELS_ONLY || echo -e "  ${BOLD}X-VC engine${NC}  : $INSTALL_XVC"
+$MODELS_ONLY || echo -e "  ${BOLD}Observability${NC}: $INSTALL_OBSERVABILITY"
 hr
 if [ "$NONINTERACTIVE" != "1" ]; then
   read -r -p "$(printf "${CYAN}?${NC} ${BOLD}Proceed?${NC} ${DIM}[Y/n]${NC} ")" __go
@@ -255,14 +261,15 @@ phase_models() {
     echo "WARN: HF_TOKEN not set — skipping gated PersonaPlex model."
   fi
   # MiniCPM-o 4.5 GGUF (public) — the alternative :8000 speech LM, run by llama.cpp-omni.
-  # Audio-only subset (~7.8GB): LLM Q4_K_M + audio/ + tts/ + token2wav-gguf/ (skip vision/).
-  # Downloaded via app_api's venv (it has huggingface_hub; minicpm_o's venv is torch-free).
-  if [ ! -f "$MO_GGUF_DIR/MiniCPM-o-4_5-Q4_K_M.gguf" ]; then
-    echo "Downloading MiniCPM-o 4.5 GGUF subset (~7.8GB)..."
+  # Need LLM Q4_K_M + audio/ + tts/ + token2wav-gguf/ + vision/ — llama-omni-server's
+  # omni_init loads the vision model unconditionally, so include it (skipping it makes the
+  # engine error 'failed to load vision model' every boot). Downloaded via app_api's venv.
+  if [ ! -f "$MO_GGUF_DIR/vision/MiniCPM-o-4_5-vision-F16.gguf" ]; then
+    echo "Downloading MiniCPM-o 4.5 GGUF (~9GB)..."
     uv run --project "$SERVICES/app_api" python -c "
 from huggingface_hub import snapshot_download
 snapshot_download('openbmb/MiniCPM-o-4_5-gguf', local_dir='$MO_GGUF_DIR',
-    allow_patterns=['MiniCPM-o-4_5-Q4_K_M.gguf','audio/*','tts/*','token2wav-gguf/*'])
+    allow_patterns=['MiniCPM-o-4_5-Q4_K_M.gguf','audio/*','tts/*','token2wav-gguf/*','vision/*'])
 print('MiniCPM-o GGUF ready.')" \
       || echo "WARN: MiniCPM-o GGUF download failed; rerun or fetch openbmb/MiniCPM-o-4_5-gguf manually."
   else echo "MiniCPM-o GGUF present."; fi
@@ -313,6 +320,13 @@ phase_runtime() {
     touch "$WORKSPACE/src/__init__.py" "$WORKSPACE/src/runtime/__init__.py"
   fi
   bash "$REPO_DIR/infra/generate-ssl.sh" || true
+
+  # Observability backend (OpenObserve single binary). Optional; run_all starts it and
+  # app-api proxies its UI under /logs. Non-fatal if the download fails.
+  if $INSTALL_OBSERVABILITY; then
+    WORKSPACE="$WORKSPACE" bash "$REPO_DIR/infra/observability.sh" install \
+      || warn "Observability install failed — set O2_VERSION to a valid release and rerun: bash infra/observability.sh install"
+  fi
 }
 
 # ===========================================================================

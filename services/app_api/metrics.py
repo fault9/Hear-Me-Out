@@ -81,7 +81,10 @@ def get_transcript(audio_path):
             truncation=False, padding="longest", return_attention_mask=True,
         )
         with torch.no_grad():
-            ids = model.generate(**inputs, return_timestamps=True)
+            # Force English transcription (not language auto-detect / translation) so
+            # results are deterministic regardless of what's spoken.
+            ids = model.generate(**inputs, return_timestamps=True,
+                                 language="en", task="transcribe")
         return processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
     except Exception as e:
         print(f"Error during transcription: {e}")
@@ -259,7 +262,10 @@ def analyze_voices(audio_path_a, audio_path_b):
         "response_a": metrics_a,
         "response_b": metrics_b,
         "comparison": comparison_metrics,
-        "aesthetics": aesthetic_metrics
+        "aesthetics": aesthetic_metrics,
+        # False => aesthetics are placeholder/mock values (audiobox not installed);
+        # the study saver records this so mock aesthetics aren't analyzed as real.
+        "audiobox_available": AUDIOBOX_AVAILABLE,
     }
 
 def create_comprehensive_metrics_plot(metrics_data, save_path='metrics_comparison.png'):

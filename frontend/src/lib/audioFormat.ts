@@ -22,7 +22,7 @@ import {
   PP_CHANNELS,
   DURATION_DRIFT_TOLERANCE_MS,
 } from "@/lib/soundboardConfig"
-import { createWavFile } from "@/lib/audio"
+import { createWavFile } from "@shared/lib/audio"
 
 export interface PcmBuffer {
   pcm: Float32Array

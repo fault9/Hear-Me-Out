@@ -1,12 +1,12 @@
 import { useState, useCallback, useRef } from "react"
-import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Spinner } from "@/components/ui/spinner"
-import { FieldGroup, Field, FieldLabel } from "@/components/ui/field"
-import { convertVoice } from "@/services/api"
+import { Button } from "@shared/ui/button"
+import { Skeleton } from "@shared/ui/skeleton"
+import { Alert, AlertDescription } from "@shared/ui/alert"
+import { Spinner } from "@shared/ui/spinner"
+import { FieldGroup, Field, FieldLabel } from "@shared/ui/field"
+import { convertVoice } from "@shared/services/api"
 import { Wand2, Play, AlertCircle, Upload, Volume2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@shared/lib/utils"
 
 function UploadZone({ file, setFile }: { file: File | null; setFile: (f: File | null) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)

@@ -25,6 +25,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("meanvc-server")
 
+# Shared OpenTelemetry helper (<repo>/services/common); no-op unless OTEL_* is set.
+import contextlib  # noqa: E402
+_SERVICES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SERVICES_DIR not in sys.path:
+    sys.path.insert(0, _SERVICES_DIR)
+try:
+    from common import otel
+    from common import logging_setup
+    logging_setup.init_logging("meanvc")  # export logs over OTLP (trace-correlated) when observability is enabled
+except Exception:  # noqa: BLE001
+    otel = None
+    logging_setup = None
+
 
 # Replicate MeanVC's Mel spectrogram and fbank extractors ------------------------------------------------
 def _amp_to_db(x, min_level_db):
@@ -457,6 +470,10 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
         elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
             break
 
+    if otel:
+        otel.set_session_attributes(chunks=chunk_count)
+        if vc_chunks:
+            otel.set_session_attributes(vc_inference_avg_ms=round(vc_ms_total / vc_chunks, 1))
     logger.info(f"Stream closed after {chunk_count} chunks")
     return ws
 
@@ -483,6 +500,28 @@ def _save_wav(path: str, pcm: np.ndarray, sr: int) -> None:
         w.writeframes(ints.tobytes())
 
 
+# app-api base URL for study-mode condition resolution (the study platform hides
+# the system prompt + VC target from the browser; the proxy fetches them here).
+STUDY_APP_API_URL = os.environ.get("STUDY_APP_API_URL", "https://127.0.0.1:5001")
+
+
+async def resolve_study_condition(session_id: str):
+    """Study mode: resolve an opaque session_id to its hidden condition
+    (text_prompt / voice_prompt / engine_target_id / steps / voice_mode) via
+    app-api over localhost. Returns None if unavailable."""
+    url = f"{STUDY_APP_API_URL}/api/study/condition/{session_id}"
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, ssl=False, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                if r.status != 200:
+                    logger.error(f"[proxy] condition resolve HTTP {r.status} for {session_id}")
+                    return None
+                return await r.json()
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[proxy] condition resolve failed: {e}")
+        return None
+
+
 async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     """WebSocket /api/meanvc/chat-proxy - server-side VC bridge to PersonaPlex.
 
@@ -499,7 +538,28 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     source_sr = int(request.query.get("source_sr", 16000))
     voice_prompt = request.query.get("voice_prompt", "")
     text_prompt = request.query.get("text_prompt", "")
+    session_id = request.query.get("session_id", "")
     need_resample = source_sr != 16000
+
+    browser_ws = web.WebSocketResponse()
+    await browser_ws.prepare(request)
+
+    study_id = None
+    # Study mode: the browser passes only an opaque session_id; resolve the hidden
+    # prompt + timed voice schedule server-side. Legacy (HMO) mode uses the single
+    # target_id from the query as a one-segment VC schedule.
+    if session_id:
+        cond = await resolve_study_condition(session_id)
+        if cond is None:
+            await browser_ws.send_json({"error": "Unknown or unresolved session"})
+            await browser_ws.close()
+            return browser_ws
+        text_prompt = cond.get("text_prompt", "")
+        voice_prompt = cond.get("voice_prompt") or voice_prompt
+        schedule = cond.get("schedule") or [{"mode": "natural", "start_s": 0, "end_s": None}]
+        study_id = cond.get("study_id")
+    else:
+        schedule = [{"mode": "vc", "start_s": 0, "end_s": None, "engine_target_id": target_id}]
 
     if need_resample:
         import torchaudio
@@ -509,18 +569,29 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         ).to("cpu")
         logger.info(f"[proxy] Resampling enabled: {source_sr}Hz -> 16000Hz")
 
-    browser_ws = web.WebSocketResponse()
-    await browser_ws.prepare(request)
+    # One InferenceSession per distinct VC target referenced by the schedule.
+    # Natural segments need none; a missing target falls back to pass-through.
+    vc_sessions: dict[str, "InferenceSession"] = {}
+    for seg in schedule:
+        if seg.get("mode") == "vc":
+            tid = seg.get("engine_target_id")
+            if tid and tid in targets and tid not in vc_sessions:
+                with targets_lock:
+                    spk_emb, prompt_mel = targets[tid]
+                vc_sessions[tid] = InferenceSession(models, spk_emb, prompt_mel, steps=steps)
+    has_vc = len(vc_sessions) > 0
 
-    if target_id not in targets:
-        await browser_ws.send_json({"error": f"Unknown target_id: {target_id}"})
-        await browser_ws.close()
-        return browser_ws
+    def active_segment(elapsed_s: float) -> dict:
+        for seg in schedule:
+            start = seg.get("start_s") or 0
+            end = seg.get("end_s")
+            if elapsed_s >= start and (end is None or elapsed_s < end):
+                return seg
+        return schedule[-1]
 
-    with targets_lock:
-        spk_emb, prompt_mel = targets[target_id]
-
-    session = InferenceSession(models, spk_emb, prompt_mel, steps=steps)
+    # Chunk size for buffering mic PCM: MeanVC's native chunk when any VC segment
+    # exists, else a fixed 0.1 s window for pure pass-through.
+    CHUNK = next(iter(vc_sessions.values())).CHUNK if has_vc else 1600
     # MeanVC outputs 16 kHz, but sphn's Opus encoder only accepts 24 kHz / 48 kHz
     # (PersonaPlex itself uses 24 kHz = its mimi rate). So encode at 24 kHz and
     # resample the converted audio up before feeding the encoder.
@@ -537,13 +608,22 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     opus_reader_dbg = sphn.OpusStreamReader(24000) if debug_dir else None
     debug_pcm: list[np.ndarray] = []
 
+    if logging_setup:
+        logging_setup.set_log_session(session_id or "direct", study_id)
+    if otel:
+        otel.set_session_attributes(session_id=session_id or "direct", engine="meanvc",
+                                    study_id=study_id)
+
     qs = urlencode({"voice_prompt": voice_prompt, "text_prompt": text_prompt})
     pplx_url = f"wss://{PERSONAPLEX_HOST}:{PERSONAPLEX_PORT}/api/chat?{qs}"
     logger.info(f"[proxy] Connecting to PersonaPlex: {pplx_url}")
 
+    _tracer = otel.get_tracer("meanvc") if otel else None
     client = aiohttp.ClientSession()
     try:
-        pplx_ws = await client.ws_connect(pplx_url, ssl=False, max_msg_size=0)
+        with (otel.start_span(_tracer, "personaplex.connect", kind="client") if otel
+              else contextlib.nullcontext()):
+            pplx_ws = await client.ws_connect(pplx_url, ssl=False, max_msg_size=0)
     except Exception as e:
         logger.error(f"[proxy] Failed to connect to PersonaPlex: {e}")
         await browser_ws.send_json({"error": f"PersonaPlex unavailable: {e}"})
@@ -552,14 +632,23 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         return browser_ws
 
     chunk_count = 0
+    processed_samples = 0            # 16 kHz samples consumed → elapsed time for the schedule
+    warmed: set = set()             # target ids whose session has done its warmup chunk
+    seg_counts: dict = {}           # per-target chunk counter for periodic reset_cache
     acc_samples = np.array([], dtype=np.float32)
     # sphn.append_pcm only accepts exact Opus frame sizes; 1920 @ 24 kHz is what
     # PersonaPlex itself feeds. Buffer the resampled audio and emit fixed frames.
     OPUS_FRAME = 1920
     opus_pcm_buf = np.array([], dtype=np.float32)
+    # latency tracking
+    first_send_ts = None
+    first_model_done = False
+    vc_ms_total = 0.0
+    vc_chunks = 0
 
     async def browser_to_pplx():
-        nonlocal chunk_count, acc_samples, opus_pcm_buf
+        nonlocal chunk_count, processed_samples, acc_samples, opus_pcm_buf
+        nonlocal first_send_ts, vc_ms_total, vc_chunks
         async for msg in browser_ws:
             if msg.type == web.WSMsgType.BINARY:
                 incoming = np.frombuffer(msg.data, dtype=np.float32).copy()
@@ -568,34 +657,41 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     incoming = resampler(t).squeeze(0).numpy()
                 acc_samples = np.concatenate([acc_samples, incoming])
 
-                while len(acc_samples) >= session.CHUNK:
-                    chunk = acc_samples[: session.CHUNK]
-                    acc_samples = acc_samples[session.CHUNK :]
+                while len(acc_samples) >= CHUNK:
+                    chunk = acc_samples[:CHUNK]
+                    acc_samples = acc_samples[CHUNK:]
                     chunk_count += 1
 
-                    if chunk_count == 1:
-                        # First chunk is warmup padding; produce but don't forward.
-                        chunk = np.concatenate(
-                            [chunk, np.zeros(720, dtype=np.float32)]
-                        )
-                        await loop.run_in_executor(
-                            None, session.inference_one_chunk, chunk
-                        )
-                        continue
+                    # Pick the active segment by elapsed audio time, then advance.
+                    seg = active_segment(processed_samples / 16000.0)
+                    processed_samples += len(chunk)
+                    tid = seg.get("engine_target_id") if seg.get("mode") == "vc" else None
+                    sess = vc_sessions.get(tid) if tid else None
 
-                    # Periodically realign the streaming offsets (matches the
-                    # reference run_rt.py). Without this, asr/vc offsets grow
-                    # unbounded and quality drifts over a long conversation.
-                    if chunk_count % 50 == 0:
-                        session.reset_cache()
-
-                    try:
-                        vc_wav = await loop.run_in_executor(
-                            None, session.inference_one_chunk, chunk
-                        )
-                    except Exception as e:
-                        logger.error(f"[proxy] Inference error chunk {chunk_count}: {e}")
-                        continue
+                    if sess is None:
+                        # Natural (or missing target): forward the raw mic chunk.
+                        vc_wav = chunk
+                    else:
+                        if tid not in warmed:
+                            # First chunk on this target is warmup padding — don't forward.
+                            padded = np.concatenate([chunk, np.zeros(720, dtype=np.float32)])
+                            await loop.run_in_executor(None, sess.inference_one_chunk, padded)
+                            warmed.add(tid)
+                            continue
+                        # Periodically realign streaming offsets (per reference run_rt.py).
+                        seg_counts[tid] = seg_counts.get(tid, 0) + 1
+                        if seg_counts[tid] % 50 == 0:
+                            sess.reset_cache()
+                        _t0 = time.perf_counter()
+                        try:
+                            vc_wav = await loop.run_in_executor(None, sess.inference_one_chunk, chunk)
+                        except Exception as e:
+                            logger.error(f"[proxy] Inference error chunk {chunk_count}: {e}")
+                            continue
+                        _dt = (time.perf_counter() - _t0) * 1000.0
+                        vc_ms_total += _dt; vc_chunks += 1
+                        if otel:
+                            otel.record_latency("vc.inference_ms", _dt, engine="meanvc")
 
                     # (a) forward converted audio to PersonaPlex as Opus.
                     # sphn encodes at 24 kHz, so upsample the 16 kHz VC output,
@@ -614,6 +710,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                             encoded = opus_writer.read_bytes()
                             if len(encoded) == 0:
                                 break
+                            if first_send_ts is None:
+                                first_send_ts = time.perf_counter()
                             await pplx_ws.send_bytes(TAG_AUDIO + encoded)
                             if opus_reader_dbg is not None:
                                 opus_reader_dbg.append_bytes(encoded)
@@ -629,8 +727,16 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                 break
 
     async def pplx_to_browser():
+        nonlocal first_model_done
         async for msg in pplx_ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
+                if not first_model_done and msg.data[:1] == b"\x01" and first_send_ts is not None:
+                    first_model_done = True
+                    _lat = (time.perf_counter() - first_send_ts) * 1000.0
+                    if otel:
+                        otel.record_latency("personaplex.first_response_ms", _lat, engine="meanvc")
+                        otel.set_session_attributes(first_response_ms=round(_lat))
+                    logger.info(f"[proxy] first PersonaPlex audio {_lat:.0f} ms after first send")
                 if not browser_ws.closed:
                     await browser_ws.send_bytes(msg.data)
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
@@ -686,9 +792,13 @@ async def handle_info(_request: web.Request) -> web.Response:
 
 
 def create_app() -> web.Application:
-    app = web.Application(
-        middlewares=[cors_middleware], client_max_size=10 * 1024 * 1024
-    )
+    mws = [cors_middleware]
+    if otel and otel.init_tracing("meanvc"):
+        otel.init_metrics("meanvc")
+        otel.instrument_aiohttp_client()
+        mws.append(otel.aiohttp_middleware("meanvc"))
+        logger.info("OpenTelemetry tracing enabled (meanvc)")
+    app = web.Application(middlewares=mws, client_max_size=10 * 1024 * 1024)
     app.router.add_get("/api/meanvc/info", handle_info)
     app.router.add_post("/api/meanvc/load-target", handle_load_target)
     app.router.add_get("/api/meanvc/stream", handle_stream)

@@ -1,0 +1,434 @@
+{
+  "version": 5,
+  "title": "HMO \u2014 Session Logs",
+  "description": "Logs for user + study sessions.",
+  "role": "",
+  "owner": "admin@example.com",
+  "tabs": [
+    {
+      "tabId": "default",
+      "name": "Default",
+      "panels": [
+        {
+          "id": "p1",
+          "type": "line",
+          "title": "Log volume by severity",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) as x_axis_1, count(*) as y_axis_1, severity as breakdown_1 FROM \"default\" GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "logs",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#3aa0a0",
+                    "aggregationFunction": "count"
+                  }
+                ],
+                "z": [],
+                "breakdown": [
+                  {
+                    "label": "",
+                    "alias": "breakdown_1",
+                    "column": "breakdown_1",
+                    "color": null
+                  }
+                ],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 24,
+            "h": 9,
+            "i": 1
+          }
+        },
+        {
+          "id": "p2",
+          "type": "bar",
+          "title": "Logs by service",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT service_name as x_axis_1, count(*) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "logs",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#2f9e44",
+                    "aggregationFunction": "count"
+                  }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 24,
+            "y": 0,
+            "w": 24,
+            "h": 9,
+            "i": 2
+          }
+        },
+        {
+          "id": "p3",
+          "type": "bar",
+          "title": "Logs by study/user session",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT session_id as x_axis_1, count(*) as y_axis_1 FROM \"default\" WHERE session_id IS NOT NULL GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "logs",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#e8a33d",
+                    "aggregationFunction": "count"
+                  }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 9,
+            "w": 24,
+            "h": 9,
+            "i": 3
+          }
+        },
+        {
+          "id": "p4",
+          "type": "bar",
+          "title": "Warnings/errors by service",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT service_name as x_axis_1, count(*) as y_axis_1 FROM \"default\" WHERE severity IN ('ERROR','WARN','WARNING') GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "logs",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#c23531",
+                    "aggregationFunction": "count"
+                  }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 24,
+            "y": 9,
+            "w": 24,
+            "h": 9,
+            "i": 4
+          }
+        },
+        {
+          "id": "p5",
+          "type": "table",
+          "title": "Errors & warnings",
+          "description": "",
+          "config": {
+            "show_legends": false,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT _timestamp, severity, service_name, session_id, body FROM \"default\" WHERE severity IN ('ERROR','WARN','WARNING') ORDER BY _timestamp DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "logs",
+                "x": [
+                  {
+                    "label": "_timestamp",
+                    "alias": "_timestamp",
+                    "column": "_timestamp",
+                    "color": null
+                  },
+                  {
+                    "label": "severity",
+                    "alias": "severity",
+                    "column": "severity",
+                    "color": null
+                  },
+                  {
+                    "label": "service_name",
+                    "alias": "service_name",
+                    "column": "service_name",
+                    "color": null
+                  },
+                  {
+                    "label": "session_id",
+                    "alias": "session_id",
+                    "column": "session_id",
+                    "color": null
+                  },
+                  {
+                    "label": "body",
+                    "alias": "body",
+                    "column": "body",
+                    "color": null
+                  }
+                ],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 18,
+            "w": 24,
+            "h": 9,
+            "i": 5
+          }
+        },
+        {
+          "id": "p6",
+          "type": "table",
+          "title": "Recent logs",
+          "description": "",
+          "config": {
+            "show_legends": false,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT _timestamp, severity, service_name, session_id, body FROM \"default\" ORDER BY _timestamp DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "logs",
+                "x": [
+                  {
+                    "label": "_timestamp",
+                    "alias": "_timestamp",
+                    "column": "_timestamp",
+                    "color": null
+                  },
+                  {
+                    "label": "severity",
+                    "alias": "severity",
+                    "column": "severity",
+                    "color": null
+                  },
+                  {
+                    "label": "service_name",
+                    "alias": "service_name",
+                    "column": "service_name",
+                    "color": null
+                  },
+                  {
+                    "label": "session_id",
+                    "alias": "session_id",
+                    "column": "session_id",
+                    "color": null
+                  },
+                  {
+                    "label": "body",
+                    "alias": "body",
+                    "column": "body",
+                    "color": null
+                  }
+                ],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 24,
+            "y": 18,
+            "w": 24,
+            "h": 9,
+            "i": 6
+          }
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "list": [],
+    "showDynamicFilters": true
+  },
+  "defaultDatetimeDuration": {
+    "type": "relative",
+    "relativeTimePeriod": "24h"
+  }
+}

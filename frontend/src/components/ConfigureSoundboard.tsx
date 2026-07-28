@@ -7,12 +7,12 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent } from "@/components/ui/card"
-import { Spinner } from "@/components/ui/spinner"
-import { Badge } from "@/components/ui/badge"
+import { Button } from "@shared/ui/button"
+import { Input } from "@shared/ui/input"
+import { Label } from "@shared/ui/label"
+import { Card, CardContent } from "@shared/ui/card"
+import { Spinner } from "@shared/ui/spinner"
+import { Badge } from "@shared/ui/badge"
 import {
   Mic, Square, Trash2, Play, Download, Upload, Wand2, Sparkles,
   CheckCircle2, AlertTriangle, Pause, FileAudio, ChevronUp, ChevronDown,

@@ -1,12 +1,12 @@
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Spinner } from "@/components/ui/spinner"
-import { Switch } from "@/components/ui/switch"
+import { Button } from "@shared/ui/button"
+import { Badge } from "@shared/ui/badge"
+import { Spinner } from "@shared/ui/spinner"
+import { Switch } from "@shared/ui/switch"
 import { Mic, MicOff, ChevronRight, Wand2, Volume2, Pause, Headphones, ListMusic } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
-import { cn } from "@/lib/utils"
+import { cn } from "@shared/lib/utils"
+import type { useMeanVCPipeline } from "@shared/hooks/useMeanVCPipeline"
 import { getMeanvcInfoUrl } from "@/lib/config"
-import type { useMeanVCPipeline } from "@/hooks/useMeanVCPipeline"
 
 // Both engines mount the same /api/meanvc/* routes on :5002. We query
 // /api/meanvc/info once on mount so the pipeline pill shows whichever engine

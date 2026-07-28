@@ -13,12 +13,17 @@ dependencies = [
     "aiohttp>=3.10",
     # Speaker verification (wavlm_large) used by the MeanVC runtime
     # (src/runtime/speaker_verification, copied into the workspace by setup.sh).
-    # Verify against the MeanVC repo's runtime requirements on first `uv lock`.
-    "transformers",
+    # Pinned to torch-2.4-compatible transformers (same as services/xvc): newer
+    # releases import DTensor from torch.distributed.tensor, which needs torch>=2.5.
+    "transformers==4.44.1",
     "einops==0.7.0",
     # s3prl (wavlm_large SV) runs from the torch-hub cache; its upstreams import these.
     "omegaconf",
     "pyyaml",
+    # Distributed tracing (OpenTelemetry) — optional; no-op unless OTEL_* is set.
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-aiohttp-client",
 ]
 
 [[tool.uv.index]]

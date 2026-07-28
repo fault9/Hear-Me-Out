@@ -46,7 +46,7 @@ import {
   pitchFormantBake as apiPitchFormantBake,
   loudnessNormalize,
   transcribeWavBlob,
-} from "@/services/api"
+} from "@shared/services/api"
 import { exportSoundboard, importSoundboard } from "@/lib/soundboardZip"
 
 export interface SessionContext {

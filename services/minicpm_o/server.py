@@ -69,8 +69,18 @@ LLAMA_OMNI_BIN = os.environ.get(
 GGUF_DIR = os.environ.get("MINICPM_O_GGUF_DIR", "")             # dir with LLM + tts/ audio/ token2wav-gguf/
 LLM_FILE = os.environ.get("MINICPM_O_LLM", "MiniCPM-o-4_5-Q4_K_M.gguf")
 CPP_PORT = int(os.environ.get("MINICPM_O_CPP_PORT", "19080"))
-CTX_SIZE = int(os.environ.get("MINICPM_O_CTX", "8192"))
+CTX_SIZE = int(os.environ.get("MINICPM_O_CTX", "32768"))  # official cpp_backend default; the
+# duplex KV cache grows over the whole conversation and is never trimmed, so too small a ctx
+# fills after ~2 turns of (heavy) audio tokens and the model sticks in is_listen=True forever.
 N_GPU_LAYERS = int(os.environ.get("MINICPM_O_NGL", "99"))
+# Per-chunk speak-token budget. The C++ engine's duplex default is 26 (~1.0s of audio per
+# chunk), chosen for snappy barge-in -- but the LLM emits text faster than that, so long
+# replies end (text done) with most of the speech never synthesized = the "missing audio on
+# long turns". It's a MAX (the model still stops at <|chunk_tts_eos|> on short phrases), so
+# raising it just lets Token2Wav finish longer phrases; the cost is the model commits to more
+# tokens before checking for interruption, so barge-in gets a bit less responsive. 0 = leave
+# the engine default.
+MAX_SPEAK_TOKENS = int(os.environ.get("MINICPM_O_MAX_SPEAK_TOKENS", "75"))
 LENGTH_PENALTY = float(os.environ.get("MINICPM_O_LENGTH_PENALTY", "1.1"))
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -84,14 +94,28 @@ TEMP_DIR = os.path.join(OUTPUT_DIR, "_in")
 
 _NO_PROXY = {"http": None, "https": None}
 
+# Gentle brevity nudge appended to the system prompt. The model defaults to long monologues,
+# which both read worse and strain the duplex pipeline (text outruns the per-chunk audio budget,
+# so very long turns lag). This is a soft instruction, not a hard cap -- it can still go long
+# when the question genuinely needs it. Set MINICPM_O_STYLE_HINT="" to disable, or override it.
+STYLE_HINT = os.environ.get(
+    "MINICPM_O_STYLE_HINT",
+    " Keep your replies short and natural -- usually one to three sentences -- and let the "
+    "conversation go back and forth rather than giving long monologues. Add more detail only "
+    "when the user asks for it.",
+)
+
 
 def build_prompts(text_prompt: str) -> dict:
     """Two-part duplex system prompt (cpp_backend.py _build_prompts_from_content).
 
     The frontend's text_prompt is the `before` (system) text; duplex puts no text
-    after the audio prompt. Falls back to the project's default if empty.
+    after the audio prompt. Falls back to the project's default if empty. A brevity
+    STYLE_HINT is appended (unless disabled) so replies stay conversational.
     """
     before = (text_prompt or "").strip() or "Streaming Duplex Conversation! You are a helpful assistant."
+    if STYLE_HINT.strip():
+        before = before.rstrip() + " " + STYLE_HINT.strip()
     return {
         "voice_clone_prompt": f"<|im_start|>system\n{before}\n<|audio_start|>",
         "assistant_prompt": "<|audio_end|><|im_end|>\n",
@@ -158,7 +182,7 @@ class LlamaOmni:
                     f.write(line)
                     f.flush()
                     s = line.rstrip()
-                    if any(k in s.lower() for k in ("error", "fail", "cannot", "abort", "assert", "cuda")):
+                    if any(k in s.lower() for k in ("error", "fail", "cannot", "abort", "assert", "cuda", "speak_tokens")):
                         logger.warning("[llama-server] %s", s)
                     else:
                         logger.debug("[llama-server] %s", s)
@@ -188,6 +212,8 @@ class LlamaOmni:
             "voice_clone_prompt": prompts["voice_clone_prompt"],
             "assistant_prompt": prompts["assistant_prompt"],
         }
+        if MAX_SPEAK_TOKENS > 0:
+            body["max_new_speak_tokens_per_chunk"] = MAX_SPEAK_TOKENS
         if os.path.exists(REF_AUDIO_PATH):
             body["voice_audio"] = REF_AUDIO_PATH
         r = requests.post(f"{self.url}/v1/stream/omni_init", json=body, timeout=120, proxies=_NO_PROXY)
@@ -197,22 +223,19 @@ class LlamaOmni:
         logger.info("omni_init ok (duplex, prompt=%r)", (text_prompt or "")[:60])
 
     def begin_session(self, text_prompt: str):
-        """Per-connection clean start. If the persona prompt changed, restart the
-        server + omni_init (the stable clean-state path in cpp_backend.full_reinit);
-        otherwise reset counters/output and reuse the loaded model."""
+        """Per-connection clean start = the official full_reinit: RESTART llama-server, then
+        omni_init. update_session_config does NOT clear the conversation KV in this build, so
+        a reused server inherits the previous conversation and the duplex turn-taking wedges
+        (after the first turn the model goes silent to real questions). cpp_backend.full_reinit
+        is explicit about this: 'completely restart llama-server after each session so the next
+        session's state is absolutely clean.' Costs ~6s per connect, but it's the only state
+        that reliably yields a healthy multi-turn session."""
         self._reset_output()
         self.cnt = 0
         self.sent_wavs = set()
-        if self.proc is None or self.proc.poll() is not None:
-            self.start_server()
-            self.omni_init(text_prompt)
-        elif text_prompt != self.cur_prompt:
-            logger.info("prompt changed -> full reinit")
-            self.stop_server()
-            self.start_server()
-            self.omni_init(text_prompt)
-        else:
-            self.break_("new_session")
+        self.stop_server()          # no-op if not running
+        self.start_server()
+        self.omni_init(text_prompt)
 
     def _reset_output(self):
         d = os.path.join(OUTPUT_DIR, "tts_wav")
@@ -339,6 +362,7 @@ async def handle_chat(request: web.Request) -> web.WebSocketResponse:
     sentinel = object()
     worker_stop = threading.Event()
     stop = asyncio.Event()
+    flush_evt = asyncio.Event()   # set when the model stops speaking -> flush the audio tail
     out_pcm_buf = np.array([], dtype=np.float32)
     pcm16_buf = np.array([], dtype=np.float32)
 
@@ -354,6 +378,7 @@ async def handle_chat(request: web.Request) -> web.WebSocketResponse:
 
         def worker():
             n = 0
+            prev_listen = True
             try:
                 while not worker_stop.is_set():
                     try:
@@ -363,11 +388,16 @@ async def handle_chat(request: web.Request) -> web.WebSocketResponse:
                     if chunk is None:
                         break
                     n += 1
+                    rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2))) if len(chunk) else 0.0
                     omni.prefill(chunk)
                     text, is_listen = omni.decode()
-                    logger.info("[chunk %d] is_listen=%s text=%r", n, is_listen, (text or "")[:60])
+                    logger.info("[chunk %d] in_rms=%.4f is_listen=%s text=%r",
+                                n, rms, is_listen, (text or "")[:60])
                     if text:
                         loop.call_soon_threadsafe(text_q.put_nowait, text)
+                    if is_listen and not prev_listen:        # utterance just ended -> flush tail
+                        loop.call_soon_threadsafe(flush_evt.set)
+                    prev_listen = is_listen
             except Exception as e:
                 loop.call_soon_threadsafe(text_q.put_nowait, e)
             finally:
@@ -438,6 +468,11 @@ async def handle_chat(request: web.Request) -> web.WebSocketResponse:
                 audio = await loop.run_in_executor(None, omni.collect_new_audio)
                 if audio is not None and len(audio):
                     await send_opus(audio)
+                if flush_evt.is_set():
+                    # utterance ended: grab any last wav, then flush the Opus tail promptly
+                    tail = await loop.run_in_executor(None, omni.collect_new_audio)
+                    await send_opus(tail if tail is not None else np.array([], dtype=np.float32), flush=True)
+                    flush_evt.clear()
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=0.1)
                 except asyncio.TimeoutError:
@@ -450,14 +485,36 @@ async def handle_chat(request: web.Request) -> web.WebSocketResponse:
 
         worker_fut = loop.run_in_executor(None, worker)
         poller = asyncio.create_task(wav_poller())
+        text_task = asyncio.create_task(text_sender())
         try:
-            await asyncio.gather(reader(), text_sender())
+            # reader() returns when the browser disconnects -> that is the SOLE teardown
+            # trigger. text_sender/poller run as background tasks we cancel below; we must
+            # NOT await text_sender here (it only ends on the worker's sentinel, which only
+            # comes after worker_stop is set in this finally -> that would deadlock and the
+            # session would never release _session_lock, hanging the next connection).
+            await reader()
         finally:
             worker_stop.set()
             stop.set()
-            await worker_fut
-            await poller
-            await loop.run_in_executor(None, omni.break_, "disconnect")
+            # break_ FIRST: the worker thread may be blocked inside omni.decode()'s SSE
+            # request (it only checks worker_stop between chunks), so interrupt the in-flight
+            # decode server-side so the thread can return. Bound every await so the lock is
+            # always released.
+            try:
+                await loop.run_in_executor(None, omni.break_, "disconnect")
+            except Exception as e:
+                logger.warning("[chat] break on disconnect failed: %s", e)
+            try:
+                await asyncio.wait_for(asyncio.shield(worker_fut), timeout=10)
+            except (asyncio.TimeoutError, Exception):
+                logger.warning("[chat] worker did not stop in time")
+            for t in (poller, text_task):
+                if not t.done():
+                    t.cancel()
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
             if not ws.closed:
                 await ws.close()
 

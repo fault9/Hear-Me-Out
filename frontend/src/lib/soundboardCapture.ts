@@ -24,7 +24,7 @@
 
 import type { ManipulationMode } from "@/lib/soundboardDb"
 import { decodeToPcm, resampleTo } from "@/lib/audioFormat"
-import { createWavFile } from "@/lib/audio"
+import { createWavFile } from "@shared/lib/audio"
 import { PP_SAMPLE_RATE } from "@/lib/soundboardConfig"
 
 export interface CapturedClip {

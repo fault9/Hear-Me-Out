@@ -47,7 +47,7 @@ All run behind self-signed SSL (browser mic capture requires HTTPS), launched by
 
 ```bash
 export HF_TOKEN=hf_xxxxx   # access to gated nvidia/personaplex-7b-v1
-curl -fsSL https://raw.githubusercontent.com/syedfahimabrar/Hear-Me-Out/main/infra/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/smfabrar/Hear-Me-Out/main/infra/setup.sh -o setup.sh
 bash setup.sh              # prompts for workspace (default: current dir), repo, token, etc.
 ```
 

@@ -3,7 +3,7 @@
 // Values mimic a real X-VC run on a ~8-second VCTK utterance where one
 // mid-clip window has a speaker-identity drop (the kind of regression
 // the per-segment anomaly view is designed to surface).
-import type { VcQualityResult } from "@/services/api"
+import type { VcQualityResult } from "@shared/services/api"
 import type { DiarizedTurn } from "@/hooks/useConversation"
 
 // Synthetic diarized conversation that aligns with the segment grid below.

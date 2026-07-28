@@ -2,8 +2,8 @@ import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   ResponsiveContainer, Legend, Tooltip,
 } from "recharts"
-import { Badge } from "@/components/ui/badge"
-import type { MetricsResult, ResponseMetrics } from "@/services/api"
+import { Badge } from "@shared/ui/badge"
+import type { MetricsResult, ResponseMetrics } from "@shared/services/api"
 import { Gauge, Smile, Activity, Waves, Clock } from "lucide-react"
 
 const COLOR_A = "#22C55E" // Original speaker

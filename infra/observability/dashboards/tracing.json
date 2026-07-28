@@ -1,0 +1,356 @@
+{
+  "version": 5,
+  "title": "HMO \u2014 Distributed Tracing",
+  "description": "Spans across services.",
+  "role": "",
+  "owner": "admin@example.com",
+  "tabs": [
+    {
+      "tabId": "default",
+      "name": "Default",
+      "panels": [
+        {
+          "id": "p1",
+          "type": "line",
+          "title": "Spans over time by service",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp) as x_axis_1, count(*) as y_axis_1, service_name as breakdown_1 FROM \"default\" GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "traces",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#3aa0a0",
+                    "aggregationFunction": "count"
+                  }
+                ],
+                "z": [],
+                "breakdown": [
+                  {
+                    "label": "",
+                    "alias": "breakdown_1",
+                    "column": "breakdown_1",
+                    "color": null
+                  }
+                ],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 24,
+            "h": 9,
+            "i": 1
+          }
+        },
+        {
+          "id": "p2",
+          "type": "bar",
+          "title": "Span count by service",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT service_name as x_axis_1, count(*) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "traces",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#2f9e44",
+                    "aggregationFunction": "count"
+                  }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 24,
+            "y": 0,
+            "w": 24,
+            "h": 9,
+            "i": 2
+          }
+        },
+        {
+          "id": "p3",
+          "type": "bar",
+          "title": "Avg span duration by operation (\u00b5s)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "microseconds",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT operation_name as x_axis_1, avg(duration) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "traces",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#e8a33d",
+                    "aggregationFunction": "avg"
+                  }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 9,
+            "w": 24,
+            "h": 9,
+            "i": 3
+          }
+        },
+        {
+          "id": "p4",
+          "type": "bar",
+          "title": "Max span duration by operation (\u00b5s)",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": null,
+            "unit": "microseconds",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT operation_name as x_axis_1, max(duration) as y_axis_1 FROM \"default\" GROUP BY x_axis_1 ORDER BY y_axis_1 DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "traces",
+                "x": [
+                  {
+                    "label": "",
+                    "alias": "x_axis_1",
+                    "column": "x_axis_1",
+                    "color": null
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "",
+                    "alias": "y_axis_1",
+                    "column": "y_axis_1",
+                    "color": "#c23531",
+                    "aggregationFunction": "max"
+                  }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 24,
+            "y": 9,
+            "w": 24,
+            "h": 9,
+            "i": 4
+          }
+        },
+        {
+          "id": "p5",
+          "type": "table",
+          "title": "Slowest spans",
+          "description": "",
+          "config": {
+            "show_legends": false,
+            "legends_position": null,
+            "unit": "default",
+            "decimals": 2.0,
+            "base_map": null,
+            "map_view": null
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT operation_name, service_name, duration, study_session_id, trace_id FROM \"default\" ORDER BY duration DESC",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "default",
+                "stream_type": "traces",
+                "x": [
+                  {
+                    "label": "operation_name",
+                    "alias": "operation_name",
+                    "column": "operation_name",
+                    "color": null
+                  },
+                  {
+                    "label": "service_name",
+                    "alias": "service_name",
+                    "column": "service_name",
+                    "color": null
+                  },
+                  {
+                    "label": "duration",
+                    "alias": "duration",
+                    "column": "duration",
+                    "color": null
+                  },
+                  {
+                    "label": "study_session_id",
+                    "alias": "study_session_id",
+                    "column": "study_session_id",
+                    "color": null
+                  },
+                  {
+                    "label": "trace_id",
+                    "alias": "trace_id",
+                    "column": "trace_id",
+                    "color": null
+                  }
+                ],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1.0
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 18,
+            "w": 24,
+            "h": 9,
+            "i": 5
+          }
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "list": [],
+    "showDynamicFilters": true
+  },
+  "defaultDatetimeDuration": {
+    "type": "relative",
+    "relativeTimePeriod": "24h"
+  }
+}

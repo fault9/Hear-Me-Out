@@ -4,6 +4,16 @@ checkpoints/models*
 checkpoints/.locks/*
 checkpoints/hf_cache*
 
+# Node / workspaces
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Study platform data (SQLite DB + participant artifacts)
+study.db
+study.db-*
+study_data/
+
 # Python
 __pycache__/
 *.py[cod]

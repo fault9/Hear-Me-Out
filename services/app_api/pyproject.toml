@@ -13,6 +13,9 @@ dependencies = [
     "starlette",
     "websockets",
     "werkzeug",
+    "requests",  # study engine-manager → VC engine load-target / health
+    "httpx",     # reverse-proxy the observability UI under /logs
+    "pyyaml",    # study YAML template import/export
     # transcription + VAD
     "faster-whisper==1.2.1",
     "silero-vad",
@@ -23,7 +26,9 @@ dependencies = [
     "pyphen",
     "audiobox-aesthetics",
     "librosa==0.10.2",
-    "transformers",
+    # Pinned to torch-2.4-compatible transformers: newer releases import DTensor
+    # from torch.distributed.tensor (needs torch>=2.5), crashing the metrics path.
+    "transformers==4.44.1",
     "sentence-transformers==3.3.1",
     "matplotlib",
     "soundfile==0.12.1",
@@ -52,6 +57,12 @@ dependencies = [
     # uv-managed venvs don't ship setuptools by default, so pyworld errors on
     # import without this. Pinned as a direct dep so future syncs pick it up.
     "setuptools>=68",
+    # Distributed tracing (OpenTelemetry) — optional; code is a no-op unless OTEL_* is set.
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-requests",
+    "nvidia-ml-py",  # NVML GPU metrics (utilization/memory/temp/power) via OTel gauges
 ]
 
 # PyTorch CUDA 12.1 wheels (shared with meanvc/personaplex via uv's global cache).

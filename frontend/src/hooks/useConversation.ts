@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
-import { webmToWavBlob } from "@/lib/audio"
+import { webmToWavBlob } from "@shared/lib/audio"
 import {
   transcribeRecording,
   transcribeWavBlob,
@@ -10,8 +10,8 @@ import {
   type TranscriptionSegment,
   type VcQualityMetric,
   type VcQualityResult,
-} from "@/services/api"
-import { mergeAudioTracks } from "@/services/audioMerge"
+} from "@shared/services/api"
+import { mergeAudioTracks } from "@shared/services/audioMerge"
 import { getVoiceAnalysisMode } from "@/lib/config"
 import {
   hasCapture,
@@ -24,10 +24,11 @@ import {
   resetCapture,
 } from "@/lib/soundboardCapture"
 import { listTargets } from "@/lib/soundboardDb"
-import { formatTime } from "@/lib/utils"
-import type { useWebSocket } from "@/hooks/useWebSocket"
-import type { useRecorder } from "@/hooks/useRecorder"
-import type { useMeanVCPipeline } from "@/hooks/useMeanVCPipeline"
+import { formatTime } from "@shared/lib/utils"
+import type { useWebSocket } from "@shared/hooks/useWebSocket"
+import type { useRecorder } from "@shared/hooks/useRecorder"
+import type { useMeanVCPipeline } from "@shared/hooks/useMeanVCPipeline"
+import { getPersonaplexWsURL, getChatProxyWsUrl } from "@/lib/config"
 
 type WsState = ReturnType<typeof useWebSocket>
 type RecorderState = ReturnType<typeof useRecorder>
@@ -225,12 +226,12 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
       // chat-proxy (which speaks PersonaPlex's protocol on this same socket).
       try {
         const proxy = await startMic()
-        connect(textPrompt, proxy)
+        connect(getChatProxyWsUrl(proxy.targetId, proxy.sourceSr, proxy.steps, textPrompt, proxy.voicePrompt))
       } catch {
         micClicked.current = false
       }
     } else {
-      connect(textPrompt)
+      connect(getPersonaplexWsURL(textPrompt))
     }
   }, [clearTranscripts, clearResponseChunks, clearError, connect, textPrompt, vcEnabled, vcTargetId, startMic])
 

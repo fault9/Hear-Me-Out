@@ -25,6 +25,57 @@ logger = logging.getLogger(__name__)
 
 # This file lives at <repo>/services/app_api/app.py, so the repo root is parents[2].
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Make the shared `common` package (OpenTelemetry bootstrap) importable.
+_SERVICES_DIR = str(Path(__file__).resolve().parents[1])
+if _SERVICES_DIR not in sys.path:
+    sys.path.insert(0, _SERVICES_DIR)
+from common import otel  # noqa: E402
+from common import logging_setup  # noqa: E402
+
+logging_setup.init_logging("study-app-api")  # export logs over OTLP (trace-correlated) when observability is enabled
+
+
+def _mount_observability_proxy(app, upstream: str) -> None:
+    """Reverse-proxy every /logs* request to the observability UI (OpenObserve),
+    keeping the UI on :5001 so no extra port is exposed. OpenObserve serves under
+    /logs/ (bare /logs 404s; /logs/ -> 307 -> /logs/web/) and emits upstream-absolute
+    redirects, so we redirect bare /logs, preserve the exact path (incl. trailing
+    slash), and rewrite redirect Location back to a relative path."""
+    import httpx
+    from fastapi import Request
+    from fastapi.responses import Response as _Resp, RedirectResponse
+
+    client = httpx.AsyncClient(base_url=upstream, timeout=None, follow_redirects=False)
+    _HOP = {"host", "content-length", "connection", "keep-alive", "transfer-encoding",
+            "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate"}
+
+    def _relativize(loc: str) -> str:
+        # http://127.0.0.1:5080/logs/web/ -> /logs/web/  (stay on :5001, don't leak the
+        # internal address); also handle a bare host without scheme just in case.
+        for pre in (upstream, upstream.split("://", 1)[-1]):
+            if pre and loc.startswith(pre):
+                return loc[len(pre):] or "/"
+        return loc
+
+    @app.api_route("/logs", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+    @app.api_route("/logs/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+    async def _obs_proxy(request: Request, path: str = ""):
+        # Bare /logs 404s upstream — send the browser to /logs/ so O2's own routing runs.
+        if request.url.path == "/logs":
+            return RedirectResponse(url="/logs/", status_code=307)
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
+        body = await request.body()
+        try:
+            # Forward the exact path (keeps trailing slashes O2 relies on).
+            up = await client.request(request.method, request.url.path, params=request.query_params,
+                                      headers=headers, content=body)
+        except httpx.RequestError as e:
+            return JSONResponse({"error": f"observability backend unreachable: {e}"}, status_code=502)
+        resp_headers = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
+        for k in list(resp_headers):
+            if k.lower() == "location":
+                resp_headers[k] = _relativize(resp_headers[k])
+        return _Resp(content=up.content, status_code=up.status_code, headers=resp_headers)
 _default_static = REPO_ROOT / "frontend" / "dist"
 STATIC_PATH = Path(os.environ.get("FRONTEND_PATH", _default_static))
 SEED_VC_DIR = REPO_ROOT / "seed-vc"
@@ -92,8 +143,34 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+class SPAStaticFiles(StaticFiles):
+    """Static files with SPA fallback: unknown non-file paths (e.g. /admin) serve
+    index.html so client-side routing and hard refreshes work. Real assets and the
+    API routes (declared before this mount) are unaffected."""
+
+    async def get_response(self, path, scope):
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as e:
+            if e.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
+
+
 def create_app():
     app = FastAPI()
+
+    # Distributed tracing (no-op unless OTEL_* is configured). Instruments every
+    # route + outbound `requests` call (e.g. engine.py -> :5002 load-target) and
+    # continues traces started by the browser / VC proxy.
+    if otel.init_tracing("study-app-api"):
+        otel.init_metrics("study-app-api")  # client-reported latency histograms (client.*)
+        otel.init_gpu_metrics("study-app-api")  # NVML GPU gauges (util/mem/temp/power)
+        otel.instrument_fastapi(app)
+        otel.instrument_requests()
+        logger.info("OpenTelemetry tracing enabled (app-api)")
 
     @app.on_event("startup")
     async def preload_models():
@@ -117,6 +194,24 @@ def create_app():
     @app.get("/api/health")
     async def health_check():
         return JSONResponse({"status": "healthy", "service": "vc-api"})
+
+    # Reverse-proxy the observability UI (OpenObserve) under /logs, so traces + logs
+    # are reachable on this same :5001 port — no extra exposed port / container. Only
+    # mounted when STUDY_OBSERVABILITY_URL is set (run_all sets it when the backend is
+    # started). The upstream serves itself under /logs too (ZO_BASE_URI=/logs), so
+    # paths pass through unchanged.
+    _obs_url = os.environ.get("STUDY_OBSERVABILITY_URL")
+    if _obs_url:
+        _mount_observability_proxy(app, _obs_url.rstrip("/"))
+        logger.info(f"Observability UI proxied at /logs -> {_obs_url}")
+
+    # In study mode, mount the participant-experiment API (admin + participant
+    # endpoints, SQLite storage, VC-engine prepare lifecycle). HMO mode is unaffected.
+    if os.environ.get("APP_MODE", "hmo").lower() == "study":
+        from study import build_study_router
+
+        app.include_router(build_study_router())
+        logger.info("APP_MODE=study: study router mounted")
 
     @app.post("/api/transcribe")
     async def transcribe_audio(audio: UploadFile = File(...)):
@@ -718,8 +813,8 @@ def create_app():
         logger.info(f"Serving recording file: {file_path}")
         return FileResponse(file_path, media_type="audio/wav")
 
-    # Serve static frontend files
-    app.mount("/", StaticFiles(directory=str(STATIC_PATH), html=True))
+    # Serve static frontend files (with SPA fallback for client-side routes).
+    app.mount("/", SPAStaticFiles(directory=str(STATIC_PATH), html=True))
 
     return app
 

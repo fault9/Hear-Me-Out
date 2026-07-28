@@ -1,25 +1,31 @@
 #!/bin/bash
-# Build the Vite frontend
-# Usage: bash infra/build-frontend.sh
+# Build the selected Vite frontend (npm workspaces monorepo).
+#   APP_MODE=hmo   -> builds frontend/         (default)
+#   APP_MODE=study -> builds study-frontend/
+# Both import the shared library at packages/shared (consumed as source).
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-FRONTEND_DIR="$PROJECT_DIR/frontend"
+APP_MODE="${APP_MODE:-hmo}"
 
-cd "$FRONTEND_DIR"
+if [ "$APP_MODE" = "study" ]; then
+  WS="study-frontend"
+else
+  WS="frontend"
+fi
 
-echo "=== Building Vite frontend ==="
+cd "$PROJECT_DIR"
+echo "=== Building $WS (APP_MODE=$APP_MODE) ==="
 
-# Install when node_modules is missing OR deps changed (lockfile newer than
-# the installed tree). Catches newly-added deps on a git pull, which a bare
-# "[ ! -d node_modules ]" check would silently skip.
+# Install at the workspace root when node_modules is missing OR a lockfile/manifest
+# changed (catches newly-added deps on a git pull).
 if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ] || [ package.json -nt node_modules ]; then
-  echo "Installing dependencies..."
+  echo "Installing workspace dependencies..."
   npm install
 fi
 
-npm run build
+npm run build -w "$WS"
 
-echo "=== Build complete → $FRONTEND_DIR/dist ==="
+echo "=== Build complete → $PROJECT_DIR/$WS/dist ==="

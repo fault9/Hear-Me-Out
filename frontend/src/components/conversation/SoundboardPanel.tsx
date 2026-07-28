@@ -12,15 +12,15 @@
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
-import { Spinner } from "@/components/ui/spinner"
+import { Button } from "@shared/ui/button"
+import { Badge } from "@shared/ui/badge"
+import { Card, CardContent } from "@shared/ui/card"
+import { Spinner } from "@shared/ui/spinner"
 import { Play, Square, Download, Filter, ListMusic, Headphones, Pause, Volume2, VolumeX, RotateCcw } from "lucide-react"
 import { useSoundboard, makeSessionContext, type SessionContext } from "@/hooks/useSoundboard"
 import { nextSessionNumber } from "@/lib/sessionCounter"
 import { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
-import type { useWebSocket } from "@/hooks/useWebSocket"
+import type { useWebSocket } from "@shared/hooks/useWebSocket"
 import type { Slot } from "@/lib/soundboardDb"
 
 interface Props {
