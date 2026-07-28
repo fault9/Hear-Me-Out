@@ -37,27 +37,44 @@ logging_setup.init_logging("study-app-api")  # export logs over OTLP (trace-corr
 
 def _mount_observability_proxy(app, upstream: str) -> None:
     """Reverse-proxy every /logs* request to the observability UI (OpenObserve),
-    streaming both directions. Keeps the UI on :5001 so no extra port is exposed."""
+    keeping the UI on :5001 so no extra port is exposed. OpenObserve serves under
+    /logs/ (bare /logs 404s; /logs/ -> 307 -> /logs/web/) and emits upstream-absolute
+    redirects, so we redirect bare /logs, preserve the exact path (incl. trailing
+    slash), and rewrite redirect Location back to a relative path."""
     import httpx
     from fastapi import Request
-    from fastapi.responses import Response as _Resp
+    from fastapi.responses import Response as _Resp, RedirectResponse
 
     client = httpx.AsyncClient(base_url=upstream, timeout=None, follow_redirects=False)
     _HOP = {"host", "content-length", "connection", "keep-alive", "transfer-encoding",
             "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate"}
 
+    def _relativize(loc: str) -> str:
+        # http://127.0.0.1:5080/logs/web/ -> /logs/web/  (stay on :5001, don't leak the
+        # internal address); also handle a bare host without scheme just in case.
+        for pre in (upstream, upstream.split("://", 1)[-1]):
+            if pre and loc.startswith(pre):
+                return loc[len(pre):] or "/"
+        return loc
+
     @app.api_route("/logs", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
     @app.api_route("/logs/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
     async def _obs_proxy(request: Request, path: str = ""):
-        url = "/logs" + (f"/{path}" if path else "")
+        # Bare /logs 404s upstream — send the browser to /logs/ so O2's own routing runs.
+        if request.url.path == "/logs":
+            return RedirectResponse(url="/logs/", status_code=307)
         headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
         body = await request.body()
         try:
-            up = await client.request(request.method, url, params=request.query_params,
+            # Forward the exact path (keeps trailing slashes O2 relies on).
+            up = await client.request(request.method, request.url.path, params=request.query_params,
                                       headers=headers, content=body)
         except httpx.RequestError as e:
             return JSONResponse({"error": f"observability backend unreachable: {e}"}, status_code=502)
         resp_headers = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
+        for k in list(resp_headers):
+            if k.lower() == "location":
+                resp_headers[k] = _relativize(resp_headers[k])
         return _Resp(content=up.content, status_code=up.status_code, headers=resp_headers)
 _default_static = REPO_ROOT / "frontend" / "dist"
 STATIC_PATH = Path(os.environ.get("FRONTEND_PATH", _default_static))
