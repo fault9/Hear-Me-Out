@@ -7,9 +7,11 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -34,30 +36,56 @@ def _write(**values) -> None:
     temp.replace(path)
 
 
-def _parse_stdout(stdout: str) -> dict:
-    text = stdout.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        if start < 0:
-            raise ValueError("vc_quality.py produced no JSON")
-        return json.loads(text[start:])
-
-
-def _score(job: dict) -> dict:
-    cmd = ["uv", "run", "--project", str(VC_QUALITY_DIR), "python",
-           str(VC_QUALITY_SCRIPT), "one", "--converted", str(STUDY_DATA_DIR / job["converted"]),
-           "--target", str(STUDY_DATA_DIR / job["target"]),
-           "--source", str(STUDY_DATA_DIR / job["source"]),
-           "--segment-mode", "fixed", "--segment-win", "2", "--segment-hop", "1"]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    if proc.returncode:
-        raise RuntimeError(proc.stderr.strip()[-1000:] or f"vc_quality.py exited {proc.returncode}")
-    result = _parse_stdout(proc.stdout)
-    for key in ("converted", "target", "source"):
-        result[f"{key}_path"] = job[key]
-    return result
+def _score_batch(jobs: list[dict], heartbeat: Callable[[], None] | None = None) -> list[dict]:
+    if not jobs:
+        return []
+    with tempfile.TemporaryDirectory(prefix="hmo_vcq_") as temp_dir:
+        manifest_path = Path(temp_dir) / "manifest.jsonl"
+        output_path = Path(temp_dir) / "results.jsonl"
+        with manifest_path.open("w", encoding="utf-8") as stream:
+            for index, job in enumerate(jobs):
+                row = {
+                    "converted_path": str(STUDY_DATA_DIR / job["converted"]),
+                    "target_path": str(STUDY_DATA_DIR / job["target"]),
+                    "source_path": str(STUDY_DATA_DIR / job["source"]),
+                    "_job_index": index,
+                }
+                stream.write(json.dumps(row) + "\n")
+        cmd = ["uv", "run", "--project", str(VC_QUALITY_DIR), "python",
+               str(VC_QUALITY_SCRIPT), "batch", "--manifest", str(manifest_path),
+               "--out", str(output_path)]
+        stdout_path = Path(temp_dir) / "stdout.log"
+        stderr_path = Path(temp_dir) / "stderr.log"
+        timeout_s = max(3600, 900 * len(jobs))
+        with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+            proc = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, text=True)
+            deadline = time.monotonic() + timeout_s
+            while proc.poll() is None:
+                if heartbeat:
+                    heartbeat()
+                if time.monotonic() >= deadline:
+                    proc.kill()
+                    proc.wait()
+                    raise TimeoutError(f"vc_quality.py exceeded {timeout_s} seconds")
+                time.sleep(5)
+        if proc.returncode:
+            error = stderr_path.read_text().strip()
+            raise RuntimeError(
+                error[-1000:] or f"vc_quality.py exited {proc.returncode}")
+        output_text = output_path.read_text()
+    rows = [json.loads(line) for line in output_text.splitlines() if line.strip()]
+    if len(rows) != len(jobs):
+        raise RuntimeError(f"vc_quality.py returned {len(rows)} rows for {len(jobs)} jobs")
+    ordered: list[dict | None] = [None] * len(jobs)
+    for result in rows:
+        index = int(result.pop("_job_index"))
+        job = jobs[index]
+        for key in ("converted", "target", "source"):
+            result[f"{key}_path"] = job[key]
+        ordered[index] = result
+    if any(result is None for result in ordered):
+        raise RuntimeError("vc_quality.py returned duplicate or missing job indices")
+    return [result for result in ordered if result is not None]
 
 
 def main() -> None:
@@ -84,22 +112,60 @@ def main() -> None:
               "session_id": args.session, "analysis_id": analysis_id}
     _write(running=True, done=0, total=total, current=None, **common)
 
+    prepared: list[dict] = []
+    jobs: list[dict] = []
     for session in sessions:
         sid = session["session_id"]
         _write(running=True, done=done, total=total, current=sid, **common)
         backend.update_session_vc_quality(sid, "running", {"analysis_id": analysis_id})
         try:
             inputs = prepare_session_analysis(session, STUDY_DATA_DIR, analysis_id)
-            scores = [{"region": job["region"], "metrics": _score(job)}
-                      for job in inputs["score_jobs"]]
+            start = len(jobs)
+            jobs.extend(inputs["score_jobs"])
+            prepared.append({"session": session, "inputs": inputs,
+                             "job_start": start, "job_end": len(jobs)})
+        except Exception as exc:  # one failed session must not abort a study batch
+            backend.update_session_vc_quality(sid, "failed", {
+                "status": "failed", "analysis_id": analysis_id,
+                "error": f"{type(exc).__name__}: {exc}"})
+            done += 1
+            _write(running=True, done=done, total=total, current=None, **common)
+
+    try:
+        _write(running=True, done=done, total=total, current="batch", **common)
+        metrics = _score_batch(
+            jobs,
+            heartbeat=lambda: _write(
+                running=True, done=done, total=total, current="batch", **common),
+        )
+    except Exception as exc:
+        for item in prepared:
+            backend.update_session_vc_quality(item["session"]["session_id"], "failed", {
+                "status": "failed", "analysis_id": analysis_id,
+                "error": f"{type(exc).__name__}: {exc}"})
+            done += 1
+        _write(running=False, done=done, total=total, current=None, **common)
+        return
+
+    for item in prepared:
+        session = item["session"]
+        sid = session["session_id"]
+        try:
+            session_metrics = metrics[item["job_start"]:item["job_end"]]
+            scores = [
+                {"region": job["region"], "metrics": score}
+                for job, score in zip(item["inputs"]["score_jobs"], session_metrics)
+            ]
             result = {"status": "complete", "analysis_id": analysis_id,
-                      "inputs": inputs, "scores": scores}
+                      "metric_profile": "xvc_objective_v1",
+                      "inputs": item["inputs"], "scores": scores}
             out_dir = ((STUDY_DATA_DIR / (session.get("files") or {})["participant"]).parent /
                        "analysis" / "vc_quality" / analysis_id)
             atomic_write_json(out_dir / "results.json", result, exclusive=True)
-            result["result_artifact"] = file_record(out_dir / "results.json", relative_to=STUDY_DATA_DIR)
+            result["result_artifact"] = file_record(
+                out_dir / "results.json", relative_to=STUDY_DATA_DIR)
             backend.update_session_vc_quality(sid, "complete", result)
-        except Exception as exc:  # one failed session must not abort a study batch
+        except Exception as exc:
             backend.update_session_vc_quality(sid, "failed", {
                 "status": "failed", "analysis_id": analysis_id,
                 "error": f"{type(exc).__name__}: {exc}"})

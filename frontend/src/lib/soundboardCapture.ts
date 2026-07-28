@@ -82,7 +82,7 @@ export function singleVcTarget(): string | null {
 
 // Decode each blob (already at PP_SAMPLE_RATE for soundboard bakes, but we
 // resample defensively) and concatenate back-to-back in play order. Gaps of
-// conversational silence are intentionally dropped — for WER/SECS/F0 the
+// conversational silence are intentionally dropped — for WER/SIM/UTMOS the
 // spoken content is what matters, and long silences would dilute the scores.
 async function concatToWav(blobs: Blob[]): Promise<Blob | null> {
   const pcms: Float32Array[] = []
@@ -106,7 +106,7 @@ async function concatToWav(blobs: Blob[]): Promise<Blob | null> {
 }
 
 // GAPLESS concat of the sent clips — VC-quality's "converted" input. Silence
-// gaps are intentionally dropped here so WER/SECS/UTMOS score the speech, not
+// gaps are intentionally dropped here so WER/SIM/UTMOS score the speech, not
 // the dead air between plays.
 export function assembleSentWav(): Promise<Blob | null> {
   return concatToWav(clips.map((c) => c.sentBlob))

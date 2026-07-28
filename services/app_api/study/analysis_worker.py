@@ -14,6 +14,7 @@ responsive. Progress is reported via a small JSON status file that the API's
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import os
 import sys
@@ -34,8 +35,10 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-from study.analysis import _session_paths, run_session_analysis, status_path  # noqa: E402
+from study.analysis import (STUDY_DATA_DIR, _session_paths, run_session_analysis,
+                            status_path)  # noqa: E402
 from study.storage import get_backend  # noqa: E402
+from study.timing_analysis import prepare_timing_analysis  # noqa: E402
 
 # Shared OTel helper (services/ is on sys.path via the insert above). No-op unless
 # OTEL_* is configured; the worker exports to the same collector as app-api.
@@ -67,9 +70,13 @@ def main() -> None:
 
     backend = get_backend()
     sessions = backend.list_sessions(study_id)
+    def needs_timing(session: dict) -> bool:
+        analysis = (session.get("artifact_manifest") or {}).get("analysis") or {}
+        return not analysis.get("timing_latest")
+
     pending = [s for s in sessions
                if (s.get("files") or {}).get("participant")
-               and (force or s.get("metrics") is None)]
+               and (force or s.get("metrics") is None or needs_timing(s))]
     total = len(pending)
     done = 0
     _write(running=True, done=0, total=total, current=None, study_id=study_id)
@@ -85,7 +92,19 @@ def main() -> None:
                    if otel else contextlib.nullcontext())
         try:
             with span_cm:
-                run_session_analysis(s["session_id"], conv, raw, mt)
+                if force or s.get("metrics") is None:
+                    run_session_analysis(s["session_id"], conv, raw, mt)
+                if force or needs_timing(s):
+                    analysis_id = (
+                        f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}."
+                        f"{time.time_ns() % 1_000_000_000:09d}Z"
+                    )
+                    timing = prepare_timing_analysis(s, STUDY_DATA_DIR, analysis_id)
+                    latest = backend.get_session(s["session_id"]) or s
+                    manifest = copy.deepcopy(latest.get("artifact_manifest") or {})
+                    manifest.setdefault("analysis", {})["timing_latest"] = timing[
+                        "result_artifact"]
+                    backend.update_session_artifacts(s["session_id"], manifest)
         except Exception as e:  # noqa: BLE001 - one bad session shouldn't kill the batch
             print(f"[analysis_worker] error for {s['session_id']}: {e}", file=sys.stderr)
         done += 1

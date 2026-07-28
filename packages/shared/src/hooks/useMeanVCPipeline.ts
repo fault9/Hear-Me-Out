@@ -10,6 +10,43 @@ import type { ProxyDescriptor } from "@shared/hooks/useWebSocket";
 export interface MeanVCPipelineOptions {
   loadTargetUrl?: () => string;
   voicePrompt?: string;
+  studyTimeline?: boolean;
+}
+
+interface CapturedPcmPart {
+  startSample: number;
+  pcm: Float32Array;
+}
+
+interface CaptureTimelineEntry {
+  chunk_sequence: number;
+  capture_start_sample: number;
+  sample_count: number;
+  timeline_start_ms: number | null;
+}
+
+const STUDY_FRAME_HEADER_BYTES = 20;
+
+function frameStudyPcm(
+  pcm: Float32Array,
+  sequence: number,
+  captureStartSample: number,
+  sampleRate: number,
+): ArrayBuffer {
+  const framed = new ArrayBuffer(STUDY_FRAME_HEADER_BYTES + pcm.byteLength);
+  const view = new DataView(framed);
+  view.setUint8(0, 0x48); // H
+  view.setUint8(1, 0x4d); // M
+  view.setUint8(2, 0x4f); // O
+  view.setUint8(3, 0x31); // 1
+  view.setUint32(4, sequence, true);
+  view.setUint32(8, captureStartSample, true);
+  view.setUint32(12, pcm.length, true);
+  view.setUint32(16, sampleRate, true);
+  new Uint8Array(framed, STUDY_FRAME_HEADER_BYTES).set(
+    new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength),
+  );
+  return framed;
 }
 
 export interface MeanVCPipelineState {
@@ -46,13 +83,17 @@ export function useMeanVCPipeline(
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sendingRef = useRef(false);
   // Raw (pre-conversion) mic PCM, kept for the post-conversation voice-change metrics.
-  const originalPcmRef = useRef<Float32Array[]>([]);
+  const originalPcmRef = useRef<CapturedPcmPart[]>([]);
   const resumeRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sendRawRef = useRef(sendRawAudio);
   sendRawRef.current = sendRawAudio;
   const captureStatsRef = useRef({ callbacks: 0, samples: 0, estimatedDroppedSamples: 0 });
   const expectedPlaybackTimeRef = useRef<number | null>(null);
   const captureSampleRateRef = useRef(16000);
+  const firstPlaybackTimeRef = useRef<number | null>(null);
+  const captureSequenceRef = useRef(0);
+  const timelineEpochPerfMsRef = useRef<number | null>(null);
+  const captureTimelineRef = useRef<CaptureTimelineEntry[]>([]);
 
   const uploadTarget = useCallback(async (file: File) => {
     const url = URL.createObjectURL(file);
@@ -114,6 +155,10 @@ export function useMeanVCPipeline(
     originalPcmRef.current = [];
     captureStatsRef.current = { callbacks: 0, samples: 0, estimatedDroppedSamples: 0 };
     expectedPlaybackTimeRef.current = null;
+    firstPlaybackTimeRef.current = null;
+    captureSequenceRef.current = 0;
+    timelineEpochPerfMsRef.current = null;
+    captureTimelineRef.current = [];
 
     processor.onaudioprocess = (e) => {
       const ch = e.inputBuffer.getChannelData(0);
@@ -122,7 +167,16 @@ export function useMeanVCPipeline(
       for (let i = 0; i < ch.length; i++) sum += ch[i] * ch[i];
       setState(s => ({ ...s, amplitude: Math.sqrt(sum / ch.length) }));
       if (!sendingRef.current) return;
+      if (firstPlaybackTimeRef.current === null) firstPlaybackTimeRef.current = e.playbackTime;
       const expected = expectedPlaybackTimeRef.current;
+      const previousEnd = originalPcmRef.current.length
+        ? originalPcmRef.current[originalPcmRef.current.length - 1].startSample
+          + originalPcmRef.current[originalPcmRef.current.length - 1].pcm.length
+        : 0;
+      const clockStart = Math.max(
+        previousEnd,
+        Math.round((e.playbackTime - firstPlaybackTimeRef.current) * audioCtx.sampleRate),
+      );
       if (expected !== null && e.playbackTime > expected) {
         captureStatsRef.current.estimatedDroppedSamples += Math.max(
           0, Math.round((e.playbackTime - expected) * audioCtx.sampleRate),
@@ -132,8 +186,27 @@ export function useMeanVCPipeline(
       captureStatsRef.current.callbacks += 1;
       captureStatsRef.current.samples += ch.length;
       // Snapshot the raw mic (inputBuffer is reused, so copy) before sending.
-      originalPcmRef.current.push(new Float32Array(ch));
-      sendRawRef.current(ch.buffer);
+      const pcm = new Float32Array(ch);
+      originalPcmRef.current.push({ startSample: clockStart, pcm });
+      captureSequenceRef.current += 1;
+      const performanceStartMs = performance.now()
+        + (e.playbackTime - audioCtx.currentTime) * 1000;
+      captureTimelineRef.current.push({
+        chunk_sequence: captureSequenceRef.current,
+        capture_start_sample: clockStart,
+        sample_count: pcm.length,
+        timeline_start_ms: timelineEpochPerfMsRef.current === null
+          ? null
+          : performanceStartMs - timelineEpochPerfMsRef.current,
+      });
+      sendRawRef.current(options.studyTimeline
+        ? frameStudyPcm(
+            pcm,
+            captureSequenceRef.current,
+            clockStart,
+            audioCtx.sampleRate,
+          )
+        : pcm.buffer);
     };
     source.connect(processor);
     // Near-silent sink keeps the ScriptProcessor firing.
@@ -155,17 +228,16 @@ export function useMeanVCPipeline(
       steps: initialSteps,
       voicePrompt: options.voicePrompt ?? "NATF2.pt",
     };
-  }, [state.vcTargetId, initialSteps, options.voicePrompt]);
+  }, [state.vcTargetId, initialSteps, options.voicePrompt, options.studyTimeline]);
 
   // Assemble the captured raw mic into a 16 kHz WAV (the "Original" side of the
   // voice-change comparison). Returns null if nothing was captured.
   const getOriginalUserWav = useCallback((): Blob | null => {
     const parts = originalPcmRef.current;
     if (!parts.length) return null;
-    const total = parts.reduce((n, p) => n + p.length, 0);
+    const total = parts.reduce((n, part) => Math.max(n, part.startSample + part.pcm.length), 0);
     const combined = new Float32Array(total);
-    let off = 0;
-    for (const p of parts) { combined.set(p, off); off += p.length; }
+    for (const part of parts) combined.set(part.pcm, part.startSample);
     return createWavFile(combined, captureSampleRateRef.current);
   }, []);
 
@@ -176,7 +248,18 @@ export function useMeanVCPipeline(
   }), []);
 
   // Phase 2: open the gate so mic PCM starts flowing to the proxy.
-  const beginSending = useCallback(() => {
+  const getClientCaptureTimeline = useCallback(() => ({
+    schema: "hmo.client-capture-timeline.v1",
+    epoch: "personaplex_handshake_performance_now",
+    sample_rate_hz: captureSampleRateRef.current,
+    callbacks: captureStatsRef.current.callbacks,
+    captured_samples: captureStatsRef.current.samples,
+    estimated_dropped_samples: captureStatsRef.current.estimatedDroppedSamples,
+    chunks: captureTimelineRef.current,
+  }), []);
+
+  const beginSending = useCallback((epochPerformanceMs?: number) => {
+    timelineEpochPerfMsRef.current = epochPerformanceMs ?? performance.now();
     sendingRef.current = true;
     setState(s => ({ ...s, vcStatus: "VC pipeline active - connected" }));
   }, []);
@@ -221,5 +304,6 @@ export function useMeanVCPipeline(
     stopVCStream,
     getOriginalUserWav,
     getCaptureStats,
+    getClientCaptureTimeline,
   };
 }

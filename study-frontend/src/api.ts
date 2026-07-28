@@ -55,6 +55,7 @@ export interface ScenarioInfo {
   extra_fields?: { label: string; value: string }[];
   post_items?: any[];
   time_limit_s: number;
+  study_role?: "practice" | "analytical";
 }
 export interface RunState {
   status: "not_started" | "in_progress" | "submitted" | "expired";
@@ -107,17 +108,20 @@ export const api = {
       return performance.now() - t0;
     } catch { return null; }
   },
-  playbackUrl: (code: string, scenarioOrder?: number, track?: string) => {
+  playbackUrl: (code: string, scenarioOrder?: number, track?: string,
+                condition?: string, maxDurationS?: number) => {
     const qs = new URLSearchParams()
     if (scenarioOrder) qs.set("scenario", String(scenarioOrder))
     if (track) qs.set("track", track)
+    if (condition) qs.set("condition", condition)
+    if (maxDurationS) qs.set("max_duration_s", String(maxDurationS))
     const q = qs.toString()
     return `${BASE}/playback/${encodeURIComponent(code)}${q ? `?${q}` : ""}`
   },
 
   async saveSession(sessionId: string, arts: {
     participant?: Blob | null; participant_raw?: Blob | null; model?: Blob | null;
-    merged?: Blob | null; model_transcript?: unknown;
+    merged?: Blob | null; model_transcript?: unknown; client_timeline?: unknown;
   }) {
     const fd = new FormData();
     if (arts.participant) fd.append("participant", arts.participant, "participant.wav");
@@ -125,6 +129,7 @@ export const api = {
     if (arts.model) fd.append("model", arts.model, "model.wav");
     if (arts.merged) fd.append("merged", arts.merged, "merged.wav");
     fd.append("model_transcript", JSON.stringify(arts.model_transcript ?? null));
+    fd.append("client_timeline", JSON.stringify(arts.client_timeline ?? null));
     const r = await fetch(`${BASE}/session/${sessionId}/save`, { method: "POST", headers: traceHeaders(), body: fd });
     if (!r.ok) throw await asError(r);
     return r.json();

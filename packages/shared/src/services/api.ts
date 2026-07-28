@@ -104,21 +104,14 @@ export async function compareMetricsData(source: Blob, target: Blob): Promise<Me
   return resp.json()
 }
 
-// VC-quality eval: WER/CER vs source transcript, SECS vs target, F0 PCC/RMSE
-// vs target, DNSMOS+UTMOS naturalness. Optionally per-segment scoring with
-// anomaly flagging when segmentMode is "fixed" | "word" | "vad".
+// X-VC objective quality profile: WER, WavLM SIM, and UTMOS. Optional
+// segmentation is for diagnostics; study runs score whole stable VC regions.
 export interface VcQualitySegment {
   start: number
   end: number
-  secs?: number | null
+  sim?: number | null
   wer?: number | null
   utmos?: number | null
-  sig?: number | null
-  bak?: number | null
-  ovrl?: number | null
-  p808_mos?: number | null
-  f0_pcc?: number | null
-  f0_rmse?: number | null
   vc?: string
   ref?: string
 }
@@ -136,26 +129,19 @@ export interface VcQualityResult {
   target_path: string
   source_path: string | null
   wer: number | null
-  cer: number | null
-  secs: number | null
-  f0_pcc: number | null
-  f0_rmse: number | null
-  sig: number | null
-  bak: number | null
-  ovrl: number | null
-  p808_mos: number | null
+  sim: number | null
   utmos: number | null
   vc_transcript?: string
   ref_transcript?: string | null
   ref_kind?: string | null
+  wer_reference_note?: string | null
   segment_mode?: string
   segments?: VcQualitySegment[]
   anomalies?: VcQualityAnomaly[]
 }
 
-// Names match the backend's _SKIPPABLE_METRICS keys. "secs" is the biggest
-// CPU win to skip (WavLM-large forward pass per segment).
-export type VcQualityMetric = "intelligibility" | "secs" | "naturalness" | "prosody"
+// Names match the backend's _SKIPPABLE_METRICS keys.
+export type VcQualityMetric = "intelligibility" | "speaker_similarity" | "utmos"
 
 // Offline pitch/formant shift for soundboard bakes. Preserves duration.
 // `targetSr` MUST equal PP's expected SR (PP_SAMPLE_RATE); the server refuses
@@ -236,9 +222,7 @@ export async function vcQuality(
   opts?: {
     sourceTranscript?: string
     segmentMode?: "fixed" | "word" | "vad"
-    // Fixed-window resolution. Default is 5s window / 5s hop (non-overlapping)
-    // which gives ~5x fewer WavLM forward passes than the CLI's 2s/1s default —
-    // critical on CPU where SECS dominates wall time.
+    // Fixed-window resolution for explicit diagnostic runs.
     segmentWin?: number
     segmentHop?: number
     skipMetrics?: VcQualityMetric[]

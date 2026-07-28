@@ -7,6 +7,7 @@ allocates the next least-filled valid variant; outcomes never influence it.
 from __future__ import annotations
 
 import copy
+import secrets
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -27,9 +28,18 @@ def has_deferred_target_assignment(settings: dict | None) -> bool:
     return bool(target_assignment_configuration(settings))
 
 
+def choose_balanced_target(candidates: list[str], participants: list[dict]) -> str:
+    """Choose randomly among the currently least-used fallback targets."""
+    if not candidates:
+        raise CounterbalanceError("No fallback target voices are configured")
+    counts = Counter(p.get("target_ref") for p in participants if p.get("target_ref"))
+    minimum = min(counts[ref] for ref in candidates)
+    return secrets.choice([ref for ref in candidates if counts[ref] == minimum])
+
+
 def resolve_target_assignment(settings: dict | None, questionnaire_kind: str,
                               payload: dict) -> dict:
-    """Resolve a participant answer to one prespecified target voice."""
+    """Resolve a participant answer to a fixed target or fallback target pool."""
     config = target_assignment_configuration(settings)
     if not config:
         raise CounterbalanceError("counterbalancing.target_assignment is not configured")
@@ -47,8 +57,14 @@ def resolve_target_assignment(settings: dict | None, questionnaire_kind: str,
     values = answer if isinstance(answer, list) else [answer]
     matches = [(str(value), mapping[value]) for value in values if value in mapping]
     if not matches:
-        raise CounterbalanceError(
-            f"Answer {answer_id!r} must select one configured target-assignment category")
+        fallback_targets = [str(ref) for ref in (config.get("fallback_targets") or [])]
+        if not fallback_targets:
+            raise CounterbalanceError(
+                f"Answer {answer_id!r} must select one configured target-assignment category")
+        return {
+            "allocation_stratum": "fallback",
+            "target_candidates": fallback_targets,
+        }
     targets = {str(target) for _, target in matches}
     if len(targets) != 1:
         raise CounterbalanceError(
@@ -85,7 +101,13 @@ def validate_and_compile(settings: dict | None, scenarios: list[dict],
         if not answer_id or not isinstance(mapping, dict) or not mapping:
             raise CounterbalanceError(
                 "target_assignment requires answer_id and target_by_answer")
-        unknown = sorted({str(ref) for ref in mapping.values()} - target_refs)
+        fallback_targets = [str(ref) for ref in
+                            (target_assignment.get("fallback_targets") or [])]
+        if len(set(fallback_targets)) != len(fallback_targets):
+            raise CounterbalanceError(
+                "target_assignment.fallback_targets must not contain duplicates")
+        unknown = sorted(
+            ({str(ref) for ref in mapping.values()} | set(fallback_targets)) - target_refs)
         if unknown:
             raise CounterbalanceError(
                 f"target_assignment references unknown target voice(s): {', '.join(unknown)}")

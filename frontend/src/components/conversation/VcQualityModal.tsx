@@ -18,17 +18,17 @@ const fmt = (v: number | null | undefined, digits = 2) =>
 // Color thresholds match the per-segment anomaly floors in vc_quality.py.
 function colorFor(metric: string, v: number | null | undefined): string {
   if (v == null) return "text-muted-foreground"
-  if (metric === "wer" || metric === "cer") {
+  if (metric === "wer") {
     if (v < 0.15) return "text-emerald-400"
     if (v < 0.35) return "text-amber-400"
     return "text-red-400"
   }
-  if (metric === "secs") {
+  if (metric === "sim") {
     if (v >= 0.7) return "text-emerald-400"
     if (v >= 0.5) return "text-amber-400"
     return "text-red-400"
   }
-  if (metric === "utmos" || metric === "ovrl" || metric === "sig") {
+  if (metric === "utmos") {
     if (v >= 3.5) return "text-emerald-400"
     if (v >= 2.5) return "text-amber-400"
     return "text-red-400"
@@ -171,13 +171,9 @@ function SegmentDetail({
 }) {
   const offendingMetrics = new Set(anomalies.map(a => a.metric))
   const rows: Array<[string, number | null | undefined, string]> = [
-    ["WER",        segment.wer,      "wer"],
-    ["SECS",       segment.secs,     "secs"],
-    ["UTMOS",      segment.utmos,    "utmos"],
-    ["DNSMOS OVRL", segment.ovrl,    "ovrl"],
-    ["DNSMOS SIG", segment.sig,      "sig"],
-    ["F0 PCC",     segment.f0_pcc,   "f0_pcc"],
-    ["F0 RMSE",    segment.f0_rmse,  "f0_rmse"],
+    ["WER",   segment.wer,   "wer"],
+    ["SIM",   segment.sim,   "sim"],
+    ["UTMOS", segment.utmos, "utmos"],
   ]
   return (
     <div className="rounded-lg border bg-muted/40 p-3 space-y-2">
@@ -205,8 +201,7 @@ function SegmentDetail({
             >
               <div className="text-[10px] text-muted-foreground">{label}</div>
               <div className={`font-medium tabular-nums ${colorFor(metric, value)}`}>
-                {fmt(value, metric === "f0_rmse" ? 1 : 2)}
-                {metric === "f0_rmse" && value != null && <span className="ml-1 text-[9px] text-muted-foreground">Hz</span>}
+                {fmt(value)}
                 {flagged && <AlertTriangle className="ml-1 inline size-3 text-red-400" />}
               </div>
             </div>
@@ -394,64 +389,47 @@ export function VcQualityModal({ data, diarized, onClose }: Props) {
         </div>
         <p className="px-5 pt-3 text-xs text-muted-foreground">
           Post-hoc evaluation of the voice-conversion output: intelligibility (WER),
-          target speaker similarity (SECS), naturalness (UTMOS / DNSMOS) and
-          prosody fidelity (F0). Lower WER and higher SECS / UTMOS are better.
-          Click a timeline bar or anomaly row to inspect a window.
+          target speaker similarity (SIM), and naturalness (UTMOS). Lower WER and
+          higher SIM / UTMOS are better.
         </p>
         <div className="overflow-y-auto p-5 pt-3 space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <HeadlineCard label="WER" value={data.wer} metric="wer" hint="word err rate" />
-            <HeadlineCard label="SECS" value={data.secs} metric="secs" hint="vs target voice" />
+            <HeadlineCard label="SIM" value={data.sim} metric="sim" hint="vs target voice" />
             <HeadlineCard label="UTMOS" value={data.utmos} metric="utmos" hint="naturalness" />
-            <HeadlineCard label="DNSMOS OVRL" value={data.ovrl} metric="ovrl" hint="overall MOS" />
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            <div className="rounded border bg-muted/20 p-2">
-              <span className="text-muted-foreground">CER </span>
-              <span className="tabular-nums">{fmt(data.cer)}</span>
-            </div>
-            <div className="rounded border bg-muted/20 p-2">
-              <span className="text-muted-foreground">SIG </span>
-              <span className="tabular-nums">{fmt(data.sig)}</span>
-            </div>
-            <div className="rounded border bg-muted/20 p-2">
-              <span className="text-muted-foreground">F0 PCC </span>
-              <span className="tabular-nums">{fmt(data.f0_pcc)}</span>
-            </div>
-            <div className="rounded border bg-muted/20 p-2">
-              <span className="text-muted-foreground">F0 RMSE </span>
-              <span className="tabular-nums">{fmt(data.f0_rmse, 1)} Hz</span>
-            </div>
-          </div>
-
-          <SegmentTimeline
-            segments={segments}
-            anomalousIdxs={anomalousIdxs}
-            selectedIdx={selectedIdx}
-            onSelect={setSelectedIdx}
-          />
-
-          {selectedSegment ? (
-            <SegmentDetail
-              segment={selectedSegment}
-              anomalies={selectedSegmentAnomalies}
-              diarized={diarized}
-              onClear={() => setSelectedIdx(null)}
-            />
-          ) : (
-            <div className="rounded-lg border border-dashed bg-muted/10 p-3 text-center text-[11px] text-muted-foreground">
-              Click any timeline bar above to see per-segment metrics.
+          {data.wer_reference_note && (
+            <div className="rounded border bg-muted/20 p-2 text-[11px] text-muted-foreground">
+              {data.wer_reference_note}
             </div>
           )}
 
-          <AnomalyList
-            groups={groups}
-            expanded={expanded}
-            onToggle={toggleExpanded}
-            onSelectSegment={setSelectedIdx}
-            selectedSegmentIdx={selectedIdx}
-          />
+          {segments.length > 0 && (
+            <>
+              <SegmentTimeline
+                segments={segments}
+                anomalousIdxs={anomalousIdxs}
+                selectedIdx={selectedIdx}
+                onSelect={setSelectedIdx}
+              />
+              {selectedSegment && (
+                <SegmentDetail
+                  segment={selectedSegment}
+                  anomalies={selectedSegmentAnomalies}
+                  diarized={diarized}
+                  onClear={() => setSelectedIdx(null)}
+                />
+              )}
+              <AnomalyList
+                groups={groups}
+                expanded={expanded}
+                onToggle={toggleExpanded}
+                onSelectSegment={setSelectedIdx}
+                selectedSegmentIdx={selectedIdx}
+              />
+            </>
+          )}
 
           {data.vc_transcript && (
             <div className="space-y-1">

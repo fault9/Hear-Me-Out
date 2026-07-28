@@ -87,7 +87,7 @@ SEED_VC_DIR = REPO_ROOT / "seed-vc"
 INFERENCE_SCRIPT = SEED_VC_DIR / "inference.py"
 RECORDINGS_DIR = REPO_ROOT / "recordings"
 # vc_quality is its own uv project under services/vc_quality (own venv with
-# Whisper + WavLM + DNSMOS + UTMOS). Override with VC_QUAL_DIR. We subprocess
+# Whisper + WavLM + UTMOS). Override with VC_QUAL_DIR. We subprocess
 # it so its heavy models don't load into app-api's GPU (which already holds
 # PersonaPlex weights).
 VC_QUAL_DIR = Path(os.environ.get("VC_QUAL_DIR", REPO_ROOT / "services" / "vc_quality"))
@@ -669,9 +669,8 @@ def create_app():
     # vc_quality.py --no-* flags (mapped below).
     _SKIPPABLE_METRICS = {
         "intelligibility": "--no-intelligibility",
-        "secs": "--no-speaker-similarity",
-        "naturalness": "--no-naturalness",
-        "prosody": "--no-prosody",
+        "speaker_similarity": "--no-speaker-similarity",
+        "utmos": "--no-utmos",
     }
 
     @app.post("/api/vc-quality")
@@ -685,13 +684,12 @@ def create_app():
         segment_hop: float = Form(5.0),
         skip_metrics: str = Form(""),
     ):
-        """Post-hoc VC-quality eval for one conversation: WER/CER vs source
-        transcript, SECS vs target, F0 PCC/RMSE vs target, DNSMOS+UTMOS
-        naturalness. Optionally per-segment scoring + anomaly flagging when
+        """Post-hoc X-VC quality eval: WER vs the raw-source ASR transcript,
+        WavLM SIM vs the target, and UTMOS naturalness. Optionally per-segment
+        scoring + anomaly flagging when
         segment_mode is 'fixed' | 'word' | 'vad'. Pass skip_metrics as a
-        comma-separated list of intelligibility|secs|naturalness|prosody to
-        skip those blocks (useful for fast CPU runs — SECS via WavLM-large
-        is the heaviest). segment_win/segment_hop tune fixed-window resolution;
+        comma-separated list of intelligibility|speaker_similarity|utmos to
+        skip those blocks. segment_win/segment_hop tune fixed-window resolution;
         defaults of 5.0/5.0 give ~5x fewer windows than the 2.0/1.0 baseline
         the CLI uses, which matters a lot on CPU. Returns the
         evaluate_conversion row as JSON."""

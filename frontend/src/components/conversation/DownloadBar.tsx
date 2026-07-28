@@ -5,15 +5,11 @@ import { Download, Play, Pause, BarChart3, FileJson, Activity, ChevronDown } fro
 import { formatTime } from "@shared/lib/utils"
 import type { VcQualityMetric } from "@shared/services/api"
 
-// Metric checkboxes in the "Analyze VC quality" dropdown. SECS is the
-// heaviest (WavLM-large forward pass per segment); skipping it is the single
-// biggest CPU-time win on long conversations, so we make the speed cost
-// visible in the label.
+// X-VC objective metrics available for explicit ad-hoc analysis.
 const METRIC_CHOICES: { key: VcQualityMetric; label: string; hint: string }[] = [
-  { key: "intelligibility", label: "Intelligibility (WER, CER)",            hint: "Whisper" },
-  { key: "secs",            label: "Speaker similarity (SECS)",             hint: "WavLM-large — slow" },
-  { key: "naturalness",     label: "Naturalness (UTMOS, DNSMOS)",           hint: "two MOS predictors" },
-  { key: "prosody",         label: "Prosody (F0 PCC, F0 RMSE)",             hint: "librosa pyin" },
+  { key: "intelligibility",   label: "Intelligibility (WER)", hint: "source and converted ASR" },
+  { key: "speaker_similarity", label: "Speaker similarity (SIM)", hint: "WavLM-large" },
+  { key: "utmos",              label: "Naturalness (UTMOS)", hint: "UTMOS22" },
 ]
 
 interface Props {
@@ -49,14 +45,11 @@ export function DownloadBar({
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   // Dropdown state for the "Analyze VC quality" button.
-  // Default: SECS is OFF — it's the WavLM forward-pass-per-segment hog that
-  // was timing out on long conversations. Opt back in when you want it.
   const [vcQualityMenuOpen, setVcQualityMenuOpen] = useState(false)
   const [enabledMetrics, setEnabledMetrics] = useState<Record<VcQualityMetric, boolean>>({
     intelligibility: true,
-    secs: false,
-    naturalness: true,
-    prosody: true,
+    speaker_similarity: true,
+    utmos: true,
   })
   const vcQualityMenuRef = useRef<HTMLDivElement | null>(null)
 
@@ -183,7 +176,7 @@ export function DownloadBar({
                       className="text-[10px] text-muted-foreground hover:text-foreground"
                       onClick={() =>
                         setEnabledMetrics({
-                          intelligibility: true, secs: true, naturalness: true, prosody: true,
+                          intelligibility: true, speaker_similarity: true, utmos: true,
                         })
                       }
                     >

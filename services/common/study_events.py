@@ -21,6 +21,7 @@ class StudyEventBuffer:
         self.rows: list[dict[str, Any]] = []
         self.sequence = 0
         self._flush_lock = asyncio.Lock()
+        self._flush_task: asyncio.Task | None = None
 
     def add(self, event: str, **fields: Any) -> None:
         if not self.session_id or self.session_id.endswith("_CHECK"):
@@ -34,7 +35,7 @@ class StudyEventBuffer:
             **fields,
         })
 
-    async def flush(self, *, force: bool = False) -> bool:
+    async def _flush_once(self, *, force: bool = False) -> bool:
         async with self._flush_lock:
             if not self.rows or (not force and len(self.rows) < 128):
                 return True
@@ -53,6 +54,24 @@ class StudyEventBuffer:
                 return True
             except Exception:
                 return False
+
+    def flush_nowait(self) -> None:
+        """Schedule a batch upload without pausing the real-time audio loop."""
+        if len(self.rows) < 128:
+            return
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._flush_once())
+
+    async def flush(self, *, force: bool = False) -> bool:
+        """Wait for queued delivery; force also drains the final partial batch."""
+        task = self._flush_task
+        if task is not None and not task.done():
+            await task
+        if force:
+            while self.rows:
+                if not await self._flush_once(force=True):
+                    return False
+        return True
 
 
 class EnergySpeechTracker:

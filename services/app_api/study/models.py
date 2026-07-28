@@ -12,7 +12,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 FieldType = Literal["text", "textarea", "number", "radio", "select", "checkbox",
-                    "switch", "scale", "audio_playback"]
+                    "switch", "scale", "audio_playback", "notice"]
 
 
 class ShowIf(BaseModel):
@@ -46,10 +46,14 @@ class QuestionnaireItem(BaseModel):
 
 
 class Questionnaires(BaseModel):
+    eligibility: list[QuestionnaireItem] = Field(default_factory=list)
     consent: list[QuestionnaireItem] = Field(default_factory=list)
     audio_check: list[QuestionnaireItem] = Field(default_factory=list)
     background: list[QuestionnaireItem] = Field(default_factory=list)
     post: list[QuestionnaireItem] = Field(default_factory=list)
+    pre_playback: list[QuestionnaireItem] = Field(default_factory=list)
+    playback: list[QuestionnaireItem] = Field(default_factory=list)
+    debrief: list[QuestionnaireItem] = Field(default_factory=list)
     final: list[QuestionnaireItem] = Field(default_factory=list)
 
     class Config:
@@ -159,7 +163,8 @@ class SessionStartRequest(BaseModel):
 
 class QuestionnaireRequest(BaseModel):
     code: str
-    kind: Literal["consent", "audio_check", "background", "post", "final"]
+    kind: Literal["eligibility", "consent", "audio_check", "background", "practice_post",
+                  "post", "pre_playback", "playback", "debrief", "final"]
     payload: dict[str, Any] = Field(default_factory=dict)
     session_id: Optional[str] = None
 

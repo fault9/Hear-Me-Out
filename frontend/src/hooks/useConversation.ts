@@ -147,7 +147,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
   const [originalUserWavUrl, setOriginalUserWavUrl] = useState<string | null>(null)
   const [vcMetrics, setVcMetrics] = useState<MetricsResult | null>(null)
   const [vcMetricsLoading, setVcMetricsLoading] = useState(false)
-  // VC-quality (WER/SECS/UTMOS/DNSMOS/F0) — separate from vcMetrics above
+  // X-VC quality (WER/SIM/UTMOS) — separate from vcMetrics above
   // (which is LLM-response-comparison). vcQuality is the audio-side quality.
   const [vcQualityData, setVcQualityData] = useState<VcQualityResult | null>(null)
   const [vcQualityLoading, setVcQualityLoading] = useState(false)
@@ -541,7 +541,7 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     setVcQualityLoading(true)
     try {
       // For a soundboard session the download URLs are the TIMELINE assembly
-      // (mostly silence between plays), which would wreck SECS/UTMOS. Score the
+      // (mostly silence between plays), which would wreck SIM/UTMOS. Score the
       // GAPLESS concat of the captured clips instead. The capture buffer is
       // still intact post-conversation (reset only on the next start).
       const tgt = await fetch(effectiveVcTargetUrl).then(r => r.blob())
@@ -560,12 +560,6 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
         return
       }
       const data = await vcQuality(orig, tgt, conv, {
-        segmentMode: "fixed",
-        // 5s/5s windows give ~5x fewer WavLM forward passes than the 2s/1s
-        // CLI default — essential on CPU. Coarser anomaly resolution; still
-        // localizes drift to a 5-second region.
-        segmentWin: 5,
-        segmentHop: 5,
         skipMetrics,
       })
       if (runId === conversationRunId.current) setVcQualityData(data)

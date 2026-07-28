@@ -39,6 +39,14 @@ export interface Transcript {
   speaker: "user" | "personaplex";
 }
 
+interface AssistantPlaybackEntry {
+  packet_sequence: number;
+  timeline_start_ms: number;
+  timeline_end_ms: number;
+  decoded_samples: number;
+  sample_rate_hz: number;
+}
+
 declare global {
   interface Window {
     webkitAudioContext?: new (options?: AudioContextOptions) => AudioContext;
@@ -133,9 +141,13 @@ export function useWebSocket() {
     mergedDestRef.current = dest;
     mergedEndRef.current = 0;
   }, []);
-  const personaplexOpus = useRef<{ packet: Uint8Array; time: number }[]>([]);
+  const personaplexOpus = useRef<{ packet: Uint8Array; time: number; sequence: number }[]>([]);
   const vcUserPcm = useRef<Float32Array[]>([]);
   const conversationStart = useRef(0);
+  const conversationStartPerf = useRef(0);
+  const modelPacketSequenceRef = useRef(0);
+  const assistantPlaybackRef = useRef<AssistantPlaybackEntry[]>([]);
+  const playbackDecodeTasksRef = useRef<Promise<void>[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
@@ -168,13 +180,13 @@ export function useWebSocket() {
     };
   }, []);
 
-  const playAudio = useCallback((payload: ArrayBuffer, runId: number) => {
+  const playAudio = useCallback((payload: ArrayBuffer, runId: number, packetSequence: number) => {
     const decoder = decoderRef.current;
     const ctx = audioCtxRef.current;
     if (!decoder || !ctx) return;
 
     const raw = new Uint8Array(payload);
-    personaplexOpus.current.push({ packet: raw, time: Date.now() });
+    personaplexOpus.current.push({ packet: raw, time: Date.now(), sequence: packetSequence });
 
     // PP speech-run detection on the performance.now() clock. A packet means PP
     // is producing audio; the first after silence is speech-start, and the run
@@ -198,7 +210,7 @@ export function useWebSocket() {
       }, PP_SILENCE_GAP_MS);
     }
 
-    decoder.decode(raw).then(({ channelData, samplesDecoded }) => {
+    const decodeTask = decoder.decode(raw).then(({ channelData, samplesDecoded }) => {
       if (runId !== runIdRef.current) return;
       if (samplesDecoded === 0) return;
 
@@ -212,6 +224,17 @@ export function useWebSocket() {
       const start = Math.max(scheduledEnd.current, now);
       src.start(start);
       scheduledEnd.current = start + buffer.duration;
+      const scheduledPerfMs = performance.now() + (start - now) * 1000;
+      assistantPlaybackRef.current.push({
+        packet_sequence: packetSequence,
+        timeline_start_ms: Math.max(0, scheduledPerfMs - conversationStartPerf.current),
+        timeline_end_ms: Math.max(
+          0,
+          scheduledPerfMs - conversationStartPerf.current + buffer.duration * 1000,
+        ),
+        decoded_samples: samplesDecoded,
+        sample_rate_hz: ctx.sampleRate,
+      });
 
       // Also route to merged capture stream
       const mctx = mergedCtxRef.current;
@@ -228,6 +251,7 @@ export function useWebSocket() {
         mergedEndRef.current = mstart + mbuf.duration;
       }
     }).catch(() => {});
+    playbackDecodeTasksRef.current.push(decodeTask);
   }, []);
 
   const latestPersonaplexAudioEnd = useCallback((): number => {
@@ -286,6 +310,10 @@ export function useWebSocket() {
     personaplexOpus.current = [];
     vcUserPcm.current = [];
     conversationStart.current = 0;
+    conversationStartPerf.current = 0;
+    modelPacketSequenceRef.current = 0;
+    assistantPlaybackRef.current = [];
+    playbackDecodeTasksRef.current = [];
     lastTranscriptEndRef.current = 0;
     intentionalClose.current = false;
     setAudioReceived(false);
@@ -337,11 +365,15 @@ export function useWebSocket() {
         const view = new Uint8Array(arrayBuffer);
         const tag = view[0];
         const payload = arrayBuffer.slice(1);
+        const modelPacketSequence = tag === 3
+          ? null
+          : ++modelPacketSequenceRef.current;
 
         if (tag === 0) {
           if (runId !== runIdRef.current) return;
           console.log("Handshake received, server ready");
           conversationStart.current = Date.now();
+          conversationStartPerf.current = performance.now();
           scheduledEnd.current = 0;
           mergedEndRef.current = 0;
           feedbackEnd.current = 0;
@@ -350,7 +382,7 @@ export function useWebSocket() {
           setHandshakeReceived(true);
         } else if (tag === 1) {
           setAudioReceived(true);
-          playAudio(payload, runId);
+          playAudio(payload, runId, modelPacketSequence ?? modelPacketSequenceRef.current);
         } else if (tag === 2) {
           const decoder = new TextDecoder();
           const text = decoder.decode(payload);
@@ -543,9 +575,30 @@ export function useWebSocket() {
   // before the conversation begins. The soundboard uses this to timestamp its
   // plays on the same timeline as PersonaPlex turns.
   const getConversationElapsed = useCallback((): number => {
-    return conversationStart.current > 0
-      ? (Date.now() - conversationStart.current) / 1000
+    return conversationStartPerf.current > 0
+      ? (performance.now() - conversationStartPerf.current) / 1000
       : 0
+  }, []);
+
+  const getConversationStartPerformanceMs = useCallback(
+    () => conversationStartPerf.current || performance.now(),
+    [],
+  );
+
+  const getClientPlaybackTimeline = useCallback(async () => {
+    // Socket teardown does not cancel already-received decoder work. Drain those
+    // tasks before freezing the immutable browser timeline so its final packet is
+    // not lost when the participant ends a scenario.
+    await Promise.allSettled(playbackDecodeTasksRef.current.slice());
+    const ctx = audioCtxRef.current as (AudioContext & { outputLatency?: number }) | null;
+    return {
+      schema: "hmo.client-playback-timeline.v1",
+      epoch: "personaplex_handshake_performance_now",
+      audio_context_sample_rate_hz: ctx?.sampleRate ?? null,
+      base_latency_ms: ctx ? ctx.baseLatency * 1000 : null,
+      output_latency_ms: ctx?.outputLatency == null ? null : ctx.outputLatency * 1000,
+      assistant_packets: assistantPlaybackRef.current.slice(),
+    };
   }, []);
 
   // Inject a user-speech transcript into the conversation stream. Used by the
@@ -598,6 +651,8 @@ export function useWebSocket() {
     isMicMuted,
     addUserTranscript,
     getConversationElapsed,
+    getConversationStartPerformanceMs,
+    getClientPlaybackTimeline,
     registerPpSpeechListener,
   };
 }

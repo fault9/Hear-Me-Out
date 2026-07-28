@@ -1,24 +1,20 @@
 [project]
 name = "hearmeout-vc-quality"
 version = "0.1.0"
-description = "Hear-Me-Out VC-quality eval: WER/SECS/UTMOS/DNSMOS/F0 (post-hoc, CPU-by-default)."
+description = "Hear-Me-Out X-VC quality eval: WER/SIM/UTMOS (post-hoc, CPU-by-default)."
 requires-python = ">=3.10,<3.12"
 dependencies = [
     # Core audio + math
     "numpy>=1.26,<2.0",
-    "scipy>=1.11",
     "librosa>=0.10",
-    "soundfile>=0.12",
     # Torch (CPU is fine for eval; the deployed server's GPU stays free for PersonaPlex).
     "torch==2.4.0",
     "torchaudio==2.4.0",
     # ASR for WER: faster-whisper-small via the HF transformers pipeline.
     # (Same model size as app-api's /api/transcribe path.)
     "transformers>=4.40",
-    # WER/CER scoring
+    # WER scoring
     "jiwer>=3.0",
-    # DNSMOS ONNX runtime (CPU)
-    "onnxruntime>=1.17",
     # WavLM-large SV uses src.runtime.speaker_verification (imported via
     # $SPEAKER_VERIFICATION_ROOT, copied into the workspace by infra/setup.sh).
     # Its upstreams import these:

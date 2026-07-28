@@ -800,7 +800,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                         await browser_ws.send_bytes(TAG_VC_USER + vc_wav.tobytes())
 
                 if events:
-                    await events.flush()
+                    events.flush_nowait()
             elif msg.type == web.WSMsgType.TEXT:
                 if events:
                     try:
@@ -850,7 +850,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                 if not browser_ws.closed:
                     await browser_ws.send_bytes(msg.data)
                 if events:
-                    await events.flush()
+                    events.flush_nowait()
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
                 break
 

@@ -1,7 +1,7 @@
 import { Button } from "@shared/ui/button"
 import { Input } from "@shared/ui/input"
 
-export const FIELD_TYPES = ["text", "textarea", "number", "radio", "select", "checkbox", "switch", "scale", "audio_playback"]
+export const FIELD_TYPES = ["text", "textarea", "number", "radio", "select", "checkbox", "switch", "scale", "audio_playback", "notice"]
 export type Item = Record<string, any>
 
 let _uid = 0
@@ -28,7 +28,7 @@ export function ItemListEditor({ items, onChange, scenarios = [] }: {
               onChange={e => update(i, { type: e.target.value })}>
               {FIELD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
-            {it.type !== "audio_playback" && (
+            {it.type !== "audio_playback" && it.type !== "notice" && (
               <label className="flex items-center gap-1 text-xs">
                 <input type="checkbox" checked={!!it.required} onChange={e => update(i, { required: e.target.checked })} /> required
               </label>
@@ -57,6 +57,14 @@ export function ItemListEditor({ items, onChange, scenarios = [] }: {
                 <option value="merged">Full conversation</option>
                 <option value="participant">Participant only</option>
               </select>
+              <Input className="w-44" placeholder="Condition id (optional)"
+                value={it.condition || ""} onChange={e => update(i, { condition: e.target.value || undefined })} />
+              <Input className="w-32" type="number" min={1} max={30}
+                placeholder="Max seconds"
+                value={it.max_duration_s ?? ""}
+                onChange={e => update(i, {
+                  max_duration_s: e.target.value ? Number(e.target.value) : undefined,
+                })} />
             </div>
           )}
 
@@ -96,7 +104,7 @@ export function ItemListEditor({ items, onChange, scenarios = [] }: {
               value={(it.extra_options || []).join(", ")} onChange={e => update(i, { extra_options: csv(e.target.value) })} />
           )}
 
-          {it.type !== "audio_playback" && (
+          {it.type !== "audio_playback" && it.type !== "notice" && (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
               <span className="text-muted-foreground">Show only if</span>
               <Input className="w-40" placeholder="question id" value={it.show_if?.field || ""}

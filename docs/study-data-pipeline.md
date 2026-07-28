@@ -2,9 +2,9 @@
 
 ## Collection contract
 
-Each run enforces `consent -> audio check -> background -> scenarios`. Consent
-answers are persisted before the audio-check endpoint permits microphone access;
-answers from an earlier restarted run do not satisfy this guard.
+Each run enforces `eligibility -> consent -> background -> audio check -> scenarios`.
+Consent answers are persisted before the audio-check endpoint permits microphone
+access; answers from an earlier restarted run do not satisfy this guard.
 
 Each scenario attempt has a unique session ID and directory:
 
@@ -23,6 +23,32 @@ The browser separately reports ScriptProcessor callback gaps as an estimate;
 these are labelled `reported_by: browser` and must not be described as
 server-observed packet loss.
 
+## Timing timelines
+
+Study calls keep two linked timelines without running model inference in the
+browser or adding a synchronous network request to the audio loop:
+
+- The participant-experienced timeline maps raw microphone callback samples and
+  scheduled assistant playback packets to the PersonaPlex-handshake
+  `performance.now()` epoch. `client_timeline.json` records callback sample
+  offsets, scheduled playback spans, and browser output-latency estimates.
+- The proxy/model timeline records X-VC input, route activation, transmitted
+  windows, exact PersonaPlex-bound Opus bytes, PersonaPlex output packets, and
+  monotonic server timestamps in `events.jsonl`, `proxy_timeline.json`, and the
+  proxy audio artifacts.
+
+The browser prefixes study-only PCM frames with a sequence number and capture
+sample offset. The X-VC proxy copies those identifiers into `input_chunk` events,
+providing the crosswalk between timelines. The header is removed before audio is
+processed and regular non-study calls retain the legacy raw-float frame format.
+
+Admin-triggered preprocessing writes versioned
+`analysis/timing/<analysis-id>/timing.json` outputs with overlap, barge-in,
+stop-latency, route-switch projection, and crosswalk integrity diagnostics. RMS
+participant boundaries and scheduled-packet assistant boundaries remain labelled
+`estimated_pending_validation`; use `validate_intervals` with manually annotated
+pilot intervals before treating these measures as validated study outcomes.
+
 ## Post-hoc processing
 
 Use the admin Data tab after collection. `Session preprocessing and diagnostics`
@@ -35,7 +61,8 @@ session, one participant, or the full study. It:
 - reads the frozen raw, transmitted, target, and event artifacts;
 - derives stable route clips using actual input/transmitted sample boundaries;
 - excludes a guard interval around switches from stable VC scoring;
-- runs WER/CER, speaker similarity, prosody, and naturalness on VC-only clips;
+- runs the X-VC objective profile (WER, WavLM SIM, and UTMOS) on stable VC-only clips;
+- records WER reference provenance as source-ASR because interactions are unscripted;
 - saves transition windows and activation/discontinuity diagnostics separately;
 - writes a new `analysis/vc_quality/<analysis-id>/` snapshot on every forced run.
 
@@ -64,13 +91,16 @@ counterbalancing:
     target_by_answer:
       Woman: masculine_presenting
       Man: feminine_presenting
+    fallback_targets: [masculine_presenting, feminine_presenting]
 ```
 
 The mapped values are target `ref` values uploaded for the study. The example
-uses gender identity because that is the stated protocol. If the intended rule
-is instead based on perceived vocal presentation, use a dedicated required
-categorical item and preregister how ambiguous or undisclosed answers are
-handled.
+uses gender identity because that is the stated protocol. An unmapped response,
+including non-binary, self-described, or undisclosed, is assigned randomly among
+the currently least-used `fallback_targets`; those participants share one
+fallback allocation stratum so scenario variants remain balanced. If the
+intended rule is instead based on perceived vocal presentation, use a dedicated
+required categorical item and preregister its mapping and fallback rule.
 
 Scenario counterbalancing is also prespecified in YAML. Variants may omit
 `target_ref` when `target_assignment` is configured; the assigned target is

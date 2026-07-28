@@ -23,6 +23,9 @@ export function ScenarioCall({ code, scenario, onDone }: {
   const [errMsg, setErrMsg] = useState<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const started = useRef(false)
+  const scenarioLabel = scenario.study_role === "practice"
+    ? "Practice interaction"
+    : `Scenario ${Math.max(1, scenario.scenario_order - 1)}`
 
   // On mount: create the session + prepare the engine this scenario needs.
   useEffect(() => {
@@ -103,7 +106,7 @@ export function ScenarioCall({ code, scenario, onDone }: {
     <div className="grid gap-5 md:grid-cols-[1fr_320px]">
       <div className="rounded-xl border bg-card p-5">
         <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Scenario {scenario.scenario_order}{scenario.title ? ` — ${scenario.title}` : ""}
+          {scenarioLabel}{scenario.title ? ` — ${scenario.title}` : ""}
         </div>
         <Field label="Your role" value={scenario.role} />
         <Field label="Current situation" value={scenario.current_situation} />
