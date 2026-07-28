@@ -74,15 +74,21 @@ def search(sql: str, stream_type: str = "logs", minutes: int = 30, size: int = 5
 
 
 @mcp.tool()
-def recent_logs(minutes: int = 15, size: int = 50, contains: str = "", service: str = "") -> str:
-    """Recent log lines across services (structured logs bridged from stdlib logging).
-    Optionally filter by substring in the message (`contains`) and/or `service` stream."""
-    stream = service or "study-app-api"
-    where = []
+def recent_logs(minutes: int = 30, size: int = 50, contains: str = "",
+                service: str = "", session_id: str = "") -> str:
+    """Recent structured log lines (all services share the `default` logs stream;
+    fields: severity, service_name, session_id, body). Optionally filter by `service`
+    (study-app-api | xvc | meanvc | study-analysis), a `session_id`, and/or a `contains`
+    substring in the body."""
+    conds = []
+    if service:
+        conds.append(f"service_name = '{service}'")
+    if session_id:
+        conds.append(f"session_id = '{session_id}'")
     if contains:
-        where.append(f"str_match(message, '{contains}')" if contains else "")
-    clause = (" WHERE " + " AND ".join(w for w in where if w)) if any(where) else ""
-    sql = f'SELECT _timestamp, level, service_name, message, trace_id, session_id FROM "{stream}"{clause} ORDER BY _timestamp DESC'
+        conds.append(f"body LIKE '%{contains}%'")
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    sql = f'SELECT _timestamp, severity, service_name, session_id, body FROM "default"{where} ORDER BY _timestamp DESC'
     return search(sql, stream_type="logs", minutes=minutes, size=size)
 
 

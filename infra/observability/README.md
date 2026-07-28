@@ -1,41 +1,42 @@
-# Observability dashboard
+# Observability dashboards
 
-`dashboard.json` is a ready-to-import OpenObserve dashboard with latency + GPU panels
-for the study stack. Traces and logs need **no** dashboard — explore them directly
-(Traces / Logs menus). This is only for the **metrics** graphs.
+Three ready-made OpenObserve dashboards for the study stack. Traces and logs are also
+explorable directly (Traces / Logs menus) — these dashboards are the at-a-glance views.
 
-## Import
+They are already created in the running OpenObserve (via the API). The JSON here in
+`dashboards/` is the version-controlled copy so they can be re-imported / recreated.
 
-1. Start the stack with observability on (see `docs/tracing.md`) and open the UI at
-   `https://<host>:5001/logs`.
-2. **Dashboards → Import** → upload `infra/observability/dashboard.json`
-   (or paste its contents). Save.
+| File | Dashboard | Panels |
+|---|---|---|
+| `dashboards/latency.json` | **HMO — Latency** | PersonaPlex first-response (ms), VC inference avg (ms), session duration by session, span latency by operation, GPU utilization %, GPU memory (MiB) |
+| `dashboards/tracing.json` | **HMO — Distributed Tracing** | spans over time by service, span count by service, avg + max span duration by operation, slowest spans table |
+| `dashboards/session-logs.json` | **HMO — Session Logs** | log volume by severity, logs by service, logs by study/user session, warnings/errors by service, errors table, recent logs table |
 
-That's it — no Grafana, no building an app. OpenObserve has the dashboard builder
-built in; this file just pre-wires the panels.
+## View them
 
-## If a panel is empty
+Open `https://<host>:5001/logs` → **Dashboards** → the three `HMO — …` dashboards.
+Set the time range (top-right) to cover your data (they default to **Last 24 hours**).
 
-Metric/label names are sanitized by the OTLP→store path and can vary slightly by
-OpenObserve version (dots→underscores; histograms get `_bucket`/`_sum`/`_count`). Open
-**Metrics → Explore**, find the real stream name, and fix the PromQL in the panel.
-The queries the dashboard uses:
+## Recreate / import
 
-| Panel | PromQL |
-|---|---|
-| VC inference p95 | `histogram_quantile(0.95, sum by (le, study_engine) (rate(vc_inference_ms_bucket[5m])))` |
-| VC inference p50 | `histogram_quantile(0.50, sum by (le, study_engine) (rate(vc_inference_ms_bucket[5m])))` |
-| PersonaPlex first-response p95 | `histogram_quantile(0.95, sum by (le, study_engine) (rate(personaplex_first_response_ms_bucket[5m])))` |
-| Client network RTT p95 | `histogram_quantile(0.95, sum by (le) (rate(client_network_rtt_ms_bucket[5m])))` |
-| Client connect p95 | `histogram_quantile(0.95, sum by (le) (rate(client_connect_ms_bucket[5m])))` |
-| Client first-audio p95 (e2e) | `histogram_quantile(0.95, sum by (le) (rate(client_first_audio_ms_bucket[5m])))` |
-| GPU utilization | `gpu_utilization` |
-| GPU memory used | `gpu_memory_used_mib` |
+The dashboards live in OpenObserve's data dir (`$STUDY_DATA_ROOT/observability`, on the
+mounted volume) so they survive restarts. To recreate them elsewhere, POST each file to
+the API (UI *Import* also works):
 
-Other metrics emitted (add panels as needed): `gpu_memory_total_mib`,
-`gpu_temperature_c`, `gpu_power_w`. Latency histograms also expose `_sum` / `_count`
-(e.g. average = `rate(vc_inference_ms_sum[5m]) / rate(vc_inference_ms_count[5m])`).
+```bash
+O2=https://<host>:5001/logs; A=admin@example.com:ChangeMe123
+for f in infra/observability/dashboards/*.json; do
+  curl -sk -u "$A" -H 'Content-Type: application/json' \
+    -X POST "$O2/api/default/dashboards?folder=default" --data @"$f" -o /dev/null -w "$f -> %{http_code}\n"
+done
+```
 
-Tip: put a GPU panel next to the VC/PersonaPlex latency panels to see contention —
-latency rising as `gpu_utilization` / `gpu_memory_used_mib` climb (e.g. when the
-analysis batch runs on the shared GPU).
+## Notes
+
+- **Panels use SQL, not PromQL** — OpenObserve's PromQL engine 500s on these OTLP
+  metrics on this build (`v0.14.4`), and SQL is more flexible anyway.
+- **Metric histograms are cumulative** (`_sum`/`_count`/…), so latency is read from the
+  **traces** instead: `study_first_response_ms` (PersonaPlex) and
+  `study_vc_inference_avg_ms` (VC) are per-span attributes — cast to DOUBLE in SQL since
+  span attributes are stored as strings. Trace `duration` is in **microseconds**.
+- If you change metric/attribute names in the code, update the panel SQL here to match.
