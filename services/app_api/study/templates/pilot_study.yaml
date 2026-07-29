@@ -612,6 +612,9 @@ scenarios:
       study_role: analytical
       role: "You are correcting the accident statement in an insurance claim about a sports injury."
       current_situation: |
+        You injured your ankle during an organised match and submitted a claim for the cost of the
+        medical treatment you received.
+
         The claim says you lost control of the ball and fell without contact. That is wrong:
 
         - another player collided with your **left side** while you had the ball
