@@ -11,11 +11,14 @@ restarting :5002 when a scenario needs a different one.
 from __future__ import annotations
 
 import asyncio
+import copy
 import io
 import json
 import logging
 import os
 import shutil
+import threading
+import time
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -25,13 +28,27 @@ from fastapi import (APIRouter, Depends, File, Form, Header, HTTPException,
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .analysis import get_runner
+from .artifacts import (append_jsonl, atomic_write_bytes, atomic_write_json,
+                        canonical_json_bytes, file_record, git_revision,
+                        immutable_copy, sha256_bytes)
+from .counterbalance import (CounterbalanceError, allocate as allocate_variants,
+                             balance_report, choose_balanced_target,
+                             has_deferred_target_assignment,
+                             resolve_target_assignment,
+                             target_assignment_configuration,
+                             validate_and_compile)
 from .engine import get_manager
 from . import yaml_io
 from .models import (REQUIRED_CARD_FIELDS, CreateStudyRequest, EnterRequest,
                      GenerateRequest, ProgressRequest, QuestionnaireRequest,
                      RunStartRequest, Scenario, SessionStartRequest,
                      SubmitRequest, UpdateStudyRequest, default_questionnaires)
+from .playback import (ensure_stable_converted_interaction_playback,
+                       ensure_stable_converted_playback,
+                       ensure_transition_playback)
+from .questionnaires import missing_required_answers
 from .storage import get_backend
+from .vc_quality_analysis import get_vc_quality_runner
 
 try:
     from common import otel  # shared OpenTelemetry helper (services/ is on sys.path)
@@ -68,6 +85,7 @@ except OSError:
     pass
 
 ADMIN_TOKEN = os.environ.get("STUDY_ADMIN_TOKEN") or "changeme-study-admin"
+EVENT_TOKEN = os.environ.get("STUDY_EVENT_TOKEN") or "local-study-events"
 if ADMIN_TOKEN == "changeme-study-admin":
     logger.warning("STUDY_ADMIN_TOKEN is not set — using an insecure default. Set it in production.")
 
@@ -86,6 +104,14 @@ def _scenario_engine(scenario: dict) -> Optional[str]:
     return None
 
 
+def _validate_required_answers(items: list[dict], payload: dict) -> None:
+    missing = missing_required_answers(items, payload)
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Required questionnaire item {missing[0]!r} is missing")
+
+
 def _schedule_label(scenario: dict) -> str:
     segs = scenario.get("voice_schedule") or []
     if not segs:
@@ -98,38 +124,92 @@ def _schedule_label(scenario: dict) -> str:
     return f"{modes[0]}->{modes[1]}@{int(sw) if sw else '?'}" + (f":{eng}" if eng else "")
 
 
-def _test_scenario(backend, study_id: int) -> Optional[dict]:
-    """The study's practice/test scenario (is_test), if any. At most one."""
-    for sc in backend.list_scenarios(study_id):
-        if sc.get("is_test"):
-            return sc
-    return None
-
-
-def _participant_order(backend, participant: dict) -> list:
-    """The participant's assigned scenario IDs in order, EXCLUDING the practice scenario.
-    Real scenarios keep 1-based positions over this list, so the test scenario never
-    shifts them (and playback/session ids stay valid)."""
-    order = participant.get("scenario_order") or []
-    test = _test_scenario(backend, participant["study_id"])
-    tid = test.get("id") if test else None
-    return [sid for sid in order if sid != tid]
-
-
 def _resolve_scenario(backend, participant: dict, scenario_order: int) -> dict:
-    # scenario_order 0 => the practice/test scenario (always runs first).
-    if scenario_order == 0:
-        test = _test_scenario(backend, participant["study_id"])
-        if not test:
-            raise HTTPException(status_code=400, detail="no test scenario for this study")
-        return test
-    order = _participant_order(backend, participant)
+    order = participant.get("scenario_order") or []
     if scenario_order < 1 or scenario_order > len(order):
         raise HTTPException(status_code=400, detail="scenario_order out of range")
     scenario = backend.get_scenario(order[scenario_order - 1])
     if not scenario:
         raise HTTPException(status_code=400, detail="scenario not found")
+    scenario = copy.deepcopy(scenario)
+    override = (participant.get("assignment") or {}).get(str(scenario["id"]))
+    if override:
+        scenario["voice_schedule"] = copy.deepcopy(override.get("voice_schedule") or [])
+        scenario["assigned_condition"] = override.get("condition")
     return scenario
+
+
+def _session_dir(session: dict) -> Path:
+    return (SESSIONS_DIR / f"study_{session['study_id']}" / session["participant_id"] /
+            f"run_{int(session.get('run_attempt') or 1):02d}" /
+            f"scenario_{int(session['scenario_order']):02d}" /
+            f"attempt_{int(session.get('scenario_attempt') or 1):02d}_{session['session_id']}")
+
+
+def _target_for_schedule(targets: list[dict], schedule: list[dict]) -> Optional[dict]:
+    by_ref = {target["ref"]: target for target in targets}
+    for segment in schedule:
+        if segment.get("mode") == "vc" and segment.get("target_ref"):
+            return by_ref.get(segment["target_ref"])
+    return None
+
+
+def _initialize_session_artifacts(backend, session: dict, study_snapshot: dict,
+                                  schedule: list[dict], target: Optional[dict]) -> dict:
+    out_dir = _session_dir(session)
+    out_dir.mkdir(parents=True, exist_ok=False)
+    config_bytes = canonical_json_bytes(study_snapshot)
+    atomic_write_bytes(out_dir / "study_config.json", config_bytes, exclusive=True)
+    session_config = {
+        "study_id": session["study_id"],
+        "participant_id": session["participant_id"],
+        "variant_id": session.get("config_snapshot", {}).get("participant", {}).get("variant_id"),
+        "session_id": session["session_id"],
+        "run_id": session.get("run_id"),
+        "run_attempt": session.get("run_attempt"),
+        "scenario_id": session["scenario_id"],
+        "scenario_order": session["scenario_order"],
+        "scenario_attempt": session.get("scenario_attempt"),
+        "condition": session["voice_condition"],
+        "voice_schedule": schedule,
+        "sample_rates_hz": {"input": 16000, "transmitted": 16000, "model_bound": 24000},
+    }
+    atomic_write_json(out_dir / "session_config.json", session_config, exclusive=True)
+    (out_dir / "events.jsonl").touch(exist_ok=False)
+
+    artifacts = {
+        "study_config": file_record(out_dir / "study_config.json", relative_to=STUDY_DATA_DIR),
+        "session_config": file_record(out_dir / "session_config.json", relative_to=STUDY_DATA_DIR),
+        "events": {"path": str((out_dir / "events.jsonl").relative_to(STUDY_DATA_DIR))},
+    }
+    if target and Path(target["wav_path"]).exists():
+        target_record = immutable_copy(target["wav_path"], out_dir / "target.wav")
+        target_record["path"] = str((out_dir / "target.wav").relative_to(STUDY_DATA_DIR))
+        target_record["ref"] = target["ref"]
+        target_record["speaker_id"] = target.get("speaker_id")
+        target_record["engine"] = target.get("engine")
+        artifacts["target"] = target_record
+
+    manifest = {
+        "schema": "hmo.study-artifacts.v1",
+        "created_at_unix": time.time(),
+        "identifiers": {key: session.get(key) for key in (
+            "study_id", "participant_id", "session_id", "run_id", "run_attempt",
+            "scenario_id", "scenario_order", "scenario_attempt")},
+        "condition": session["voice_condition"],
+        "configuration_sha256": sha256_bytes(config_bytes),
+        "software": {
+            "hmo_commit": git_revision(REPO_ROOT),
+            "xvc_commit": os.environ.get("XVC_GIT_COMMIT"),
+            "vc_quality_commit": os.environ.get("VC_QUALITY_GIT_COMMIT") or git_revision(REPO_ROOT),
+            "personaplex_version": os.environ.get("PERSONAPLEX_VERSION"),
+        },
+        "artifacts": artifacts,
+        "analysis": {},
+    }
+    atomic_write_json(out_dir / "manifest.initial.json", manifest, exclusive=True)
+    backend.update_session_artifacts(session["session_id"], manifest)
+    return manifest
 
 
 def _scenario_card(scenario: dict, scenario_order: int) -> dict:
@@ -142,6 +222,7 @@ def _scenario_card(scenario: dict, scenario_order: int) -> dict:
         "extra_fields": [f for f in (card.get("extra_fields") or []) if f.get("label")],
         "post_items": scenario.get("post_items") or [],   # scenario-specific post questions
         "time_limit_s": scenario.get("time_limit_s", 300),
+        "study_role": card.get("study_role", "analytical"),
     }
     for key, _label in REQUIRED_CARD_FIELDS:
         out[key] = card.get(key, "")
@@ -187,6 +268,10 @@ def _list_engines() -> list[str]:
     engines = ["meanvc"]
     if (WORKSPACE / "X-VC").exists():
         engines.append("xvc")
+    preferred = os.environ.get("VC_ENGINE", "").strip().lower()
+    if preferred in engines:
+        engines.remove(preferred)
+        engines.insert(0, preferred)
     return engines
 
 
@@ -194,6 +279,7 @@ def build_study_router() -> APIRouter:
     router = APIRouter(prefix="/api/study")
     backend = get_backend()
     manager = get_manager()
+    allocation_lock = threading.Lock()
     TARGETS_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -299,6 +385,11 @@ def build_study_router() -> APIRouter:
     @router.post("/studies/{study_id}/targets", dependencies=[Depends(require_admin)])
     async def upload_target(study_id: int, wav: UploadFile = File(...), ref: str = Form(...),
                             speaker_id: str = Form(""), label: str = Form(""), engine: str = Form("meanvc")):
+        if backend.list_participants(study_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Target voices are frozen after participant codes are generated. Create a new study variant.",
+            )
         d = TARGETS_DIR / f"study{study_id}"
         d.mkdir(parents=True, exist_ok=True)
         dest = d / f"{ref}.wav"
@@ -309,16 +400,48 @@ def build_study_router() -> APIRouter:
 
     @router.delete("/studies/{study_id}/targets/{target_id}", dependencies=[Depends(require_admin)])
     async def delete_target(study_id: int, target_id: int):
+        if backend.list_participants(study_id):
+            raise HTTPException(status_code=409,
+                                detail="Target voices are frozen after participant codes are generated.")
         backend.delete_target(target_id)
         return {"ok": True}
 
     @router.post("/studies/{study_id}/participants/generate", dependencies=[Depends(require_admin)])
     async def gen_participants(study_id: int, body: GenerateRequest):
-        scenario_ids = [s["id"] for s in backend.list_scenarios(study_id)]
+        scenarios = backend.list_scenarios(study_id)
+        scenario_ids = [s["id"] for s in scenarios]
         if not scenario_ids:
             raise HTTPException(status_code=400, detail="Add at least one scenario first")
-        created = backend.generate_participants(study_id, max(1, body.count), scenario_ids)
+        study = backend.get_study(study_id)
+        participants = backend.list_participants(study_id)
+        count = max(1, body.count)
+        try:
+            settings = study.get("settings") or {}
+            targets = backend.list_targets(study_id)
+            if has_deferred_target_assignment(settings):
+                validate_and_compile(settings, scenarios, targets)
+                allocations = [{"allocation_status": "awaiting_profile"}
+                               for _ in range(count)]
+            else:
+                allocations = allocate_variants(
+                    settings, scenarios, targets, participants, count)
+        except CounterbalanceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        created = backend.generate_participants(study_id, count, scenario_ids,
+                                                allocations or None)
         return {"participants": created}
+
+    @router.get("/studies/{study_id}/counterbalance", dependencies=[Depends(require_admin)])
+    async def counterbalance_status(study_id: int):
+        study = backend.get_study(study_id)
+        if not study:
+            raise HTTPException(status_code=404, detail="Unknown study")
+        try:
+            return balance_report(study.get("settings") or {}, backend.list_scenarios(study_id),
+                                  backend.list_targets(study_id),
+                                  backend.list_participants(study_id))
+        except CounterbalanceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/studies/{study_id}/runs", dependencies=[Depends(require_admin)])
     async def list_runs(study_id: int):
@@ -335,11 +458,41 @@ def build_study_router() -> APIRouter:
         live study. force=true re-analyzes already-processed sessions."""
         if not backend.get_study(study_id):
             raise HTTPException(status_code=404, detail="Unknown study")
+        if get_vc_quality_runner().get_status().get("running"):
+            raise HTTPException(status_code=409,
+                                detail="VC-quality analysis is already running")
         return get_runner().start(backend, study_id, force)
 
     @router.get("/studies/{study_id}/analyze/status", dependencies=[Depends(require_admin)])
     async def analyze_status(study_id: int):
         return get_runner().get_status()
+
+    @router.post("/studies/{study_id}/vc-quality", dependencies=[Depends(require_admin)])
+    async def run_vc_quality(study_id: int, body: dict):
+        """Run the real vc_quality.py post-hoc for one session, one participant,
+        or every captured session in this study. Original artifacts are read-only."""
+        if not backend.get_study(study_id):
+            raise HTTPException(status_code=404, detail="Unknown study")
+        if get_runner().get_status().get("running"):
+            raise HTTPException(status_code=409,
+                                detail="The full analysis pipeline is already running")
+        participant_id = body.get("participant_id") or None
+        session_id = body.get("session_id") or None
+        if participant_id and session_id:
+            raise HTTPException(status_code=422,
+                                detail="Choose either participant_id or session_id, not both")
+        sessions = backend.list_sessions(study_id)
+        if participant_id and not any(s["participant_id"] == participant_id for s in sessions):
+            raise HTTPException(status_code=404, detail="Participant has no sessions in this study")
+        if session_id and not any(s["session_id"] == session_id for s in sessions):
+            raise HTTPException(status_code=404, detail="Session is not part of this study")
+        return get_vc_quality_runner().start(
+            study_id, participant_id=participant_id, session_id=session_id,
+            force=bool(body.get("force", False)))
+
+    @router.get("/studies/{study_id}/vc-quality/status", dependencies=[Depends(require_admin)])
+    async def vc_quality_status(study_id: int):
+        return get_vc_quality_runner().get_status()
 
     @router.get("/studies/{study_id}/export", dependencies=[Depends(require_admin)])
     async def export(study_id: int, format: str = "json"):
@@ -358,8 +511,10 @@ def build_study_router() -> APIRouter:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("study_export.json", json.dumps(data, indent=2))
-            if SESSIONS_DIR.exists():
-                for p in SESSIONS_DIR.rglob("*"):
+            z.writestr("study_config.yaml", yaml_io.dump_yaml(yaml_io.study_to_dict(backend, study_id)))
+            study_sessions_dir = SESSIONS_DIR / f"study_{study_id}"
+            if study_sessions_dir.exists():
+                for p in study_sessions_dir.rglob("*"):
                     if p.is_file():
                         z.write(p, str(p.relative_to(STUDY_DATA_DIR)))
         buf.seek(0)
@@ -459,31 +614,85 @@ def build_study_router() -> APIRouter:
     @router.post("/session/start")
     async def session_start(body: SessionStartRequest):
         p = _require_participant(body.code)
-        _guard_window(p["participant_id"])
+        study = backend.get_study(p["study_id"])
+        if (has_deferred_target_assignment((study or {}).get("settings") or {}) and
+                (p.get("allocation_status") != "assigned" or not p.get("target_ref"))):
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the background questionnaire before starting a scenario")
+        run = _guard_window(p["participant_id"])
+        if not backend.has_answer(p["participant_id"], run["id"], "background"):
+            raise HTTPException(
+                status_code=409,
+                detail="Complete consent, audio check, and background questions before a scenario")
         scenario = _resolve_scenario(backend, p, body.scenario_order)
-        engine = _scenario_engine(scenario)
+        engine = _scenario_engine(scenario) or (
+            ((study or {}).get("settings") or {}).get("study_engine"))
+        targets = backend.list_targets(p["study_id"])
+        targets_by_ref = {target["ref"]: target for target in targets}
+        vc_segments = [segment for segment in (scenario.get("voice_schedule") or [])
+                       if segment.get("mode") == "vc"]
+        segment_engines = {segment.get("engine") or engine for segment in vc_segments}
+        segment_engines.discard(None)
+        if len(segment_engines) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="A scenario cannot switch between different VC engines mid-conversation")
+        for segment in vc_segments:
+            ref = segment.get("target_ref")
+            target_for_segment = targets_by_ref.get(ref)
+            expected_engine = segment.get("engine") or engine
+            if not ref or not target_for_segment:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"VC target {ref or '(missing)'} is not configured for this study")
+            if expected_engine and target_for_segment.get("engine") != expected_engine:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"VC target {ref!r} uses {target_for_segment.get('engine')}, "
+                            f"but this scenario requires {expected_engine}"))
         # Prepare the engine this scenario needs (may restart :5002); the client
         # watches the prepare SSE and connects only when ready.
         manager.start_prepare_async(backend, p["study_id"], engine)
 
-        # scenario_order 0 => the practice/test session (runs first). Distinct id so it's
-        # easy to exclude from study counting/analysis; still recorded + saved.
-        is_test = body.scenario_order == 0
-        session_id = f"{p['participant_id']}_TEST" if is_test else f"{p['participant_id']}_S{body.scenario_order:02d}"
+        scenario_attempt = backend.next_session_attempt(p["participant_id"], run["id"],
+                                                        body.scenario_order)
+        session_id = (f"{p['participant_id']}_R{int(run['attempt']):02d}_"
+                      f"S{body.scenario_order:02d}_A{scenario_attempt:02d}")
         _trace_session(session_id=session_id, participant_id=p["participant_id"],
                        study_id=p["study_id"], scenario_order=body.scenario_order, engine=engine)
         # target speaker id from the first vc segment (for metadata)
         target_speaker = ""
-        for seg in scenario.get("voice_schedule") or []:
-            if seg.get("mode") == "vc" and seg.get("target_ref"):
-                for t in backend.list_targets(p["study_id"]):
-                    if t["ref"] == seg["target_ref"]:
-                        target_speaker = t["speaker_id"]
-                        break
-                break
-        backend.create_session(session_id, p["participant_id"], f"scenario_{scenario['id']}",
-                               body.scenario_order, _schedule_label(scenario), target_speaker)
+        target = _target_for_schedule(targets, scenario.get("voice_schedule") or [])
+        if target:
+            target_speaker = target.get("speaker_id") or ""
+        study_snapshot = yaml_io.study_to_dict(backend, p["study_id"])
+        config_snapshot = {
+            "study": study_snapshot,
+            "engine": engine,
+            "participant": {"participant_id": p["participant_id"],
+                            "variant_id": p.get("variant_id"),
+                            "target_ref": p.get("target_ref"),
+                            "scenario_order": p.get("scenario_order"),
+                            "assignment": p.get("assignment") or {}},
+            "scenario": scenario,
+        }
+        backend.create_session(
+            session_id, p["participant_id"], f"scenario_{scenario['id']}",
+            body.scenario_order, scenario.get("assigned_condition") or _schedule_label(scenario),
+            target_speaker, run["id"], run["attempt"], scenario_attempt,
+            scenario.get("voice_schedule") or [], config_snapshot,
+        )
+        session = backend.get_session(session_id)
+        try:
+            _initialize_session_artifacts(backend, session, study_snapshot,
+                                          scenario.get("voice_schedule") or [], target)
+        except (OSError, FileExistsError) as exc:
+            backend.end_session(session_id, "artifact_initialization_failed")
+            raise HTTPException(status_code=500,
+                                detail=f"Could not initialize immutable session artifacts: {exc}") from exc
         return {"session_id": session_id, "scenario": _scenario_card(scenario, body.scenario_order),
+                "run_attempt": run["attempt"], "scenario_attempt": scenario_attempt,
                 "prepare": manager.get_state()}
 
     @router.post("/audio-check/start")
@@ -491,8 +700,15 @@ def build_study_router() -> APIRouter:
         """Warm the default VC engine and hand back a throwaway '_CHECK' session so
         the participant can run a short PersonaPlex exchange through the proxy."""
         p = _require_participant(body.code)
-        _guard_window(p["participant_id"])
-        manager.start_prepare_async(backend, p["study_id"], None)
+        run = _guard_window(p["participant_id"])
+        if (not backend.has_answer(p["participant_id"], run["id"], "consent") or
+                not backend.has_answer(p["participant_id"], run["id"], "background")):
+            raise HTTPException(
+                status_code=403,
+                detail="Consent and background questions must be completed before audio testing")
+        study = backend.get_study(p["study_id"])
+        requested_engine = ((study or {}).get("settings") or {}).get("study_engine")
+        manager.start_prepare_async(backend, p["study_id"], requested_engine)
         return {"session_id": f"{p['participant_id']}_CHECK", "prepare": manager.get_state()}
 
     @router.get("/condition/{session_id}")
@@ -519,10 +735,12 @@ def build_study_router() -> APIRouter:
         p = participants.get(session["participant_id"])
         if not p or not study:
             raise HTTPException(status_code=404, detail="Unknown participant/study")
-        scenario = _resolve_scenario(backend, p, session["scenario_order"])
+        snapshot = session.get("config_snapshot") or {}
+        scenario = snapshot.get("scenario") or _resolve_scenario(backend, p, session["scenario_order"])
         targets = {t["ref"]: t for t in backend.list_targets(session["study_id"])}
 
-        schedule = scenario.get("voice_schedule") or [{"mode": "natural", "start_s": 0, "end_s": None}]
+        schedule = session.get("schedule") or scenario.get("voice_schedule") or [
+            {"mode": "natural", "start_s": 0, "end_s": None}]
         resolved = []
         for seg in schedule:
             r = {"mode": seg.get("mode", "natural"), "start_s": seg.get("start_s", 0),
@@ -549,7 +767,8 @@ def build_study_router() -> APIRouter:
                            participant_raw: UploadFile | None = File(None),
                            model: UploadFile | None = File(None),
                            merged: UploadFile | None = File(None),
-                           model_transcript: str = Form("null")):
+                           model_transcript: str = Form("null"),
+                           client_timeline: str = Form("null")):
         session = backend.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Unknown session")
@@ -557,25 +776,81 @@ def build_study_router() -> APIRouter:
                        study_id=session.get("study_id"),
                        scenario_order=session.get("scenario_order"),
                        voice_condition=session.get("voice_condition"))
-        out_dir = SESSIONS_DIR / session["participant_id"] / session_id
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = _session_dir(session)
+        if not out_dir.exists():
+            raise HTTPException(status_code=500, detail="Session artifact directory is missing")
+        try:
+            model_turns = (json.loads(model_transcript)
+                           if model_transcript and model_transcript != "null" else [])
+            timeline = (json.loads(client_timeline)
+                        if client_timeline and client_timeline != "null" else None)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Invalid session JSON artifact") from exc
+        if not isinstance(model_turns, list):
+            raise HTTPException(status_code=422, detail="Invalid model transcript")
+        if (timeline is not None and
+                (not isinstance(timeline, dict)
+                 or timeline.get("schema") != "hmo.client-timeline.v1")):
+            raise HTTPException(status_code=422, detail="Invalid client timeline")
+        manifest = copy.deepcopy(session.get("artifact_manifest") or {})
+        artifacts = manifest.setdefault("artifacts", {})
         files = {}
         for name, up in (("participant", participant), ("participant_raw", participant_raw),
                          ("model", model), ("merged", merged)):
             if up is not None:
                 dest = out_dir / f"{name}.wav"
-                with open(dest, "wb") as f:
-                    shutil.copyfileobj(up.file, f)
+                try:
+                    atomic_write_bytes(dest, await up.read(), exclusive=True)
+                except FileExistsError as exc:
+                    raise HTTPException(status_code=409,
+                                        detail=f"Immutable artifact already exists: {name}.wav") from exc
                 files[name] = str(dest.relative_to(STUDY_DATA_DIR))
+                artifacts[name] = file_record(dest, relative_to=STUDY_DATA_DIR)
 
-        model_turns = json.loads(model_transcript) if model_transcript and model_transcript != "null" else []
+        try:
+            atomic_write_json(out_dir / "model_transcript.json", model_turns, exclusive=True)
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409,
+                                detail="Immutable model transcript already exists") from exc
+        artifacts["model_transcript"] = file_record(out_dir / "model_transcript.json",
+                                                     relative_to=STUDY_DATA_DIR)
+        if timeline is not None:
+            try:
+                atomic_write_json(out_dir / "client_timeline.json", timeline, exclusive=True)
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409,
+                                    detail="Immutable client timeline already exists") from exc
+            artifacts["client_timeline"] = file_record(
+                out_dir / "client_timeline.json", relative_to=STUDY_DATA_DIR)
+        events_path = out_dir / "events.jsonl"
+        if events_path.exists():
+            artifacts["events"] = file_record(events_path, relative_to=STUDY_DATA_DIR)
         metadata = {
             "participant_id": session["participant_id"], "session_id": session_id,
+            "run_id": session.get("run_id"), "run_attempt": session.get("run_attempt"),
+            "scenario_attempt": session.get("scenario_attempt"),
             "scenario_id": session["scenario_id"], "scenario_order": session["scenario_order"],
             "voice_condition": session["voice_condition"], "target_speaker_id": session["target_speaker_id"],
             "files": files,
         }
-        (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+        atomic_write_json(out_dir / "metadata.json", metadata, exclusive=True)
+        artifacts["metadata"] = file_record(out_dir / "metadata.json", relative_to=STUDY_DATA_DIR)
+        expected = {"participant", "participant_raw", "model", "merged"}
+        # Proxy teardown can upload its artifacts while the browser is uploading
+        # these files. Re-read and merge so neither completion path loses records.
+        latest_manifest = copy.deepcopy(
+            (backend.get_session(session_id) or {}).get("artifact_manifest") or {})
+        latest_artifacts = latest_manifest.setdefault("artifacts", {})
+        latest_artifacts.update(artifacts)
+        manifest = latest_manifest
+        manifest["capture"] = {
+            "saved_at_unix": time.time(),
+            "complete": expected.issubset(files),
+            "missing": sorted(expected - set(files)),
+            "client_timeline_complete": timeline is not None,
+        }
+        atomic_write_json(out_dir / "manifest.capture.json", manifest, exclusive=True)
+        backend.update_session_artifacts(session_id, manifest)
         # Save audio + the model transcript only. Whisper/metrics inference is
         # deferred to the admin-triggered batch (it competes with live inference).
         backend.save_session(session_id, files, {"model": model_turns, "participant": None}, None, False)
@@ -587,6 +862,103 @@ def build_study_router() -> APIRouter:
                 f"[study] session {session_id} saved with NO audio files "
                 f"(model_turns={len(model_turns)}) — VC/PersonaPlex path likely failed")
         return {"ok": True, "files": files, "analysis": "deferred"}
+
+    @router.post("/internal/session/{session_id}/proxy-artifacts")
+    async def ingest_proxy_artifacts(
+            session_id: str,
+            proxy_received_wav: UploadFile | None = File(None),
+            participant_proxy_wav: UploadFile | None = File(None),
+            personaplex_input_opus: UploadFile | None = File(None),
+            personaplex_input_decoded_wav: UploadFile | None = File(None),
+            personaplex_output_opus: UploadFile | None = File(None),
+            metadata: str = Form("{}"),
+            x_study_event_token: str = Header(default="")):
+        if x_study_event_token != EVENT_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid event token")
+        session = backend.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Unknown session")
+        out_dir = _session_dir(session)
+        if (out_dir / "manifest.final.json").exists():
+            raise HTTPException(status_code=409, detail="Session artifacts are finalized")
+        try:
+            proxy_metadata = json.loads(metadata or "{}")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Invalid proxy artifact metadata") from exc
+        if not isinstance(proxy_metadata, dict):
+            raise HTTPException(status_code=422, detail="Invalid proxy artifact metadata")
+
+        uploads = {
+            "proxy_received.wav": proxy_received_wav,
+            "participant_proxy.wav": participant_proxy_wav,
+            "personaplex_input.opus": personaplex_input_opus,
+            "personaplex_input_decoded.wav": personaplex_input_decoded_wav,
+            "personaplex_output.opus": personaplex_output_opus,
+        }
+        records = {}
+        for filename, upload in uploads.items():
+            if upload is None:
+                continue
+            destination = out_dir / filename
+            try:
+                atomic_write_bytes(destination, await upload.read(), exclusive=True)
+            except FileExistsError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Immutable proxy artifact already exists: {filename}",
+                ) from exc
+            records[filename] = file_record(destination, relative_to=STUDY_DATA_DIR)
+        atomic_write_json(out_dir / "proxy_timeline.json", proxy_metadata, exclusive=True)
+        records["proxy_timeline"] = file_record(
+            out_dir / "proxy_timeline.json", relative_to=STUDY_DATA_DIR)
+
+        latest = backend.get_session(session_id) or session
+        manifest = copy.deepcopy(latest.get("artifact_manifest") or {})
+        manifest.setdefault("artifacts", {}).update(records)
+        manifest["proxy_capture"] = {
+            "saved_at_unix": time.time(),
+            "complete": bool(records.get("proxy_received.wav")
+                             and records.get("participant_proxy.wav")
+                             and records.get("personaplex_input.opus")),
+            "artifacts": sorted(records),
+        }
+        backend.update_session_artifacts(session_id, manifest)
+        return {"ok": True, "artifacts": sorted(records)}
+
+    @router.post("/internal/session/{session_id}/events")
+    async def ingest_events(session_id: str, body: dict,
+                            x_study_event_token: str = Header(default="")):
+        if x_study_event_token != EVENT_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid event token")
+        session = backend.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Unknown session")
+        if (_session_dir(session) / "manifest.final.json").exists():
+            raise HTTPException(status_code=409, detail="Session event timeline is finalized")
+        rows = body.get("events") or []
+        if not isinstance(rows, list) or len(rows) > 1000:
+            raise HTTPException(status_code=422, detail="events must be a list of at most 1000 rows")
+        events_path = _session_dir(session) / "events.jsonl"
+        last_sequence = 0
+        try:
+            for line in events_path.read_text().splitlines():
+                if line.strip():
+                    last_sequence = max(last_sequence,
+                                        int(json.loads(line).get("event_sequence") or 0))
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        clean = []
+        for row in sorted(rows, key=lambda item: item.get("event_sequence", 0)
+                          if isinstance(item, dict) else 0):
+            if not isinstance(row, dict) or not row.get("event"):
+                continue
+            if int(row.get("event_sequence") or 0) <= last_sequence:
+                continue
+            clean.append({**row, "session_id": session_id,
+                          "ingested_at_unix": time.time()})
+            last_sequence = int(row.get("event_sequence") or last_sequence)
+        append_jsonl(events_path, clean)
+        return {"ok": True, "accepted": len(clean)}
 
     @router.get("/ping")
     async def ping():
@@ -615,20 +987,123 @@ def build_study_router() -> APIRouter:
 
     @router.post("/session/{session_id}/end")
     async def session_end(session_id: str, body: dict):
-        if not backend.get_session(session_id):
+        session = backend.get_session(session_id)
+        if not session:
             raise HTTPException(status_code=404, detail="Unknown session")
-        backend.end_session(session_id, body.get("reason", "goal_reached"))
+        reason = body.get("reason", "goal_reached")
+        events_path = _session_dir(session) / "events.jsonl"
+        # WebSocket close and the proxy's final event/artifact POSTs are separate
+        # requests. An event file may not exist yet when short calls end because
+        # live delivery is buffered, so use the frozen engine choice as the guard.
+        snapshot = session.get("config_snapshot") or {}
+        expect_proxy = snapshot.get("engine") == "xvc"
+        if expect_proxy:
+            deadline = time.monotonic() + float(
+                os.environ.get("STUDY_PROXY_FINALIZE_TIMEOUT_S", "30"))
+            while time.monotonic() < deadline:
+                try:
+                    stopped = (events_path.exists() and any(
+                        json.loads(line).get("event") == "stream_stop"
+                        for line in events_path.read_text().splitlines() if line.strip()))
+                    latest = backend.get_session(session_id) or session
+                    proxy_capture = (latest.get("artifact_manifest") or {}).get(
+                        "proxy_capture") or {}
+                    if stopped and proxy_capture.get("complete"):
+                        break
+                except (OSError, json.JSONDecodeError):
+                    pass
+                await asyncio.sleep(0.1)
+        backend.end_session(session_id, reason)
+        latest_session = backend.get_session(session_id) or session
+        manifest = copy.deepcopy(latest_session.get("artifact_manifest") or {})
+        manifest["ended_at_unix"] = time.time()
+        manifest["end_reason"] = reason
+        if events_path.exists():
+            manifest.setdefault("artifacts", {})["events"] = file_record(
+                events_path, relative_to=STUDY_DATA_DIR)
+        final_path = _session_dir(session) / "manifest.final.json"
+        if not final_path.exists():
+            atomic_write_json(final_path, manifest, exclusive=True)
+        backend.update_session_artifacts(session_id, manifest)
         return {"ok": True}
 
     @router.post("/session/{session_id}/questionnaire")
     async def session_questionnaire(session_id: str, body: QuestionnaireRequest):
         p = _require_participant(body.code)
+        run = _guard_window(p["participant_id"])
+        session = None
+        if session_id != "none":
+            session = backend.get_session(session_id)
+            if not session or session["participant_id"] != p["participant_id"]:
+                raise HTTPException(status_code=404, detail="Unknown participant session")
+        study = backend.get_study(p["study_id"])
+        settings = (study or {}).get("settings") or {}
+        questionnaires = (study or {}).get("questionnaires") or {}
+        _validate_required_answers(questionnaires.get(body.kind) or [], body.payload)
+        if session and body.kind in ("post", "practice_post"):
+            snapshot_scenario = (session.get("config_snapshot") or {}).get("scenario") or {}
+            _validate_required_answers(snapshot_scenario.get("post_items") or [], body.payload)
+        prerequisite = {
+            "consent": "eligibility",
+            "background": "consent",
+            "audio_check": "background",
+            "pre_playback": "post",
+            "playback": "pre_playback",
+            "debrief": "playback",
+        }.get(body.kind)
+        if prerequisite and not backend.has_answer(
+                p["participant_id"], run["id"], prerequisite):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Complete {prerequisite.replace('_', ' ')} before {body.kind.replace('_', ' ')}")
+        target_config = target_assignment_configuration(settings)
+        assigned = None
+        if target_config and body.kind == str(
+                target_config.get("questionnaire_kind") or "background"):
+            try:
+                resolved = resolve_target_assignment(settings, body.kind, body.payload)
+                with allocation_lock:
+                    latest = backend.get_participant_by_code(body.code)
+                    if latest.get("allocation_status") == "awaiting_profile":
+                        participants = backend.list_participants(p["study_id"])
+                        target_ref = resolved.get("target_ref") or choose_balanced_target(
+                            resolved.get("target_candidates") or [], participants)
+                        allocation = allocate_variants(
+                            settings, backend.list_scenarios(p["study_id"]),
+                            backend.list_targets(p["study_id"]),
+                            participants, 1,
+                            target_ref=target_ref,
+                            allocation_stratum=resolved["allocation_stratum"],
+                        )[0]
+                        assigned = backend.assign_participant(
+                            p["participant_id"], allocation,
+                            resolved["allocation_stratum"])
+                    else:
+                        assigned = latest
+                        expected_target = resolved.get("target_ref")
+                        if expected_target and assigned.get("target_ref") != expected_target:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="The voice target for this participant is already fixed")
+            except CounterbalanceError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if body.kind == "eligibility" and body.payload.get("eligibility_18") != "Yes":
+            raise HTTPException(status_code=403, detail="This study is limited to adults aged 18 or older")
+        if (body.kind == "consent" and
+                body.payload.get("consent_decision") != "I consent and wish to continue."):
+            raise HTTPException(status_code=403, detail="Consent is required to continue")
         backend.save_answer(p["participant_id"], session_id if session_id != "none" else None,
                             body.kind, body.payload)
-        return {"ok": True}
+        return {"ok": True, "allocation": ({
+            "status": assigned.get("allocation_status"),
+            "stratum": assigned.get("allocation_stratum"),
+            "variant_id": assigned.get("variant_id"),
+            "target_ref": assigned.get("target_ref"),
+        } if assigned else None)}
 
     @router.get("/playback/{code}")
-    async def playback(code: str, scenario: int = 0, track: str = "merged"):
+    async def playback(code: str, scenario: int = 0, track: str = "merged",
+                       condition: str = "", max_duration_s: int = 0):
         """Streams a recording for the post-session playback item. `scenario`
         (1-based order) + `track` (merged|participant) select it explicitly; unset
         falls back to the participant's VC->natural scenario's merged recording.
@@ -640,12 +1115,41 @@ def build_study_router() -> APIRouter:
         order = _participant_order(backend, p)   # positions match session ids (practice excluded)
 
         def serve(order_idx: int):
-            session = backend.get_session(f"{p['participant_id']}_S{order_idx:02d}")
+            run = backend.get_latest_run(p["participant_id"])
+            session = backend.get_latest_session(p["participant_id"], order_idx,
+                                                 run.get("id") if run else None)
             files = (session or {}).get("files") or {}
             rel = files.get(track_key) or files.get("merged")
             if rel:
                 path = STUDY_DATA_DIR / rel
                 if path.exists():
+                    if (track_key == "participant" and condition == "vc_deactivation"
+                            and max_duration_s):
+                        try:
+                            path, _manifest = ensure_transition_playback(
+                                session, STUDY_DATA_DIR, max_duration_s)
+                        except (FileNotFoundError, ValueError, OSError) as exc:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=f"Could not prepare the playback excerpt: {exc}") from exc
+                    elif (track_key == "participant" and condition == "stable_converted"
+                          and max_duration_s):
+                        try:
+                            path, _manifest = ensure_stable_converted_playback(
+                                session, STUDY_DATA_DIR, max_duration_s)
+                        except (FileNotFoundError, ValueError, OSError) as exc:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=f"Could not prepare the playback excerpt: {exc}") from exc
+                    elif (track_key == "merged" and condition == "stable_converted"
+                          and max_duration_s):
+                        try:
+                            path, _manifest = ensure_stable_converted_interaction_playback(
+                                session, STUDY_DATA_DIR, max_duration_s)
+                        except (FileNotFoundError, ValueError, OSError) as exc:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=f"Could not prepare the playback excerpt: {exc}") from exc
                     return FileResponse(str(path), media_type="audio/wav")
             return None
 
@@ -653,6 +1157,13 @@ def build_study_router() -> APIRouter:
             r = serve(scenario)
             if r:
                 return r
+        elif condition:
+            assignment = p.get("assignment") or {}
+            for i, sid in enumerate(order):
+                if (assignment.get(str(sid)) or {}).get("condition") == condition:
+                    r = serve(i + 1)
+                    if r:
+                        return r
         else:
             for i, sid in enumerate(order):
                 sc = backend.get_scenario(sid)

@@ -1,4 +1,4 @@
-"""Per-session analysis (Whisper transcription + VC-quality metrics).
+"""Per-session whole-recording preprocessing (transcription + diagnostics).
 
 This is model inference and competes with the live PersonaPlex/VC on the same
 box, so it is NOT run during the study. The researcher triggers it as a batch
@@ -16,6 +16,9 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+
+from .artifacts import atomic_write_json
+from .transition_analysis import read_events, route_regions
 
 logger = logging.getLogger(__name__)
 
@@ -47,26 +50,71 @@ def run_session_analysis(session_id: str, converted_wav: str | None,
             from metrics import analyze_voices
 
             metrics = analyze_voices(clip_a, clip_b)
-            resp_b = metrics.get("response_b") or {}
-            transcript["participant"] = resp_b.get("transcript")
-            # ms-timestamped diarization segments (0-based = conversation start), so the
-            # participant timeline aligns with the model turns (already relative-ms).
-            transcript["participant_segments"] = resp_b.get("segments") or []
+            metrics["_provenance"] = {
+                "scope": "whole_session",
+                "route_warning": "Natural and VC intervals are mixed for switching sessions.",
+                "vc_quality": False,
+            }
+            raw_result = metrics.get("response_a") or {}
+            transmitted_result = metrics.get("response_b") or {}
+            transcript["participant"] = raw_result.get("transcript")
+            transcript["participant_transmitted"] = transmitted_result.get("transcript")
+            transcript["participant_segments"] = _participant_segments(
+                raw_result.get("transcript_segments") or [], raw_wav)
+            transcript["participant_transmitted_segments"] = (
+                transmitted_result.get("transcript_segments") or [])
             audiobox = bool(metrics.get("audiobox_available"))
     except Exception as e:  # noqa: BLE001 - analysis is best-effort; audio is already saved
         logger.warning(f"[study] analysis failed for {session_id}: {e}")
 
     try:
         backend.update_session_analysis(session_id, transcript, metrics, audiobox)
-        # Mirror JSON next to the WAVs so the ZIP export is self-contained.
+        # Derived outputs are versioned; reruns never replace an earlier result.
         base = converted_wav or raw_wav
         if base:
-            out_dir = Path(base).parent
-            (out_dir / "transcript.json").write_text(json.dumps(transcript, indent=2))
-            (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+            analysis_id = f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}.{time.time_ns() % 1_000_000_000:09d}Z"
+            out_dir = Path(base).parent / "analysis" / "preprocessing" / analysis_id
+            out_dir.mkdir(parents=True, exist_ok=False)
+            atomic_write_json(out_dir / "transcript.json", transcript, exclusive=True)
+            atomic_write_json(out_dir / "metrics.json", metrics, exclusive=True)
         logger.info(f"[study] analysis complete for {session_id} (audiobox={audiobox})")
     except Exception as e:  # noqa: BLE001
         logger.error(f"[study] could not persist analysis for {session_id}: {e}")
+
+
+def _participant_segments(segments: list[dict], raw_wav: str | None) -> list[dict]:
+    if not raw_wav:
+        return []
+    session_dir = Path(raw_wav).parent
+    offset_s = 0.0
+    try:
+        timeline = json.loads((session_dir / "client_timeline.json").read_text())
+        chunks = ((timeline.get("capture") or {}).get("chunks") or [])
+        offset_s = next((float(row["timeline_start_ms"]) / 1000 for row in chunks
+                         if row.get("timeline_start_ms") is not None), 0.0)
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        regions = route_regions(read_events(session_dir / "events.jsonl"))
+    except OSError:
+        regions = []
+    output = []
+    for segment in segments:
+        start = float(segment.get("start", 0))
+        end = float(segment.get("end", start))
+        midpoint_sample = round((start + end) * 0.5 * 16000)
+        route = next((region.get("mode") for region in regions
+                      if region.get("input_start_sample", 0) <= midpoint_sample
+                      < region.get("input_end_sample", 0)), None)
+        output.append({
+            "text": segment.get("text", ""),
+            "start": round(start + offset_s, 3),
+            "end": round(end + offset_s, 3),
+            "speaker": "participant",
+            "voice_mode": route,
+            "timeline": "browser_audio_clock",
+        })
+    return output
 
 
 def _session_paths(session: dict):
@@ -85,7 +133,7 @@ def status_path() -> Path:
 
 
 _IDLE = {"running": False, "done": 0, "total": 0, "current": None, "study_id": None}
-_STATUS_KEYS = ("running", "done", "total", "current", "study_id")
+_STATUS_KEYS = ("running", "phase", "done", "total", "current", "study_id", "error")
 
 
 def _pid_alive(pid) -> bool:
@@ -142,14 +190,17 @@ class AnalysisRunner:
         try:
             p = status_path()
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps({"running": True, "done": 0, "total": 0, "current": None,
-                                     "study_id": study_id, "pid": None, "heartbeat": time.time()}))
+            p.write_text(json.dumps({"running": True, "phase": "preprocessing",
+                                     "done": 0, "total": 0, "current": None,
+                                     "study_id": study_id, "pid": None,
+                                     "heartbeat": time.time()}))
         except OSError as e:  # noqa: BLE001
             logger.warning(f"[study] could not seed analysis status: {e}")
 
         self._proc = subprocess.Popen(args, cwd=app_api_dir)
         logger.info(f"[study] launched analysis worker pid={self._proc.pid} study={study_id} force={force}")
-        return {"running": True, "done": 0, "total": 0, "current": None, "study_id": study_id}
+        return {"running": True, "phase": "preprocessing", "done": 0,
+                "total": 0, "current": None, "study_id": study_id, "error": None}
 
 
 _runner: Optional[AnalysisRunner] = None

@@ -3,15 +3,28 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@shared/ui/tabs"
 import { ConversationView } from "@/components/ConversationView"
 import { VoiceConversion } from "@/components/VoiceConversion"
 import { MetricsComparison } from "@/components/MetricsComparison"
+import { ConfigureSoundboard } from "@/components/ConfigureSoundboard"
 import { useRecorder } from "@shared/hooks/useRecorder"
 import { useWebSocket } from "@shared/hooks/useWebSocket"
 import { ThemeToggle } from "@/components/ThemeToggle"
-import { Mic, GitCompare, Wand2 } from "lucide-react"
+import { Mic, GitCompare, Wand2, ListMusic } from "lucide-react"
 
 function App() {
   const ws = useWebSocket()
-  const recorder = useRecorder((data) => ws.sendAudio(data))
+  // Live-mic bytes are gated by ws.isMicMuted() so the soundboard can suppress
+  // them mid-clip. Without this the mic stream and the soundboard-clip stream
+  // are both sent as Opus over the same 0x01 channel, doubling PP's input rate
+  // and confusing its turn-taking logic (short "okay" barge-ins).
+  const recorder = useRecorder((data) => {
+    if (ws.isMicMuted()) return
+    ws.sendAudio(data)
+  })
   const [activeTab, setActiveTab] = useState("conversation")
+  // Lifted here (not inside ConversationView) so it survives tab switches.
+  // Radix Tabs unmounts inactive TabsContent by default, so any state inside
+  // ConversationView is destroyed when you leave the Chat tab and re-created
+  // fresh when you come back. State that must persist across tabs lives here.
+  const [soundboardEnabled, setSoundboardEnabled] = useState(false)
 
 
   return (
@@ -50,10 +63,21 @@ function App() {
           >
             <GitCompare />Metrics
           </TabsTrigger>
+          <TabsTrigger
+            value="soundboard"
+            className={`flex-1 gap-1.5 rounded-md ${activeTab === "soundboard" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground"}`}
+          >
+            <ListMusic />Soundboard
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="conversation" className="flex-1 min-h-0">
-          <ConversationView ws={ws} recorder={recorder} />
+          <ConversationView
+            ws={ws}
+            recorder={recorder}
+            soundboardEnabled={soundboardEnabled}
+            onSoundboardEnabledChange={setSoundboardEnabled}
+          />
         </TabsContent>
         <TabsContent value="voice-conversion" className="flex-1 min-h-0 overflow-y-auto">
           <div className="mx-auto max-w-lg pb-6">
@@ -63,6 +87,11 @@ function App() {
         <TabsContent value="metrics" className="flex-1 min-h-0 overflow-y-auto">
           <div className="mx-auto max-w-lg pb-6">
             <MetricsComparison />
+          </div>
+        </TabsContent>
+        <TabsContent value="soundboard" className="flex-1 min-h-0 overflow-y-auto">
+          <div className="mx-auto max-w-4xl pb-6">
+            <ConfigureSoundboard />
           </div>
         </TabsContent>
       </Tabs>

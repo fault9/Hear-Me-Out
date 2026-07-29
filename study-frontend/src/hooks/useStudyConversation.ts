@@ -11,6 +11,7 @@ export interface SessionArtifacts {
   model: Blob | null             // PersonaPlex audio
   merged: Blob | null
   model_transcript: unknown      // PersonaPlex turns (cheap; server adds the rest)
+  client_timeline: unknown       // browser capture/playback crosswalk
 }
 
 export type CallStatus = "idle" | "connecting" | "active" | "processing" | "error"
@@ -19,7 +20,7 @@ export type CallStatus = "idle" | "connecting" | "active" | "processing" | "erro
 // an opaque session_id; the VC engine resolves the hidden prompt/target/steps.
 export function useStudyConversation() {
   const ws = useWebSocket()
-  const vc = useMeanVCPipeline((d) => ws.sendRawAudio(d), 8)
+  const vc = useMeanVCPipeline((d) => ws.sendRawAudio(d), 8, { studyTimeline: true })
   const [status, setStatus] = useState<CallStatus>("idle")
   const streamingRef = useRef(false)
   const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -38,7 +39,7 @@ export function useStudyConversation() {
     if (ws.handshakeReceived && streamingRef.current) {
       clearConnectTimer()
       if (connectMsRef.current === null) connectMsRef.current = performance.now() - t0Ref.current
-      vc.beginSending()
+      vc.beginSending(ws.getConversationStartPerformanceMs())
       setStatus("active")
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,13 +89,21 @@ export function useStudyConversation() {
   const stopAndAssemble = useCallback(async (): Promise<SessionArtifacts> => {
     streamingRef.current = false
     clearConnectTimer()
+    ws.sendControl({ type: "capture_summary", ...vc.getCaptureStats() })
     setStatus("processing")
     vc.stopVCStream()
+    const clientCapture = vc.getClientCaptureTimeline()
+    const clientPlayback = await ws.getClientPlaybackTimeline()
     ws.disconnect()
 
     const vcWav = ws.getVcUserWav()
     const rawWav = vc.getOriginalUserWav()
     const modelWav = await ws.getPersonaplexWav()
+    const clientTimeline = {
+      schema: "hmo.client-timeline.v1",
+      capture: clientCapture,
+      playback: clientPlayback,
+    }
 
     // Merge is cheap local audio processing; transcription + VC metrics are done
     // on the server in the background so the participant doesn't wait.
@@ -117,6 +126,7 @@ export function useStudyConversation() {
     return {
       participant: vcWav, participant_raw: rawWav, model: modelWav, merged,
       model_transcript: ws.transcripts,
+      client_timeline: clientTimeline,
     }
   }, [ws, vc])
 

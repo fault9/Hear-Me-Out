@@ -24,7 +24,6 @@ dependencies = [
     "hf-transfer>=0.1.8",
     # metrics.py (Metrics tab + voice-change modal)
     "pyphen",
-    "audiobox-aesthetics",
     "librosa==0.10.2",
     # Pinned to torch-2.4-compatible transformers: newer releases import DTensor
     # from torch.distributed.tensor (needs torch>=2.5), crashing the metrics path.
@@ -47,6 +46,16 @@ dependencies = [
     "accelerate",
     "gdown",
     "pydub==0.25.1",
+    # Soundboard offline pitch/formant shift. Decouples F0 from spectral
+    # envelope so we can shift each independently while preserving duration.
+    "pyworld>=0.3.4",
+    # Soundboard loudness normalization (EBU R128 / LUFS) so conditions match
+    # in playback level. Pure numpy/scipy under the hood (both already pinned).
+    "pyloudnorm>=0.1.1",
+    # pyworld's __init__.py imports pkg_resources (from setuptools). Newer
+    # uv-managed venvs don't ship setuptools by default, so pyworld errors on
+    # import without this. Pinned as a direct dep so future syncs pick it up.
+    "setuptools>=68",
     # Distributed tracing (OpenTelemetry) — optional; code is a no-op unless OTEL_* is set.
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp-proto-http",
@@ -54,6 +63,9 @@ dependencies = [
     "opentelemetry-instrumentation-requests",
     "nvidia-ml-py",  # NVML GPU metrics (utilization/memory/temp/power) via OTel gauges
 ]
+
+[project.optional-dependencies]
+aesthetics = ["audiobox-aesthetics"]
 
 # PyTorch CUDA 12.1 wheels (shared with meanvc/personaplex via uv's global cache).
 [[tool.uv.index]]

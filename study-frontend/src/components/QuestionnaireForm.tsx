@@ -4,7 +4,7 @@ import { cn } from "@shared/lib/utils"
 
 export interface QItem {
   id: string
-  type: "text" | "textarea" | "number" | "radio" | "select" | "checkbox" | "switch" | "scale" | "audio_playback"
+  type: "text" | "textarea" | "number" | "radio" | "select" | "checkbox" | "switch" | "scale" | "audio_playback" | "notice"
   label: string
   required?: boolean
   options?: string[]
@@ -20,8 +20,9 @@ export interface QItem {
   placeholder?: string
   scenario_order?: number   // audio_playback: which scenario's recording
   track?: string            // audio_playback: merged | participant
-  max_seconds?: number      // audio_playback: only the first N seconds are playable
-  max_plays?: number        // audio_playback: allow at most M plays
+  condition?: string        // audio_playback: assigned condition id
+  max_duration_s?: number   // audio_playback: requested derived-clip duration
+  insert_after?: string     // scenario item: place after this shared item id
 }
 
 type Answers = Record<string, any>
@@ -48,7 +49,7 @@ function isAnswered(item: QItem, answers: Answers): boolean {
 }
 
 function fieldError(item: QItem, answers: Answers): string | null {
-  if (item.type === "audio_playback" || !visible(item, answers)) return null
+  if (item.type === "audio_playback" || item.type === "notice" || !visible(item, answers)) return null
   const v = answers[item.id]
   if (item.required && !isAnswered(item, answers)) return "This question is required."
   // "Other" selected but no text
@@ -84,7 +85,7 @@ export function QuestionnaireForm({
     // Flatten: replace the "other" sentinel with the typed text.
     const out: Answers = {}
     for (const item of items) {
-      if (item.type === "audio_playback" || !visible(item, answers)) continue
+      if (item.type === "audio_playback" || item.type === "notice" || !visible(item, answers)) continue
       const v = answers[item.id]
       const otherText = answers[item.id + "__other"] || ""
       if (item.type === "checkbox" && Array.isArray(v)) out[item.id] = v.map(x => x === OTHER ? otherText : x)
@@ -101,8 +102,8 @@ export function QuestionnaireForm({
         {items.filter(it => visible(it, answers)).map(item => {
           const err = showErrors ? fieldError(item, answers) : null
           return (
-            <div key={item.id} className={cn("rounded-lg border p-4", err && "border-destructive")}>
-              {item.type !== "audio_playback" && (
+            <div key={item.id} className={cn(item.type === "notice" ? "py-1" : "rounded-lg border p-4", err && "border-destructive")}>
+              {item.type !== "audio_playback" && item.type !== "notice" && (
                 <label className="mb-3 block text-sm font-medium">
                   {item.label}{item.required && <span className="text-destructive"> *</span>}
                 </label>
@@ -135,6 +136,10 @@ function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
   scenarioOptions?: string[]; playbackUrl?: (item: QItem) => string
 }) {
   const value = answers[item.id]
+
+  if (item.type === "notice") {
+    return <div className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{item.label}</div>
+  }
 
   if (item.type === "audio_playback") {
     const src = playbackUrl?.(item)

@@ -3,9 +3,27 @@ import { createWavFile } from "@shared/lib/audio"
 // Both apps are served same-origin by app-api, so API calls are relative.
 const API_BASE = ""
 
+export interface TranscriptionWord {
+  start: number
+  end: number
+  word: string
+}
+
+export interface TranscriptionSegment {
+  start: number
+  end: number
+  text: string
+  words?: TranscriptionWord[]
+}
+
+export interface TranscriptionResult {
+  text: string
+  segments: TranscriptionSegment[]
+}
+
 export async function transcribeRecording(
   chunks: Blob[]
-): Promise<{ text: string; segments: { start: number; end: number; text: string }[] }> {
+): Promise<TranscriptionResult> {
   const blob = new Blob(chunks, { type: "audio/webm" })
   const arrayBuffer = await blob.arrayBuffer()
   const ctx = new AudioContext()
@@ -25,7 +43,7 @@ export async function transcribeRecording(
 // Safer for long clips than transcribeRecording, which rebuilds the audio.
 export async function transcribeWavBlob(
   wav: Blob
-): Promise<{ text: string; segments: { start: number; end: number; text: string }[] }> {
+): Promise<TranscriptionResult> {
   const formData = new FormData()
   formData.append("audio", wav, "audio.wav")
   const resp = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: formData })
@@ -83,5 +101,143 @@ export async function compareMetricsData(source: Blob, target: Blob): Promise<Me
   fd.append("target_audio", target, "target.wav")
   const resp = await fetch(`${API_BASE}/api/metrics-comparison?output=json`, { method: "POST", body: fd })
   if (!resp.ok) throw new Error(await resp.text())
+  return resp.json()
+}
+
+// X-VC objective quality profile: WER, WavLM SIM, and UTMOS. Optional
+// segmentation is for diagnostics; study runs score whole stable VC regions.
+export interface VcQualitySegment {
+  start: number
+  end: number
+  sim?: number | null
+  wer?: number | null
+  utmos?: number | null
+  vc?: string
+  ref?: string
+}
+
+export interface VcQualityAnomaly {
+  start: number
+  end: number
+  metric: string
+  score: number
+  z: number
+}
+
+export interface VcQualityResult {
+  converted_path: string
+  target_path: string
+  source_path: string | null
+  wer: number | null
+  sim: number | null
+  utmos: number | null
+  vc_transcript?: string
+  ref_transcript?: string | null
+  ref_kind?: string | null
+  wer_reference_note?: string | null
+  segment_mode?: string
+  segments?: VcQualitySegment[]
+  anomalies?: VcQualityAnomaly[]
+}
+
+// Names match the backend's _SKIPPABLE_METRICS keys.
+export type VcQualityMetric = "intelligibility" | "speaker_similarity" | "utmos"
+
+// Offline pitch/formant shift for soundboard bakes. Preserves duration.
+// `targetSr` MUST equal PP's expected SR (PP_SAMPLE_RATE); the server refuses
+// to bake at any other rate. Returns the WAV blob + the bake's measured input
+// vs output duration (from response headers) so the caller can flag drift.
+export interface PitchFormantBake {
+  wav: Blob
+  inMs: number
+  outMs: number
+  driftMs: number
+  sampleRate: number
+}
+
+export async function pitchFormantBake(
+  source: Blob,
+  semitones: number,
+  formantShift: number,
+  targetSr: number,
+): Promise<PitchFormantBake> {
+  const fd = new FormData()
+  fd.append("source_audio", source, "source.wav")
+  fd.append("semitones", String(semitones))
+  fd.append("formant_shift", String(formantShift))
+  fd.append("target_sr", String(targetSr))
+  const resp = await fetch(`${API_BASE}/api/pitch-formant`, { method: "POST", body: fd })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  const inMs = Number(resp.headers.get("X-Input-Duration-Ms") || "0")
+  const outMs = Number(resp.headers.get("X-Output-Duration-Ms") || "0")
+  const sampleRate = Number(resp.headers.get("X-Sample-Rate") || "0")
+  return {
+    wav: await resp.blob(),
+    inMs,
+    outMs,
+    driftMs: +(outMs - inMs).toFixed(2),
+    sampleRate,
+  }
+}
+
+// EBU R128 / LUFS loudness normalization for soundboard bakes (P3). Preserves
+// SR + duration; `targetSr` must equal PP's expected rate (the server refuses
+// to resample). Returns the normalized WAV + measured in/out loudness so the
+// caller can audit the level match.
+export interface LoudnessNormalizeResult {
+  wav: Blob
+  sampleRate: number
+  inLufs: number | null    // null when the clip was too short/silent to meter
+  outLufs: number | null
+  peak: number
+  durationMs: number
+}
+
+export async function loudnessNormalize(
+  source: Blob,
+  targetLufs: number,
+  targetSr: number,
+): Promise<LoudnessNormalizeResult> {
+  const fd = new FormData()
+  fd.append("audio", source, "audio.wav")
+  fd.append("target_lufs", String(targetLufs))
+  fd.append("target_sr", String(targetSr))
+  const resp = await fetch(`${API_BASE}/api/loudness-normalize`, { method: "POST", body: fd })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  const parseNum = (h: string | null): number | null => {
+    if (h == null || h === "nan") return null
+    const n = Number(h)
+    return Number.isFinite(n) ? n : null
+  }
+  const sampleRate = Number(resp.headers.get("X-Sample-Rate") || "0")
+  const inLufs = parseNum(resp.headers.get("X-Input-Lufs"))
+  const outLufs = parseNum(resp.headers.get("X-Output-Lufs"))
+  const peak = Number(resp.headers.get("X-Peak") || "0")
+  const durationMs = Number(resp.headers.get("X-Duration-Ms") || "0")
+  return { wav: await resp.blob(), sampleRate, inLufs, outLufs, peak, durationMs }
+}
+
+export async function vcQuality(
+  source: Blob, target: Blob, converted: Blob,
+  opts?: {
+    sourceTranscript?: string
+    segmentMode?: "fixed" | "word" | "vad"
+    // Fixed-window resolution for explicit diagnostic runs.
+    segmentWin?: number
+    segmentHop?: number
+    skipMetrics?: VcQualityMetric[]
+  },
+): Promise<VcQualityResult> {
+  const fd = new FormData()
+  fd.append("source_audio", source, "source.wav")
+  fd.append("target_audio", target, "target.wav")
+  fd.append("converted_audio", converted, "converted.wav")
+  if (opts?.sourceTranscript) fd.append("source_transcript", opts.sourceTranscript)
+  if (opts?.segmentMode) fd.append("segment_mode", opts.segmentMode)
+  if (opts?.segmentWin != null) fd.append("segment_win", String(opts.segmentWin))
+  if (opts?.segmentHop != null) fd.append("segment_hop", String(opts.segmentHop))
+  if (opts?.skipMetrics?.length) fd.append("skip_metrics", opts.skipMetrics.join(","))
+  const resp = await fetch(`${API_BASE}/api/vc-quality`, { method: "POST", body: fd })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
   return resp.json()
 }

@@ -1,13 +1,41 @@
 export const API_BASE = "";
 
+const env = import.meta.env as Record<string, string | undefined>;
+
+export type VoiceAnalysisMode = "off" | "manual" | "after_vc";
+
+export function normalizeVoiceAnalysisMode(
+  value: string | null | undefined,
+  fallback: VoiceAnalysisMode = "manual",
+): VoiceAnalysisMode {
+  if (value === "off" || value === "manual" || value === "after_vc") return value;
+  if (value === "auto") return "after_vc";
+  return fallback;
+}
+
+export function getVoiceAnalysisMode(): VoiceAnalysisMode {
+  const queryValue =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("voice_analysis")
+      : null;
+  return normalizeVoiceAnalysisMode(queryValue ?? env.VITE_VOICE_ANALYSIS_MODE);
+}
+
 export function getMeanvcWsUrl(targetId: string, sourceSr: number, steps: number = 8): string {
-  const host = (import.meta as any).env?.VITE_MEANVC_HOST || "130.237.3.103";
+  const host = env.VITE_MEANVC_HOST || "130.237.3.103";
   return `wss://${host}:5002/api/meanvc/stream?target_id=${targetId}&steps=${steps}&source_sr=${sourceSr}`;
 }
 
 export function getMeanvcLoadTargetUrl(): string {
-  const host = (import.meta as any).env?.VITE_MEANVC_HOST || "130.237.3.103";
+  const host = env.VITE_MEANVC_HOST || "130.237.3.103";
   return `https://${host}:5002/api/meanvc/load-target`;
+}
+
+// Both MeanVC and X-VC mount the same routes on :5002, so the only way to know
+// which engine is actually running is to ask. Returned shape: { engine: 'meanvc' | 'xvc' }.
+export function getMeanvcInfoUrl(): string {
+  const host = env.VITE_MEANVC_HOST || "130.237.3.103";
+  return `https://${host}:5002/api/meanvc/info`;
 }
 
 // Server-side VC bridge: the browser talks to MeanVC, which converts the mic
@@ -21,7 +49,7 @@ export function getChatProxyWsUrl(
   textPrompt: string,
   voicePrompt: string = "NATF2.pt",
 ): string {
-  const host = (import.meta as any).env?.VITE_MEANVC_HOST || "130.237.3.103";
+  const host = env.VITE_MEANVC_HOST || "130.237.3.103";
   const params = new URLSearchParams({
     target_id: targetId,
     steps: String(steps),
@@ -38,7 +66,7 @@ export function getPersonaplexWsURL(textPrompt?: string): string {
   // Allow override via URL query param (?personaplex_ws=ws://...)
   const override = new URLSearchParams(window.location.search).get("personaplex_ws");
   if (override) return override;
-  const wsHost = (import.meta as any).env?.VITE_PERSONAPLEX_HOST || window.location.hostname;
+  const wsHost = env.VITE_PERSONAPLEX_HOST || window.location.hostname;
   const voicePrompt = "NATF2.pt";
   const tp = textPrompt || DEFAULT_PROMPT;
   return `wss://${wsHost}:8000/api/chat?voice_prompt=${encodeURIComponent(voicePrompt)}&text_prompt=${encodeURIComponent(tp)}`;

@@ -21,6 +21,7 @@ Env:
   XVC_DEVICE           CUDA device index (default 0)
   XVC_EMA_LOAD         load EMA weights (default 1)
   XVC_CHUNK_MS/CURRENT_MS/SMOOTH_MS/FUTURE_MS  streaming window (default 2400/120/20/100)
+  XVC_SILENCE_GATE_RMS / XVC_SILENCE_HANGOVER_MS  quiet-window GPU bypass (0.008 / 360)
   MEANVC_PORT          listen port (default 5002)
   SSL_DIR              dir with cert.pem/key.pem
   PERSONAPLEX_PROXY_HOST / PERSONAPLEX_PROXY_PORT   default 127.0.0.1 / 8000
@@ -28,8 +29,11 @@ Env:
 """
 import asyncio
 import contextlib
+import io
+import json
 import logging
 import os
+import struct
 import sys
 import time
 import uuid
@@ -59,10 +63,13 @@ if _SERVICES_DIR not in sys.path:
 try:
     from common import otel
     from common import logging_setup
+    from common.study_events import EnergySpeechTracker, StudyEventBuffer
     logging_setup.init_logging("xvc")  # export logs over OTLP (trace-correlated) when observability is enabled
 except Exception:  # noqa: BLE001
     otel = None
     logging_setup = None
+    EnergySpeechTracker = None
+    StudyEventBuffer = None
 
 from bins.infer_utils import (  # noqa: E402  (import after sys.path setup)
     load_xvc,
@@ -74,6 +81,8 @@ from utils.audio import audio_highpass_filter  # noqa: E402
 
 TAG_AUDIO = b"\x01"      # converted audio -> PersonaPlex (Opus)
 TAG_VC_USER = b"\x03"    # converted user PCM (float32 16k) -> browser
+STUDY_FRAME = struct.Struct("<4sIIII")
+STUDY_FRAME_MAGIC = b"HMO1"
 
 XVC_CONFIG = os.environ.get("XVC_CONFIG", os.path.join(XVC_DIR, "configs/xvc.yaml"))
 XVC_CKPT = os.environ.get("XVC_CKPT", os.path.join(XVC_DIR, "ckpts/xvc.pt"))
@@ -84,6 +93,8 @@ CHUNK_MS = int(os.environ.get("XVC_CHUNK_MS", 2400))
 CURRENT_MS = int(os.environ.get("XVC_CURRENT_MS", 120))
 SMOOTH_MS = int(os.environ.get("XVC_SMOOTH_MS", 20))
 FUTURE_MS = int(os.environ.get("XVC_FUTURE_MS", 100))
+SILENCE_GATE_RMS = float(os.environ.get("XVC_SILENCE_GATE_RMS", "0.008"))
+SILENCE_HANGOVER_MS = int(os.environ.get("XVC_SILENCE_HANGOVER_MS", "360"))
 
 PERSONAPLEX_HOST = os.environ.get("PERSONAPLEX_PROXY_HOST", "127.0.0.1")
 PERSONAPLEX_PORT = os.environ.get("PERSONAPLEX_PROXY_PORT", "8000")
@@ -95,6 +106,7 @@ device: torch.device | None = None
 SR = 16000
 HP_CUT = 0.0
 MASK_TARGET_COND = True
+CONTENT_PATH_WARMED = False
 
 # target_id -> (speaker_condition, frame_condition)
 targets: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -108,6 +120,47 @@ def _save_wav(path: str, pcm: np.ndarray, sr: int) -> None:
         w.setsampwidth(2)
         w.setframerate(sr)
         w.writeframes(ints.tobytes())
+
+
+def _wav_bytes(pcm: np.ndarray, sr: int) -> bytes:
+    output = io.BytesIO()
+    pcm = np.clip(np.asarray(pcm).reshape(-1), -1.0, 1.0)
+    ints = (pcm * 32767.0).astype("<i2")
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sr)
+        wav.writeframes(ints.tobytes())
+    return output.getvalue()
+
+
+def _parse_study_frame(data: bytes) -> tuple[bytes, dict]:
+    if len(data) < STUDY_FRAME.size or data[:4] != STUDY_FRAME_MAGIC:
+        return data, {}
+    magic, sequence, capture_start, sample_count, capture_rate = STUDY_FRAME.unpack_from(data)
+    payload = data[STUDY_FRAME.size:]
+    if magic != STUDY_FRAME_MAGIC or len(payload) != sample_count * 4:
+        raise ValueError("invalid HMO study audio frame")
+    return payload, {
+        "browser_chunk_sequence": sequence,
+        "capture_start_sample": capture_start,
+        "capture_sample_count": sample_count,
+        "capture_sample_rate_hz": capture_rate,
+    }
+
+
+def _decode_opus_stream(encoded: bytes, sample_rate: int) -> bytes | None:
+    if not encoded:
+        return None
+    reader = sphn.OpusStreamReader(sample_rate)
+    reader.append_bytes(encoded)
+    chunks = []
+    while True:
+        pcm = reader.read_pcm()
+        if pcm.shape[-1] == 0:
+            break
+        chunks.append(np.asarray(pcm, dtype=np.float32).reshape(-1))
+    return _wav_bytes(np.concatenate(chunks), sample_rate) if chunks else None
 
 
 class XVCStreamSession:
@@ -139,7 +192,13 @@ class XVCStreamSession:
             self.fade_in = self.fade_out = self.tail_buffer = None
         self.buf = np.zeros(0, dtype=np.float32)
         self.i = 0
+        self.inference_windows = 0
+        self.silence_bypassed_windows = 0
+        self.silence_hangover_windows = max(
+            0, int(np.ceil(SILENCE_HANGOVER_MS / self.current_ms)))
+        self.silence_hangover_remaining = 0
 
+    @torch.inference_mode()
     def feed(self, pcm: np.ndarray) -> list[np.ndarray]:
         """Append incoming 16 kHz PCM, return any completed current-region chunks."""
         self.buf = np.concatenate([self.buf, pcm.astype(np.float32)])
@@ -157,9 +216,43 @@ class XVCStreamSession:
                 seg = np.concatenate([np.zeros(left_pad, dtype=np.float32), seg])
             if HP_CUT:
                 seg = audio_highpass_filter(seg, self.sr, HP_CUT).astype(np.float32)
-            outs.append(self._forward(seg))
+            cur_start = self.history_ms * self.sr // 1000
+            activity_end = (
+                self.history_ms + self.current_ms + self.smooth_ms + self.future_ms
+            ) * self.sr // 1000
+            activity = seg[cur_start:activity_end]
+            rms = float(np.sqrt(np.mean(activity * activity))) if len(activity) else 0.0
+            active = SILENCE_GATE_RMS <= 0 or rms >= SILENCE_GATE_RMS
+            if active:
+                self.silence_hangover_remaining = self.silence_hangover_windows
+            elif self.silence_hangover_remaining > 0:
+                self.silence_hangover_remaining -= 1
+                active = True
+
+            if active:
+                outs.append(self._forward(seg))
+                self.inference_windows += 1
+            else:
+                # Preserve the sample-exact stream with digital silence. Passing
+                # raw mic audio here would leak natural speech into a VC condition
+                # whenever a quiet syllable fell below the gate.
+                cur_end = (self.history_ms + self.current_ms) * self.sr // 1000
+                outs.append(np.zeros(cur_end - cur_start, dtype=np.float32))
+                self.silence_bypassed_windows += 1
+                if self.tail_buffer is not None:
+                    self.tail_buffer.zero_()
             self.i += 1
         return outs
+
+    @torch.inference_mode()
+    def warm(self) -> None:
+        """Warm content-path CUDA kernels without consuming participant audio."""
+        segment_samples = (
+            self.history_ms + self.current_ms + self.smooth_ms + self.future_ms
+        ) * self.sr // 1000
+        self._forward(np.zeros(segment_samples, dtype=np.float32))
+        if self.tail_buffer is not None:
+            self.tail_buffer.zero_()
 
     @torch.inference_mode()
     def _forward(self, seg_np: np.ndarray) -> np.ndarray:
@@ -180,6 +273,7 @@ class XVCStreamSession:
 
 async def handle_load_target(request: web.Request) -> web.Response:
     """POST /api/meanvc/load-target - upload target WAV, precompute conditions."""
+    global CONTENT_PATH_WARMED
     post = await request.post()
     field = post.get("wav")
     if field is None:
@@ -204,6 +298,12 @@ async def handle_load_target(request: web.Request) -> web.Response:
         else:
             target_wav_cond = target_wav
         spk, frame = precompute_conditions(model, target_wav, target_wav_cond)
+        if not CONTENT_PATH_WARMED:
+            warmup_started = time.perf_counter()
+            XVCStreamSession(spk, frame).warm()
+            CONTENT_PATH_WARMED = True
+            logger.info("[xvc] content path warmed in %.1f ms",
+                        (time.perf_counter() - warmup_started) * 1000.0)
         targets[target_id] = (spk, frame)
         duration = round(len(target_np) / SR, 2)
         logger.info(f"[xvc] loaded target {target_id} ({duration}s)")
@@ -261,6 +361,32 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
 STUDY_APP_API_URL = os.environ.get("STUDY_APP_API_URL", "https://127.0.0.1:5001")
 
 
+async def upload_study_proxy_artifacts(session_id: str, artifacts: dict[str, bytes],
+                                       metadata: dict) -> tuple[bool, str | None]:
+    if not session_id or session_id.endswith("_CHECK"):
+        return True, None
+    form = aiohttp.FormData()
+    for name, value in artifacts.items():
+        content_type = "audio/wav" if name.endswith(".wav") else "audio/ogg"
+        form.add_field(name.replace(".", "_"), value, filename=name,
+                       content_type=content_type)
+    form.add_field("metadata", json.dumps(metadata), content_type="application/json")
+    url = f"{STUDY_APP_API_URL}/api/study/internal/session/{session_id}/proxy-artifacts"
+    try:
+        async with aiohttp.ClientSession() as client:
+            async with client.post(
+                url, data=form, ssl=False,
+                headers={"X-Study-Event-Token": os.environ.get(
+                    "STUDY_EVENT_TOKEN", "local-study-events")},
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as response:
+                if response.status != 200:
+                    return False, f"HTTP {response.status}: {(await response.text())[-500:]}"
+        return True, None
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 async def resolve_study_condition(session_id: str):
     """Study mode: resolve an opaque session_id to its hidden condition via app-api
     over localhost. Returns None if unavailable. (Same contract as MeanVC.)"""
@@ -312,12 +438,21 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
 
     # One X-VC session per distinct VC target in the schedule; natural = pass-through.
     vc_sessions = {}
+    unavailable_targets = []
     for seg in schedule:
         if seg.get("mode") == "vc":
             tid = seg.get("engine_target_id")
-            if tid and tid in targets and tid not in vc_sessions:
+            if not tid or tid not in targets:
+                unavailable_targets.append(tid or "missing")
+            elif tid not in vc_sessions:
                 spk, frame = targets[tid]
                 vc_sessions[tid] = XVCStreamSession(spk, frame)
+    if unavailable_targets:
+        logger.error("[xvc proxy] VC schedule has unavailable target(s) for %s: %s",
+                     session_id or "legacy session", unavailable_targets)
+        await browser_ws.send_json({"error": "VC target is unavailable for this session"})
+        await browser_ws.close()
+        return browser_ws
 
     def active_segment(elapsed_s):
         for seg in schedule:
@@ -328,7 +463,6 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         return schedule[-1]
 
     loop = asyncio.get_event_loop()
-
     # X-VC outputs 16 kHz; sphn's Opus encoder only accepts 24/48 kHz (PersonaPlex
     # uses 24 kHz = its mimi rate). Encode at 24 kHz and upsample before encoding.
     opus_writer = sphn.OpusStreamWriter(24000)
@@ -365,22 +499,80 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
 
     chunk_count = 0
     processed_samples = 0            # SR-rate samples consumed → elapsed time for the schedule
+    transmitted_samples = 0          # 16 kHz PCM returned to browser / represented in participant.wav
+    model_bound_samples = 0          # 24 kHz PCM framed for PersonaPlex
+    input_chunk_sequence = 0
+    model_input_packet_sequence = 0
+    model_packet_sequence = 0
+    current_mode = None
+    current_transmitted_mode = None
+    assistant_packet_active = False
+    last_assistant_packet_ns = 0
     opus_pcm_buf = np.zeros(0, dtype=np.float32)
     # latency tracking
     first_send_ts = None             # when the first converted audio was sent to PersonaPlex
     first_model_done = False         # first PersonaPlex audio frame seen
     vc_ms_total = 0.0                # sum of per-window X-VC inference time
     vc_windows = 0
+    vc_silence_bypassed_windows = 0
+    capture_study_artifacts = bool(session_id and not session_id.endswith("_CHECK"))
+    proxy_received_pcm: list[np.ndarray] = []
+    proxy_transmitted_pcm: list[np.ndarray] = []
+    personaplex_input_opus = bytearray()
+    personaplex_output_opus = bytearray()
+    events = StudyEventBuffer(session_id, "xvc", STUDY_APP_API_URL) if StudyEventBuffer else None
+    speech = EnergySpeechTracker(SR) if EnergySpeechTracker else None
+    if events:
+        events.add("stream_start", input_sample_rate_hz=SR,
+                   transmitted_sample_rate_hz=SR, model_bound_sample_rate_hz=24000,
+                   schedule=schedule, xvc_content_path_warmed=CONTENT_PATH_WARMED)
+        for segment in schedule[1:]:
+            events.add("route_switch_requested", requested_start_s=segment.get("start_s"),
+                       requested_input_sample=int(float(segment.get("start_s") or 0) * SR),
+                       to_mode=segment.get("mode"))
 
     async def browser_to_pplx():
-        nonlocal chunk_count, processed_samples, opus_pcm_buf, first_send_ts, vc_ms_total, vc_windows
+        nonlocal chunk_count, processed_samples, transmitted_samples, model_bound_samples
+        nonlocal input_chunk_sequence, model_input_packet_sequence
+        nonlocal current_mode, current_transmitted_mode
+        nonlocal opus_pcm_buf, first_send_ts, vc_ms_total, vc_windows
+        nonlocal vc_silence_bypassed_windows
         async for msg in browser_ws:
             if msg.type == web.WSMsgType.BINARY:
-                incoming = np.frombuffer(msg.data, dtype=np.float32).copy()
+                try:
+                    pcm_payload, browser_frame = _parse_study_frame(msg.data)
+                except ValueError as exc:
+                    if events:
+                        events.add("invalid_input_frame", error=str(exc), bytes=len(msg.data))
+                    continue
+                incoming = np.frombuffer(pcm_payload, dtype=np.float32).copy()
                 if resampler is not None:
                     incoming = resampler(torch.from_numpy(incoming).unsqueeze(0)).squeeze(0).numpy()
+                if capture_study_artifacts:
+                    proxy_received_pcm.append(incoming.copy())
+                input_chunk_sequence += 1
+                input_start = processed_samples
+                input_end = input_start + len(incoming)
                 seg = active_segment(processed_samples / float(SR))
                 processed_samples += len(incoming)
+                mode = seg.get("mode", "natural")
+                if events:
+                    events.add("input_chunk", chunk_sequence=input_chunk_sequence,
+                               input_start_sample=input_start, input_end_sample=input_end,
+                               samples=len(incoming), source_sample_rate_hz=source_sr,
+                               input_sample_rate_hz=SR,
+                               **browser_frame)
+                    if current_mode != mode:
+                        events.add("route_activated", from_mode=current_mode, to_mode=mode,
+                                   input_sample=input_start,
+                                   transmitted_sample=transmitted_samples,
+                                   model_bound_sample=model_bound_samples,
+                                   requested_start_s=seg.get("start_s"))
+                        current_mode = mode
+                    if speech:
+                        for row in speech.update(incoming, input_start, input_end):
+                            event = row.pop("event")
+                            events.add(event, **row)
                 tid = seg.get("engine_target_id") if seg.get("mode") == "vc" else None
                 sess = vc_sessions.get(tid) if tid else None
                 if sess is None:
@@ -388,19 +580,57 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     curs = [incoming]
                 else:
                     _t0 = time.perf_counter()
+                    inference_before = sess.inference_windows
+                    bypassed_before = sess.silence_bypassed_windows
                     try:
                         curs = await loop.run_in_executor(None, sess.feed, incoming)
                     except Exception as e:
                         logger.error(f"[xvc proxy] inference error: {e}")
+                        if events:
+                            events.add("inference_failure", input_start_sample=input_start,
+                                       input_end_sample=input_end, error=str(e))
                         continue
-                    if curs:  # X-VC GPU forward latency, per produced window
-                        dt = (time.perf_counter() - _t0) * 1000.0 / len(curs)
-                        vc_ms_total += dt * len(curs); vc_windows += len(curs)
+                    elapsed_ms = (time.perf_counter() - _t0) * 1000.0
+                    inferred = sess.inference_windows - inference_before
+                    bypassed = sess.silence_bypassed_windows - bypassed_before
+                    vc_silence_bypassed_windows += bypassed
+                    if inferred:  # X-VC GPU forward latency, per inferred window
+                        dt = elapsed_ms / inferred
+                        vc_ms_total += elapsed_ms
+                        vc_windows += inferred
                         if otel:
                             otel.record_latency("vc.inference_ms", dt, engine="xvc")
+                    if events and curs:
+                        events.add(
+                            "xvc_inference_batch",
+                            input_start_sample=input_start,
+                            input_end_sample=input_end,
+                            output_windows=len(curs),
+                            inference_windows=inferred,
+                            silence_bypassed_windows=bypassed,
+                            elapsed_ms=round(elapsed_ms, 3),
+                            silence_gate_rms=SILENCE_GATE_RMS,
+                        )
 
                 for cur in curs:
+                    if capture_study_artifacts:
+                        proxy_transmitted_pcm.append(np.asarray(cur, dtype=np.float32).copy())
                     chunk_count += 1
+                    output_start = transmitted_samples
+                    transmitted_samples += len(cur)
+                    if events:
+                        if current_transmitted_mode != mode:
+                            events.add("transmitted_route_activated",
+                                       from_mode=current_transmitted_mode, to_mode=mode,
+                                       transmitted_sample=output_start,
+                                       input_start_sample=input_start,
+                                       input_end_sample=input_end)
+                            current_transmitted_mode = mode
+                        events.add("transmitted_window", output_sequence=chunk_count,
+                                   route_mode=mode, input_start_sample=input_start,
+                                   input_end_sample=input_end,
+                                   transmitted_start_sample=output_start,
+                                   transmitted_end_sample=transmitted_samples)
                     cur_24k = (
                         out_resampler(torch.from_numpy(cur).unsqueeze(0)).squeeze(0).numpy()
                     )
@@ -408,6 +638,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     while len(opus_pcm_buf) >= OPUS_FRAME:
                         frame_pcm = np.ascontiguousarray(opus_pcm_buf[:OPUS_FRAME])
                         opus_pcm_buf = opus_pcm_buf[OPUS_FRAME:]
+                        frame_start = model_bound_samples
+                        model_bound_samples += OPUS_FRAME
                         opus_writer.append_pcm(frame_pcm)
                         while True:
                             encoded = opus_writer.read_bytes()
@@ -415,7 +647,17 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                                 break
                             if first_send_ts is None:
                                 first_send_ts = time.perf_counter()
+                            if capture_study_artifacts:
+                                personaplex_input_opus.extend(encoded)
                             await pplx_ws.send_bytes(TAG_AUDIO + encoded)
+                            model_input_packet_sequence += 1
+                            if events:
+                                events.add("personaplex_input_packet",
+                                           packet_sequence=model_input_packet_sequence,
+                                           route_mode=mode,
+                                           model_bound_start_sample=frame_start,
+                                           model_bound_end_sample=model_bound_samples,
+                                           encoded_bytes=len(encoded))
                             if opus_reader_dbg is not None:
                                 opus_reader_dbg.append_bytes(encoded)
                                 pcm = opus_reader_dbg.read_pcm()
@@ -423,13 +665,47 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                                     debug_pcm.append(pcm.astype(np.float32))
                     if not browser_ws.closed:
                         await browser_ws.send_bytes(TAG_VC_USER + cur.tobytes())
+                if events:
+                    events.flush_nowait()
+            elif msg.type == web.WSMsgType.TEXT:
+                if events:
+                    try:
+                        control = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        control = {}
+                    if control.get("type") == "capture_summary":
+                        events.add("client_capture_summary", reported_by="browser",
+                                   callbacks=control.get("callbacks"), samples=control.get("samples"),
+                                   sample_rate_hz=control.get("sampleRateHz"),
+                                   estimated_dropped_samples=control.get("estimatedDroppedSamples"),
+                                   detector=control.get("detector"))
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
                 break
 
     async def pplx_to_browser():
-        nonlocal first_model_done
+        nonlocal first_model_done, model_packet_sequence
+        nonlocal assistant_packet_active, last_assistant_packet_ns
         async for msg in pplx_ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
+                tag = msg.data[:1]
+                model_packet_sequence += 1
+                if capture_study_artifacts and tag == b"\x01":
+                    personaplex_output_opus.extend(msg.data[1:])
+                if events:
+                    now_ns = time.monotonic_ns()
+                    events.add("personaplex_output_packet", packet_sequence=model_packet_sequence,
+                               tag=int(tag[0]) if tag else None,
+                               payload_bytes=max(0, len(msg.data) - 1))
+                    if tag == b"\x01":
+                        if (not assistant_packet_active or
+                                now_ns - last_assistant_packet_ns > 400_000_000):
+                            if assistant_packet_active:
+                                events.add("assistant_speech_end", packet_sequence=model_packet_sequence - 1,
+                                           detector="packet_gap")
+                            assistant_packet_active = True
+                            events.add("assistant_speech_start", packet_sequence=model_packet_sequence,
+                                       detector="packet_gap")
+                        last_assistant_packet_ns = now_ns
                 # 0x01 = model Opus audio: measure time-to-first-response after we
                 # started sending converted user audio to PersonaPlex.
                 if not first_model_done and msg.data[:1] == b"\x01" and first_send_ts is not None:
@@ -441,6 +717,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     logger.info(f"[xvc proxy] first PersonaPlex audio {_lat:.0f} ms after first send")
                 if not browser_ws.closed:
                     await browser_ws.send_bytes(msg.data)
+                if events:
+                    events.flush_nowait()
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
                 break
 
@@ -466,6 +744,84 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         except Exception:  # noqa: BLE001
             pass
 
+    if capture_study_artifacts:
+        artifact_bytes: dict[str, bytes] = {}
+        uploaded = False
+        upload_error = None
+        try:
+            if proxy_received_pcm:
+                received = np.concatenate(proxy_received_pcm)
+                artifact_bytes["proxy_received.wav"] = await loop.run_in_executor(
+                    None, _wav_bytes, received, SR)
+            if proxy_transmitted_pcm:
+                transmitted = np.concatenate(proxy_transmitted_pcm)
+                artifact_bytes["participant_proxy.wav"] = await loop.run_in_executor(
+                    None, _wav_bytes, transmitted, SR)
+            if personaplex_input_opus:
+                exact_input = bytes(personaplex_input_opus)
+                artifact_bytes["personaplex_input.opus"] = exact_input
+                try:
+                    decoded = await loop.run_in_executor(
+                        None, _decode_opus_stream, exact_input, 24000)
+                    if decoded:
+                        artifact_bytes["personaplex_input_decoded.wav"] = decoded
+                except Exception as exc:  # exact Opus remains the authoritative artifact
+                    logger.warning(f"[xvc proxy] post-hoc Opus decode failed: {exc}")
+                    if events:
+                        events.add("personaplex_input_decode_failed", error=str(exc))
+            if personaplex_output_opus:
+                artifact_bytes["personaplex_output.opus"] = bytes(personaplex_output_opus)
+            uploaded, upload_error = await upload_study_proxy_artifacts(
+                session_id,
+                artifact_bytes,
+                {
+                    "schema": "hmo.proxy-artifacts.v1",
+                    "engine": "xvc",
+                    "input_sample_rate_hz": SR,
+                    "transmitted_sample_rate_hz": SR,
+                    "model_bound_sample_rate_hz": 24000,
+                    "input_samples": processed_samples,
+                    "transmitted_samples": transmitted_samples,
+                    "model_bound_samples": model_bound_samples,
+                    "input_chunks": input_chunk_sequence,
+                    "model_input_packets": model_input_packet_sequence,
+                    "model_packets": model_packet_sequence,
+                    "xvc_inference_windows": vc_windows,
+                    "xvc_silence_bypassed_windows": vc_silence_bypassed_windows,
+                    "xvc_silence_gate_rms": SILENCE_GATE_RMS,
+                    "xvc_silence_hangover_ms": SILENCE_HANGOVER_MS,
+                    "xvc_content_path_warmed": CONTENT_PATH_WARMED,
+                    "frame_header": "HMO1/<4sIIII>",
+                },
+            )
+        except Exception as exc:  # teardown must still persist stream_stop events
+            upload_error = str(exc)
+            logger.exception("[xvc proxy] failed to build study proxy artifacts")
+        if events:
+            events.add(
+                "proxy_artifacts_complete" if uploaded else "proxy_artifacts_failed",
+                artifacts=sorted(artifact_bytes), error=upload_error,
+            )
+
+    if events:
+        if speech:
+            for row in speech.close():
+                event = row.pop("event")
+                events.add(event, **row)
+        if assistant_packet_active:
+            events.add("assistant_speech_end", packet_sequence=model_packet_sequence,
+                       detector="packet_gap")
+        events.add("stream_stop", input_samples=processed_samples,
+                   transmitted_samples=transmitted_samples,
+                   model_bound_samples=model_bound_samples,
+                   input_chunks=input_chunk_sequence,
+                   model_input_packets=model_input_packet_sequence,
+                   model_output_packets=model_packet_sequence,
+                   output_windows=chunk_count,
+                   xvc_inference_windows=vc_windows,
+                   xvc_silence_bypassed_windows=vc_silence_bypassed_windows)
+        await events.flush(force=True)
+
     if debug_dir and debug_pcm:
         try:
             os.makedirs(debug_dir, exist_ok=True)
@@ -479,7 +835,9 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         otel.set_session_attributes(chunks=chunk_count)
         if vc_windows:
             otel.set_session_attributes(vc_inference_avg_ms=round(vc_ms_total / vc_windows, 1))
-    logger.info(f"[xvc proxy] closed after {chunk_count} chunks")
+    logger.info(
+        "[xvc proxy] closed after %d chunks (%d inferred, %d silence-bypassed)",
+        chunk_count, vc_windows, vc_silence_bypassed_windows)
     return browser_ws
 
 
@@ -495,6 +853,13 @@ async def cors_middleware(request: web.Request, handler):
     return resp
 
 
+async def handle_info(_request: web.Request) -> web.Response:
+    """Lets the frontend show the correct engine label. Both engines mount the
+    same /api/meanvc/* routes, so this is the only way to tell them apart from
+    the client side."""
+    return web.json_response({"engine": "xvc"})
+
+
 def create_app() -> web.Application:
     mws = [cors_middleware]
     # Tracing middleware opens a SERVER span per request and reads the W3C
@@ -506,6 +871,7 @@ def create_app() -> web.Application:
         mws.append(otel.aiohttp_middleware("xvc"))
         logger.info("OpenTelemetry tracing enabled (xvc)")
     app = web.Application(middlewares=mws, client_max_size=10 * 1024 * 1024)
+    app.router.add_get("/api/meanvc/info", handle_info)
     app.router.add_post("/api/meanvc/load-target", handle_load_target)
     app.router.add_get("/api/meanvc/stream", handle_stream)
     app.router.add_get("/api/meanvc/chat-proxy", handle_chat_proxy)

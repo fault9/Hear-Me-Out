@@ -8,6 +8,9 @@ import { MessageFeed } from "@/components/conversation/MessageFeed"
 import { DownloadBar } from "@/components/conversation/DownloadBar"
 import { DownloadBarSkeleton } from "@/components/conversation/DownloadBarSkeleton"
 import { VoiceMetricsModal } from "@/components/conversation/VoiceMetricsModal"
+import { VcQualityModal } from "@/components/conversation/VcQualityModal"
+import { SoundboardPanel } from "@/components/conversation/SoundboardPanel"
+import { VC_QUALITY_DEMO, VC_QUALITY_DEMO_DIARIZED } from "@/lib/vcQualityMock"
 import type { useWebSocket } from "@shared/hooks/useWebSocket"
 import type { useRecorder } from "@shared/hooks/useRecorder"
 import { getMeanvcLoadTargetUrl } from "@/lib/config"
@@ -18,9 +21,17 @@ type RecorderState = ReturnType<typeof useRecorder>
 interface Props {
   ws: WsState
   recorder: RecorderState
+  // Lifted from App.tsx so it survives tab-switch remounts.
+  soundboardEnabled: boolean
+  onSoundboardEnabledChange: (v: boolean) => void
 }
 
-export function ConversationView({ ws, recorder }: Props) {
+export function ConversationView({
+  ws,
+  recorder,
+  soundboardEnabled,
+  onSoundboardEnabledChange,
+}: Props) {
   const [meanvcSteps, setMeanvcSteps] = useState(2)
   const vcPipeline = useMeanVCPipeline((data) => ws.sendRawAudio(data), meanvcSteps, { loadTargetUrl: getMeanvcLoadTargetUrl })
 
@@ -50,11 +61,23 @@ export function ConversationView({ ws, recorder }: Props) {
   const {
     textPrompt, setTextPrompt,
     diarized, userWavUrl, personaplexWavUrl, mergedWavUrl,
-    originalUserWavUrl, vcMetrics, vcMetricsLoading, processing,
+    originalUserWavUrl, vcMetrics, vcMetricsLoading,
+    vcQuality: vcQualityData, vcQualityLoading, downloadVcQuality,
+    triggerVcMetrics, triggerVcQuality,
+    canTriggerVcMetrics, canTriggerVcQuality,
+    processing,
     startConversation, stopConversation, downloadTranscript,
   } = useConversation(ws, recorder, vcPipeline)
 
   const [showVcMetrics, setShowVcMetrics] = useState(false)
+  const [showVcQuality, setShowVcQuality] = useState(false)
+
+  // Dev affordance: open ?demo=vc-quality in the URL to preview the overlay
+  // with realistic mock data (no backend / no conversation needed).
+  const demoVcQuality =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("demo") === "vc-quality"
+  useEffect(() => { if (demoVcQuality) setShowVcQuality(true) }, [demoVcQuality])
   const [playing, setPlaying] = useState(false)
   const [playTime, setPlayTime] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -72,7 +95,7 @@ export function ConversationView({ ws, recorder }: Props) {
   }, [playTime, playing])
 
   return (
-    <div className="flex flex-col gap-4 md:grid md:grid-cols-[1fr_280px] md:gap-4 md:h-full pb-2">
+    <div className="flex flex-col gap-4 md:grid md:grid-cols-[1fr_280px] md:grid-rows-[auto_minmax(0,1fr)] md:gap-4 md:h-full md:min-h-0 pb-2">
       {processing && !showResult && <DownloadBarSkeleton />}
 
       {showResult && (
@@ -86,11 +109,19 @@ export function ConversationView({ ws, recorder }: Props) {
           onPlayingChange={setPlaying}
           vcMetricsLoading={vcMetricsLoading}
           vcMetricsReady={!!vcMetrics}
+          canTriggerVcMetrics={canTriggerVcMetrics}
+          onTriggerVcMetrics={triggerVcMetrics}
           onShowVcMetrics={() => setShowVcMetrics(true)}
+          vcQualityLoading={vcQualityLoading}
+          vcQualityReady={!!vcQualityData}
+          canTriggerVcQuality={canTriggerVcQuality}
+          onTriggerVcQuality={triggerVcQuality}
+          onShowVcQuality={() => setShowVcQuality(true)}
+          onDownloadVcQuality={downloadVcQuality}
         />
       )}
 
-      <Card className="flex flex-col overflow-hidden h-full py-0">
+      <Card className="flex flex-col overflow-hidden h-full py-0 md:row-start-2 md:col-start-1">
         <CardContent className="flex flex-1 flex-col p-0 overflow-y-auto" role="status" aria-live="polite">
           <MessageFeed
             transcripts={ws.transcripts}
@@ -107,8 +138,12 @@ export function ConversationView({ ws, recorder }: Props) {
         </CardContent>
       </Card>
 
-      <div className="flex flex-col gap-4 order-first md:order-none">
-        <Card className="py-0 overflow-visible">
+      {/* Right column scrolls internally when the soundboard panel (or any
+          future addition) makes total content exceed the viewport-bounded
+          column height. min-h-0 is required for the flex child to shrink
+          below its content size and let overflow-y-auto kick in. */}
+      <div className="flex flex-col gap-4 order-first md:order-none md:row-start-2 md:col-start-2 md:min-h-0 md:overflow-y-auto">
+        <Card className="py-0 overflow-visible shrink-0">
           <CardContent className="p-0">
             <ControlPanel
               isConnected={isConnected}
@@ -128,12 +163,43 @@ export function ConversationView({ ws, recorder }: Props) {
               onFeedbackDeviceChange={setFeedbackDeviceId}
               pplxDeviceId={pplxDeviceId}
               onPplxDeviceChange={setPplxDeviceId}
+              soundboardEnabled={soundboardEnabled}
+              onSoundboardEnabledChange={onSoundboardEnabledChange}
+              onStartCountedSession={() => {
+                // Bootstrap a counted session. If VC is armed, keep it ON for a
+                // live-VC session; otherwise force VC OFF (forceNonVc avoids a
+                // setEnabled→start race) for the soundboard. Either way this
+                // resets PP context and the SoundboardPanel mints the session.
+                if (vcPipeline.vcEnabled && vcPipeline.vcTargetId) {
+                  void startConversation()
+                } else {
+                  vcPipeline.setEnabled(false)
+                  void startConversation({ forceNonVc: true })
+                }
+              }}
             />
           </CardContent>
         </Card>
 
-        <Card className="flex flex-1 flex-col overflow-visible py-0 min-h-[120px]">
-          <CardContent className="flex flex-1 flex-col p-0">
+        {/* Runtime soundboard: mounted DIRECTLY BELOW ControlPanel. Wrapped in
+            shrink-0 because the right column is a bounded overflow-y-auto flex
+            container on desktop — without it, flex-shrink collapses the panel
+            to zero height (it "vanishes" in the wide layout while showing fine
+            in the narrow, unbounded layout). shrink-0 keeps its natural height
+            so the column scrolls to it instead. VC must be OFF — panel refuses
+            to play if vcEnabled is true. */}
+        {soundboardEnabled && (
+          <div className="shrink-0">
+            <SoundboardPanel ws={ws} vcEnabled={vcPipeline.vcEnabled} />
+          </div>
+        )}
+
+        {/* Partial transcript card: bounded to a fixed max-height so it
+            doesn't greedily fill the column via flex-1, which fought with
+            the column's overflow-y-auto and pushed the soundboard off-screen
+            after a tab-switch remount. */}
+        <Card className="flex flex-col overflow-visible py-0 min-h-[120px] max-h-[220px] flex-shrink-0">
+          <CardContent className="flex flex-1 flex-col p-0 min-h-0">
             {ws.partialTranscript ? (
               <div className="flex-1 overflow-y-auto">
                 <p className="p-4 text-sm leading-relaxed text-muted-foreground">{ws.partialTranscript}</p>
@@ -149,10 +215,18 @@ export function ConversationView({ ws, recorder }: Props) {
             )}
           </CardContent>
         </Card>
+
       </div>
 
       {showVcMetrics && vcMetrics && (
         <VoiceMetricsModal data={vcMetrics} onClose={() => setShowVcMetrics(false)} />
+      )}
+      {showVcQuality && (vcQualityData || demoVcQuality) && (
+        <VcQualityModal
+          data={vcQualityData || VC_QUALITY_DEMO}
+          diarized={vcQualityData ? diarized : VC_QUALITY_DEMO_DIARIZED}
+          onClose={() => setShowVcQuality(false)}
+        />
       )}
     </div>
   )

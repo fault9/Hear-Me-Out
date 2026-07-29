@@ -13,12 +13,17 @@ import shutil
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
-import torch
+
+APP_MODE = os.environ.get("APP_MODE", "hmo").lower()
+if APP_MODE != "study":
+    import torch
+else:
+    torch = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -81,6 +86,12 @@ STATIC_PATH = Path(os.environ.get("FRONTEND_PATH", _default_static))
 SEED_VC_DIR = REPO_ROOT / "seed-vc"
 INFERENCE_SCRIPT = SEED_VC_DIR / "inference.py"
 RECORDINGS_DIR = REPO_ROOT / "recordings"
+# vc_quality is its own uv project under services/vc_quality (own venv with
+# Whisper + WavLM + UTMOS). Override with VC_QUAL_DIR. We subprocess
+# it so its heavy models don't load into app-api's GPU (which already holds
+# PersonaPlex weights).
+VC_QUAL_DIR = Path(os.environ.get("VC_QUAL_DIR", REPO_ROOT / "services" / "vc_quality"))
+VC_QUAL_SCRIPT = VC_QUAL_DIR / "vc_quality.py"
 
 ALLOWED_EXTENSIONS = {"wav", "mp3", "flac", "m4a", "ogg"}
 UPLOAD_FOLDER = tempfile.gettempdir()
@@ -168,6 +179,9 @@ def create_app():
 
     @app.on_event("startup")
     async def preload_models():
+        if APP_MODE == "study":
+            logger.info("APP_MODE=study: skipping HMO Whisper/VAD preload")
+            return
         logger.info("Pre-loading Whisper model...")
         _init_whisper()
         logger.info("Pre-loading VAD model...")
@@ -201,7 +215,7 @@ def create_app():
 
     # In study mode, mount the participant-experiment API (admin + participant
     # endpoints, SQLite storage, VC-engine prepare lifecycle). HMO mode is unaffected.
-    if os.environ.get("APP_MODE", "hmo").lower() == "study":
+    if APP_MODE == "study":
         from study import build_study_router
 
         app.include_router(build_study_router())
@@ -217,17 +231,56 @@ def create_app():
             temp_path = f.name
 
         def _run(model):
-            segments_result, _ = model.transcribe(temp_path, beam_size=1, language="en")
+            # beam_size>=5 fixes greedy-decode artifacts like word-final consonant
+            # drops ("I'm" -> "I'"). VAD + word timestamps below tighten segment
+            # boundaries; they're orthogonal to decoder beam width.
+            segments_result, _ = model.transcribe(
+                temp_path,
+                beam_size=5,
+                language="en",
+                word_timestamps=True,
+                vad_filter=True,
+                vad_parameters={
+                    "min_silence_duration_ms": 500,
+                    "speech_pad_ms": 120,
+                },
+            )
             segs = []
             for s in segments_result:  # generation (and any OOM) happens here
-                if s.text.strip():
-                    segs.append(
+                text = s.text.strip()
+                if not text:
+                    continue
+
+                words = []
+                for w in getattr(s, "words", None) or []:
+                    word = getattr(w, "word", "").strip()
+                    start = getattr(w, "start", None)
+                    end = getattr(w, "end", None)
+                    if not word or start is None or end is None:
+                        continue
+                    words.append(
                         {
-                            "start": round(s.start, 2),
-                            "end": round(s.end, 2),
-                            "text": s.text.strip(),
+                            "start": round(float(start), 2),
+                            "end": round(float(end), 2),
+                            "word": word,
                         }
                     )
+
+                # faster-whisper's segment end can include a following silence
+                # region. Word timestamps give the UI tighter diarized turns.
+                start = words[0]["start"] if words else round(s.start, 2)
+                end = words[-1]["end"] if words else round(s.end, 2)
+                if end <= start:
+                    end = round(s.end, 2)
+
+                segs.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "text": text,
+                        "words": words,
+                    }
+                )
             return segs
 
         try:
@@ -381,6 +434,152 @@ def create_app():
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
+    @app.post("/api/pitch-formant")
+    async def pitch_formant(
+        source_audio: UploadFile = File(...),
+        semitones: float = Form(0.0),
+        formant_shift: float = Form(1.0),
+        target_sr: int = Form(0),
+    ):
+        """Offline pitch + formant shift for the soundboard. Preserves duration.
+
+        Body (multipart):
+            source_audio: WAV (mono recommended; stereo is downmixed).
+            semitones:    F0 shift in semitones (e.g. +4 = ~feminine perception).
+            formant_shift: multiplicative formant scaling (>1.0 raises formants).
+            target_sr:    REQUIRED if you want the output SR validated against
+                          PP's expected input. If 0, output SR == input SR (we
+                          still don't resample, we just skip the assert). The
+                          frontend should pass PP_SAMPLE_RATE here so the
+                          server refuses to silently bake at the wrong rate.
+
+        Returns:
+            WAV bytes at the input SR (NEVER resampled here). Headers include
+            X-Input-Duration-Ms and X-Output-Duration-Ms so the client can
+            flag any unexpected drift. Output length is forced to equal input
+            length inside shift_pitch_formant().
+        """
+        from pitch_formant import (
+            shift_pitch_formant,
+            wav_bytes_to_pcm,
+            pcm_to_wav_bytes,
+        )
+
+        if not source_audio.filename or not allowed_file(source_audio.filename):
+            raise HTTPException(status_code=400, detail="Invalid source audio")
+
+        wav_bytes = await source_audio.read()
+        pcm, sr = wav_bytes_to_pcm(wav_bytes)
+        in_ms = round(1000.0 * len(pcm) / sr, 2)
+
+        # Refuse to bake at the wrong sample rate if the client told us what
+        # PP wants. This is the server side of the format-integrity contract.
+        if target_sr and sr != target_sr:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"sample-rate mismatch: input is {sr} Hz but target_sr "
+                    f"is {target_sr} Hz. The frontend must resample to PP's "
+                    f"expected rate BEFORE upload — we never resample in the "
+                    f"bake path to avoid hidden timing drift."
+                ),
+            )
+
+        out_pcm = shift_pitch_formant(
+            pcm, sr,
+            semitones=semitones,
+            formant_shift=formant_shift,
+        )
+        out_ms = round(1000.0 * len(out_pcm) / sr, 2)
+        drift_ms = round(out_ms - in_ms, 2)
+        if abs(drift_ms) > 5.0:
+            # shift_pitch_formant pads/trims to input length, so this should
+            # never fire — if it does, our duration-preservation invariant
+            # has regressed and the experiment would be invalidated.
+            logger.error(
+                f"pitch-formant duration drift {drift_ms} ms (in={in_ms}, out={out_ms})"
+            )
+
+        out_wav = pcm_to_wav_bytes(out_pcm, sr, bit_depth=16)
+        from fastapi.responses import Response
+        return Response(
+            content=out_wav,
+            media_type="audio/wav",
+            headers={
+                "X-Input-Duration-Ms": str(in_ms),
+                "X-Output-Duration-Ms": str(out_ms),
+                "X-Sample-Rate": str(sr),
+                "X-Semitones": str(semitones),
+                "X-Formant-Shift": str(formant_shift),
+            },
+        )
+
+    @app.post("/api/loudness-normalize")
+    async def loudness_normalize(
+        audio: UploadFile = File(...),
+        target_lufs: float = Form(-23.0),
+        target_sr: int = Form(0),
+    ):
+        """EBU R128 loudness-normalize a clip to a common integrated loudness so
+        soundboard conditions don't differ in playback level (P3, gate e).
+
+        Gain-only (pyloudnorm) with a peak guard against clipping. NEVER
+        resamples — returns WAV at the input SR; if target_sr is given it is
+        validated against the input (same format-integrity contract as the
+        pitch-formant bake). Very short clips (< ~0.4 s) can't be metered by
+        R128; those are returned unchanged. Headers: X-Sample-Rate,
+        X-Input-Lufs, X-Output-Lufs, X-Peak, X-Duration-Ms."""
+        import numpy as np
+        import pyloudnorm as pyln
+        from pitch_formant import wav_bytes_to_pcm, pcm_to_wav_bytes
+
+        if not audio.filename or not allowed_file(audio.filename):
+            raise HTTPException(status_code=400, detail="Invalid audio")
+
+        pcm, sr = wav_bytes_to_pcm(await audio.read())
+        if target_sr and sr != target_sr:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"sample-rate mismatch: input is {sr} Hz but target_sr is "
+                    f"{target_sr} Hz. Loudness-normalize never resamples."
+                ),
+            )
+        dur_ms = round(1000.0 * len(pcm) / sr, 2)
+
+        in_lufs = float("-inf")
+        try:
+            in_lufs = float(pyln.Meter(sr).integrated_loudness(pcm))
+        except Exception as e:  # too short / silent → skip gain
+            logger.warning(f"loudness measurement failed: {e}")
+
+        out = pcm
+        out_lufs = in_lufs
+        if np.isfinite(in_lufs):
+            out = pyln.normalize.loudness(pcm, in_lufs, target_lufs)
+            peak = float(np.max(np.abs(out))) if out.size else 0.0
+            if peak > 0.999:
+                out = out * (0.999 / peak)  # peak guard: avoid hard clipping
+            try:
+                out_lufs = float(pyln.Meter(sr).integrated_loudness(out))
+            except Exception:
+                out_lufs = in_lufs
+
+        peak = float(np.max(np.abs(out))) if out.size else 0.0
+        out_wav = pcm_to_wav_bytes(out.astype(np.float32), sr, bit_depth=16)
+        from fastapi.responses import Response
+        return Response(
+            content=out_wav,
+            media_type="audio/wav",
+            headers={
+                "X-Sample-Rate": str(sr),
+                "X-Input-Lufs": (f"{in_lufs:.2f}" if np.isfinite(in_lufs) else "nan"),
+                "X-Output-Lufs": (f"{out_lufs:.2f}" if np.isfinite(out_lufs) else "nan"),
+                "X-Peak": f"{peak:.4f}",
+                "X-Duration-Ms": str(dur_ms),
+            },
+        )
+
     @app.post("/api/metrics-comparison")
     async def metrics_comparison(
         source_audio: UploadFile = File(...),
@@ -465,6 +664,139 @@ def create_app():
             logger.error(f"Error during metrics comparison: {str(e)}")
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+    # Keys clients can pass to skip a heavy metric block. Names match the
+    # vc_quality.py --no-* flags (mapped below).
+    _SKIPPABLE_METRICS = {
+        "intelligibility": "--no-intelligibility",
+        "speaker_similarity": "--no-speaker-similarity",
+        "utmos": "--no-utmos",
+    }
+
+    @app.post("/api/vc-quality")
+    async def vc_quality(
+        source_audio: UploadFile = File(...),
+        target_audio: UploadFile = File(...),
+        converted_audio: UploadFile = File(...),
+        source_transcript: str = Form(None),
+        segment_mode: str = Form(None),
+        segment_win: float = Form(5.0),
+        segment_hop: float = Form(5.0),
+        skip_metrics: str = Form(""),
+    ):
+        """Post-hoc X-VC quality eval: WER vs the raw-source ASR transcript,
+        WavLM SIM vs the target, and UTMOS naturalness. Optionally per-segment
+        scoring + anomaly flagging when
+        segment_mode is 'fixed' | 'word' | 'vad'. Pass skip_metrics as a
+        comma-separated list of intelligibility|speaker_similarity|utmos to
+        skip those blocks. segment_win/segment_hop tune fixed-window resolution;
+        defaults of 5.0/5.0 give ~5x fewer windows than the 2.0/1.0 baseline
+        the CLI uses, which matters a lot on CPU. Returns the
+        evaluate_conversion row as JSON."""
+        if not VC_QUAL_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"vc_quality not installed at {VC_QUAL_DIR}. "
+                    f"Set VC_QUAL_DIR or place the vc_qual project at "
+                    f"$WORKSPACE/vc_qual."
+                ),
+            )
+        if segment_mode not in (None, "", "fixed", "word", "vad"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"segment_mode must be one of fixed|word|vad (got {segment_mode!r})",
+            )
+
+        temp_dir = tempfile.mkdtemp(prefix="vcq_")
+        try:
+            paths = {}
+            for key, upload in (("source", source_audio),
+                                ("target", target_audio),
+                                ("converted", converted_audio)):
+                if not upload.filename or not allowed_file(upload.filename):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid {key} audio file",
+                    )
+                p = os.path.join(temp_dir, f"{key}.wav")
+                with open(p, "wb") as f:
+                    f.write(await upload.read())
+                paths[key] = p
+
+            cmd = [
+                "uv", "run", "--project", str(VC_QUAL_DIR),
+                "python", str(VC_QUAL_SCRIPT),
+                "one",
+                "--converted", paths["converted"],
+                "--target", paths["target"],
+                "--source", paths["source"],
+            ]
+            if source_transcript:
+                cmd += ["--source-transcript", source_transcript]
+            if segment_mode:
+                cmd += ["--segment-mode", segment_mode]
+                cmd += ["--segment-win", str(segment_win)]
+                cmd += ["--segment-hop", str(segment_hop)]
+
+            skip_list = [
+                s.strip().lower() for s in (skip_metrics or "").split(",") if s.strip()
+            ]
+            unknown = [s for s in skip_list if s not in _SKIPPABLE_METRICS]
+            if unknown:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"unknown skip_metrics: {unknown}. "
+                        f"Allowed: {sorted(_SKIPPABLE_METRICS)}"
+                    ),
+                )
+            for s in skip_list:
+                cmd.append(_SKIPPABLE_METRICS[s])
+
+            logger.info(f"vc-quality: running {' '.join(cmd[:6])} ...")
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=600)
+            if proc.returncode != 0:
+                logger.error(
+                    f"vc_quality subprocess failed (rc={proc.returncode}): "
+                    f"{proc.stderr[-2000:]}"
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"vc_quality failed: {proc.stderr.strip()[-500:]}",
+                )
+
+            import json as _json
+            stdout = proc.stdout.strip()
+            # vc_quality prints a single JSON object (the row); some lazy-load
+            # warnings may go to stderr but stdout is clean JSON.
+            try:
+                row = _json.loads(stdout)
+            except _json.JSONDecodeError:
+                # If anything leaked onto stdout, recover by parsing the last
+                # JSON object via brace-balance.
+                start = stdout.find("{")
+                if start < 0:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="vc_quality produced no JSON on stdout",
+                    )
+                row = _json.loads(stdout[start:])
+            return JSONResponse(content=row)
+
+        except HTTPException:
+            raise
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail="vc_quality timed out (>600s)",
+            )
+        except Exception as e:
+            logger.error(f"vc-quality endpoint error: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     @app.get("/recordings/{filename}")
     async def serve_recording(filename: str):

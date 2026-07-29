@@ -33,10 +33,13 @@ if _SERVICES_DIR not in sys.path:
 try:
     from common import otel
     from common import logging_setup
+    from common.study_events import EnergySpeechTracker, StudyEventBuffer
     logging_setup.init_logging("meanvc")  # export logs over OTLP (trace-correlated) when observability is enabled
 except Exception:  # noqa: BLE001
     otel = None
     logging_setup = None
+    EnergySpeechTracker = None
+    StudyEventBuffer = None
 
 
 # Replicate MeanVC's Mel spectrogram and fbank extractors ------------------------------------------------
@@ -633,6 +636,15 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
 
     chunk_count = 0
     processed_samples = 0            # 16 kHz samples consumed → elapsed time for the schedule
+    received_samples = 0             # 16 kHz samples accepted from the browser
+    transmitted_samples = 0          # 16 kHz PCM returned to browser
+    model_bound_samples = 0          # 24 kHz PCM framed for PersonaPlex
+    input_chunk_sequence = 0
+    model_packet_sequence = 0
+    current_mode = None
+    current_transmitted_mode = None
+    assistant_packet_active = False
+    last_assistant_packet_ns = 0
     warmed: set = set()             # target ids whose session has done its warmup chunk
     seg_counts: dict = {}           # per-target chunk counter for periodic reset_cache
     acc_samples = np.array([], dtype=np.float32)
@@ -645,9 +657,22 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     first_model_done = False
     vc_ms_total = 0.0
     vc_chunks = 0
+    events = StudyEventBuffer(session_id, "meanvc", STUDY_APP_API_URL) if StudyEventBuffer else None
+    speech = EnergySpeechTracker(16000) if EnergySpeechTracker else None
+    if events:
+        events.add("stream_start", input_sample_rate_hz=16000,
+                   source_sample_rate_hz=source_sr,
+                   transmitted_sample_rate_hz=16000, model_bound_sample_rate_hz=24000,
+                   schedule=schedule, inference_chunk_samples=CHUNK)
+        for segment in schedule[1:]:
+            events.add("route_switch_requested", requested_start_s=segment.get("start_s"),
+                       requested_input_sample=int(float(segment.get("start_s") or 0) * 16000),
+                       to_mode=segment.get("mode"))
 
     async def browser_to_pplx():
-        nonlocal chunk_count, processed_samples, acc_samples, opus_pcm_buf
+        nonlocal chunk_count, processed_samples, received_samples, transmitted_samples
+        nonlocal model_bound_samples, input_chunk_sequence, current_mode, current_transmitted_mode
+        nonlocal acc_samples, opus_pcm_buf
         nonlocal first_send_ts, vc_ms_total, vc_chunks
         async for msg in browser_ws:
             if msg.type == web.WSMsgType.BINARY:
@@ -655,6 +680,18 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                 if need_resample:
                     t = torch.from_numpy(incoming).unsqueeze(0)
                     incoming = resampler(t).squeeze(0).numpy()
+                input_chunk_sequence += 1
+                receive_start = received_samples
+                received_samples += len(incoming)
+                if events:
+                    events.add("input_chunk", chunk_sequence=input_chunk_sequence,
+                               input_start_sample=receive_start,
+                               input_end_sample=received_samples, samples=len(incoming),
+                               source_sample_rate_hz=source_sr)
+                    if speech:
+                        for row in speech.update(incoming, receive_start, received_samples):
+                            event = row.pop("event")
+                            events.add(event, **row)
                 acc_samples = np.concatenate([acc_samples, incoming])
 
                 while len(acc_samples) >= CHUNK:
@@ -663,8 +700,17 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     chunk_count += 1
 
                     # Pick the active segment by elapsed audio time, then advance.
-                    seg = active_segment(processed_samples / 16000.0)
+                    input_start = processed_samples
+                    seg = active_segment(input_start / 16000.0)
                     processed_samples += len(chunk)
+                    mode = seg.get("mode", "natural")
+                    if events and current_mode != mode:
+                        events.add("route_activated", from_mode=current_mode, to_mode=mode,
+                                   input_sample=input_start,
+                                   transmitted_sample=transmitted_samples,
+                                   model_bound_sample=model_bound_samples,
+                                   requested_start_s=seg.get("start_s"))
+                        current_mode = mode
                     tid = seg.get("engine_target_id") if seg.get("mode") == "vc" else None
                     sess = vc_sessions.get(tid) if tid else None
 
@@ -677,6 +723,11 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                             padded = np.concatenate([chunk, np.zeros(720, dtype=np.float32)])
                             await loop.run_in_executor(None, sess.inference_one_chunk, padded)
                             warmed.add(tid)
+                            if events:
+                                events.add("inference_warmup", route_mode=mode,
+                                           input_start_sample=input_start,
+                                           input_end_sample=processed_samples,
+                                           transmitted_samples=0)
                             continue
                         # Periodically realign streaming offsets (per reference run_rt.py).
                         seg_counts[tid] = seg_counts.get(tid, 0) + 1
@@ -687,6 +738,9 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                             vc_wav = await loop.run_in_executor(None, sess.inference_one_chunk, chunk)
                         except Exception as e:
                             logger.error(f"[proxy] Inference error chunk {chunk_count}: {e}")
+                            if events:
+                                events.add("inference_failure", input_start_sample=input_start,
+                                           input_end_sample=processed_samples, error=str(e))
                             continue
                         _dt = (time.perf_counter() - _t0) * 1000.0
                         vc_ms_total += _dt; vc_chunks += 1
@@ -696,6 +750,21 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     # (a) forward converted audio to PersonaPlex as Opus.
                     # sphn encodes at 24 kHz, so upsample the 16 kHz VC output,
                     # then hand the encoder exact 1920-sample frames.
+                    output_start = transmitted_samples
+                    transmitted_samples += len(vc_wav)
+                    if events:
+                        if current_transmitted_mode != mode:
+                            events.add("transmitted_route_activated",
+                                       from_mode=current_transmitted_mode, to_mode=mode,
+                                       transmitted_sample=output_start,
+                                       input_start_sample=input_start,
+                                       input_end_sample=processed_samples)
+                            current_transmitted_mode = mode
+                        events.add("transmitted_window", output_sequence=chunk_count,
+                                   route_mode=mode, input_start_sample=input_start,
+                                   input_end_sample=processed_samples,
+                                   transmitted_start_sample=output_start,
+                                   transmitted_end_sample=transmitted_samples)
                     vc_wav_24k = (
                         out_resampler(torch.from_numpy(vc_wav).unsqueeze(0))
                         .squeeze(0)
@@ -705,6 +774,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     while len(opus_pcm_buf) >= OPUS_FRAME:
                         frame = np.ascontiguousarray(opus_pcm_buf[:OPUS_FRAME])
                         opus_pcm_buf = opus_pcm_buf[OPUS_FRAME:]
+                        frame_start = model_bound_samples
+                        model_bound_samples += OPUS_FRAME
                         opus_writer.append_pcm(frame)
                         while True:
                             encoded = opus_writer.read_bytes()
@@ -713,6 +784,11 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                             if first_send_ts is None:
                                 first_send_ts = time.perf_counter()
                             await pplx_ws.send_bytes(TAG_AUDIO + encoded)
+                            if events:
+                                events.add("personaplex_input_packet", route_mode=mode,
+                                           model_bound_start_sample=frame_start,
+                                           model_bound_end_sample=model_bound_samples,
+                                           encoded_bytes=len(encoded))
                             if opus_reader_dbg is not None:
                                 opus_reader_dbg.append_bytes(encoded)
                                 pcm = opus_reader_dbg.read_pcm()
@@ -723,13 +799,47 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     if not browser_ws.closed:
                         await browser_ws.send_bytes(TAG_VC_USER + vc_wav.tobytes())
 
+                if events:
+                    events.flush_nowait()
+            elif msg.type == web.WSMsgType.TEXT:
+                if events:
+                    try:
+                        control = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        control = {}
+                    if control.get("type") == "capture_summary":
+                        events.add("client_capture_summary", reported_by="browser",
+                                   callbacks=control.get("callbacks"), samples=control.get("samples"),
+                                   sample_rate_hz=control.get("sampleRateHz"),
+                                   estimated_dropped_samples=control.get("estimatedDroppedSamples"),
+                                   detector=control.get("detector"))
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
                 break
 
     async def pplx_to_browser():
-        nonlocal first_model_done
+        nonlocal first_model_done, model_packet_sequence
+        nonlocal assistant_packet_active, last_assistant_packet_ns
         async for msg in pplx_ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
+                tag = msg.data[:1]
+                if events:
+                    model_packet_sequence += 1
+                    now_ns = time.monotonic_ns()
+                    events.add("personaplex_output_packet", packet_sequence=model_packet_sequence,
+                               tag=int(tag[0]) if tag else None,
+                               payload_bytes=max(0, len(msg.data) - 1))
+                    if tag == b"\x01":
+                        if (not assistant_packet_active or
+                                now_ns - last_assistant_packet_ns > 400_000_000):
+                            if assistant_packet_active:
+                                events.add("assistant_speech_end",
+                                           packet_sequence=model_packet_sequence - 1,
+                                           detector="packet_gap")
+                            assistant_packet_active = True
+                            events.add("assistant_speech_start",
+                                       packet_sequence=model_packet_sequence,
+                                       detector="packet_gap")
+                        last_assistant_packet_ns = now_ns
                 if not first_model_done and msg.data[:1] == b"\x01" and first_send_ts is not None:
                     first_model_done = True
                     _lat = (time.perf_counter() - first_send_ts) * 1000.0
@@ -739,6 +849,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     logger.info(f"[proxy] first PersonaPlex audio {_lat:.0f} ms after first send")
                 if not browser_ws.closed:
                     await browser_ws.send_bytes(msg.data)
+                if events:
+                    events.flush_nowait()
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
                 break
 
@@ -756,6 +868,22 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         await client.close()
         if not browser_ws.closed:
             await browser_ws.close()
+
+    if events:
+        if speech:
+            for row in speech.close():
+                event = row.pop("event")
+                events.add(event, **row)
+        if assistant_packet_active:
+            events.add("assistant_speech_end", packet_sequence=model_packet_sequence,
+                       detector="packet_gap")
+        events.add("stream_stop", input_samples=processed_samples,
+                   input_received_samples=received_samples,
+                   transmitted_samples=transmitted_samples,
+                   model_bound_samples=model_bound_samples,
+                   input_chunks=input_chunk_sequence, output_windows=chunk_count)
+        await events.flush(force=True)
+
 
     if debug_dir and debug_pcm:
         try:
@@ -784,6 +912,13 @@ async def cors_middleware(request: web.Request, handler):
     return resp
 
 
+async def handle_info(_request: web.Request) -> web.Response:
+    """Lets the frontend show the correct engine label. Both engines mount the
+    same /api/meanvc/* routes, so this is the only way to tell them apart from
+    the client side."""
+    return web.json_response({"engine": "meanvc"})
+
+
 def create_app() -> web.Application:
     mws = [cors_middleware]
     if otel and otel.init_tracing("meanvc"):
@@ -792,6 +927,7 @@ def create_app() -> web.Application:
         mws.append(otel.aiohttp_middleware("meanvc"))
         logger.info("OpenTelemetry tracing enabled (meanvc)")
     app = web.Application(middlewares=mws, client_max_size=10 * 1024 * 1024)
+    app.router.add_get("/api/meanvc/info", handle_info)
     app.router.add_post("/api/meanvc/load-target", handle_load_target)
     app.router.add_get("/api/meanvc/stream", handle_stream)
     app.router.add_get("/api/meanvc/chat-proxy", handle_chat_proxy)

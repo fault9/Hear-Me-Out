@@ -2,10 +2,32 @@ import { Button } from "@shared/ui/button"
 import { Badge } from "@shared/ui/badge"
 import { Spinner } from "@shared/ui/spinner"
 import { Switch } from "@shared/ui/switch"
-import { Mic, MicOff, ChevronRight, Wand2, Volume2, Pause, Headphones } from "lucide-react"
-import { useRef, useState } from "react"
+import { Mic, MicOff, ChevronRight, Wand2, Volume2, Pause, Headphones, ListMusic } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 import { cn } from "@shared/lib/utils"
 import type { useMeanVCPipeline } from "@shared/hooks/useMeanVCPipeline"
+import { getMeanvcInfoUrl } from "@/lib/config"
+
+// Both engines mount the same /api/meanvc/* routes on :5002. We query
+// /api/meanvc/info once on mount so the pipeline pill shows whichever engine
+// run_all.sh actually picked at startup. Falls back to "MeanVC" (the default
+// engine) if the server is unreachable, since that's the most common case.
+const VC_ENGINE_LABELS: Record<string, string> = { meanvc: "MeanVC", xvc: "X-VC" }
+function useVcEngineLabel(): string {
+  const [label, setLabel] = useState("MeanVC")
+  useEffect(() => {
+    const ctrl = new AbortController()
+    fetch(getMeanvcInfoUrl(), { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { engine?: string } | null) => {
+        const engine = data?.engine
+        if (engine && VC_ENGINE_LABELS[engine]) setLabel(VC_ENGINE_LABELS[engine])
+      })
+      .catch(() => { /* keep fallback */ })
+    return () => ctrl.abort()
+  }, [])
+  return label
+}
 
 type VCState = ReturnType<typeof useMeanVCPipeline>
 
@@ -27,6 +49,13 @@ interface Props {
   onFeedbackDeviceChange: (v: string) => void
   pplxDeviceId: string
   onPplxDeviceChange: (v: string) => void
+  // Soundboard visibility toggle. Runtime SoundboardPanel below the control
+  // panel only renders when this is true, mirroring the VC toggle pattern.
+  soundboardEnabled: boolean
+  onSoundboardEnabledChange: (v: boolean) => void
+  // P4 session bootstrap: one click forces VC OFF, applies the prompt above,
+  // resets PP context, and starts a new counted session.
+  onStartCountedSession: () => void
 }
 
 function DeviceSelect({
@@ -69,9 +98,12 @@ export function ControlPanel({
   feedbackEnabled, onFeedbackEnabledChange,
   feedbackDeviceId, onFeedbackDeviceChange,
   pplxDeviceId, onPplxDeviceChange,
+  soundboardEnabled, onSoundboardEnabledChange,
+  onStartCountedSession,
 }: Props) {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
   const [previewPlaying, setPreviewPlaying] = useState(false)
+  const vcEngineLabel = useVcEngineLabel()
 
   const togglePreview = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -144,12 +176,34 @@ export function ControlPanel({
         </div>
       )}
 
+      {/* P4 — one-click session bootstrap. Adapts to the VC toggle: with VC OFF
+          it forces non-VC + resets PP + starts a numbered soundboard session;
+          with VC ON it keeps VC on for a live-VC counted session. Shown when the
+          soundboard is enabled OR VC is armed. */}
+      {!isConnected && (soundboardEnabled || (vcPipeline.vcEnabled && vcPipeline.vcTargetId)) && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onStartCountedSession}
+          disabled={isWarming}
+          className="border-emerald-500/50 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-300"
+          title={
+            vcPipeline.vcEnabled
+              ? "Start a counted VC session: applies the persona prompt, resets PersonaPlex context, keeps VC ON."
+              : "Start a counted session: forces VC OFF, applies the persona prompt, resets PersonaPlex context, mints a new session number."
+          }
+        >
+          <ListMusic className="size-3.5" />
+          {vcPipeline.vcEnabled ? "Start counted VC session" : "Start counted session"}
+        </Button>
+      )}
+
       <div className="flex flex-nowrap items-center justify-center gap-1">
         <PipelinePill>Your voice</PipelinePill>
         {vcPipeline.vcEnabled && vcPipeline.vcTargetId && (
           <>
             <ChevronRight className="size-2.5 shrink-0 text-muted-foreground/50" />
-            <PipelinePill>MeanVC</PipelinePill>
+            <PipelinePill>{vcEngineLabel}</PipelinePill>
           </>
         )}
         <ChevronRight className="size-2.5 shrink-0 text-muted-foreground/50" />
@@ -223,6 +277,25 @@ export function ControlPanel({
               </label>
             </div>
           </>
+        )}
+      </div>
+
+      {/* Soundboard toggle — controls visibility of the runtime SoundboardPanel
+          below. Off by default; researchers turn on when they want to trigger
+          pre-baked stimulus clips instead of (or in addition to) live mic. */}
+      <div className="w-full rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-2.5 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ListMusic className="size-3.5 text-emerald-400" />
+            <span className="text-xs font-medium text-emerald-300">Soundboard</span>
+          </div>
+          <Switch checked={soundboardEnabled} onCheckedChange={onSoundboardEnabledChange} />
+        </div>
+        {soundboardEnabled && (
+          <p className="text-[10px] text-emerald-200/80 leading-snug">
+            Panel appears below. Turn VC OFF for playback to work (baked clips
+            go direct to PP as Opus and can't route through the VC proxy).
+          </p>
         )}
       </div>
 

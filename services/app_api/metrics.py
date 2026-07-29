@@ -13,13 +13,14 @@ matplotlib.use('Agg')  # Use non-interactive backend for server environments
 warnings.filterwarnings("ignore", message="Support for mismatched key_padding_mask and attn_mask")
 from matplotlib.patches import FancyBboxPatch
 import matplotlib.pyplot as plt
+from study.transcript_timing import whisper_timestamp_segments
 
 try:
     from audiobox_aesthetics.infer import initialize_predictor
     AUDIOBOX_AVAILABLE = True
 except ImportError:
     AUDIOBOX_AVAILABLE = False
-    print("Warning: audiobox_aesthetics not available. Aesthetic metrics will use mock values.")
+    print("AudioBox aesthetics is not installed; aesthetic metrics will remain null.")
 
 # These metrics are offline/post-conversation analysis. Run them on CPU so they never
 # contend with PersonaPlex (7B) for GPU memory — repeatedly loading them on cuda after
@@ -70,7 +71,7 @@ def _get_aes():
             print(f"Warning: could not move audiobox predictor to CPU: {e}")
     return _aes_predictor
 
-def get_transcript(audio_path):
+def get_transcript_result(audio_path):
     try:
         processor, model = _get_asr()
         audio, _ = librosa.load(audio_path, sr=16000)
@@ -85,10 +86,24 @@ def get_transcript(audio_path):
             # results are deterministic regardless of what's spoken.
             ids = model.generate(**inputs, return_timestamps=True,
                                  language="en", task="transcribe")
-        return processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        text = processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        token_ids = ids[0].detach().cpu().tolist()
+        return {
+            "text": text,
+            "segments": whisper_timestamp_segments(
+                token_ids, processor.tokenizer, len(audio) / 16000),
+            "status": "complete",
+            "error": None,
+        }
     except Exception as e:
         print(f"Error during transcription: {e}")
-        return ""
+        return {"text": "", "segments": [], "status": "failed",
+                "error": f"{type(e).__name__}: {e}"}
+
+
+def get_transcript(audio_path):
+    """Backward-compatible plain-text ASR helper."""
+    return get_transcript_result(audio_path)["text"]
 
 
 def get_transcript_segments(audio_path):
@@ -195,12 +210,11 @@ def analyze_voices(audio_path_a, audio_path_b):
     """
     Runs all analyses on the two provided audio files.
     """
-    # Get transcripts. The participant clip (B) is transcribed with ms segment timestamps
-    # for diarization; its plain text is derived from the segments (one Whisper pass).
-    transcript_a = get_transcript(audio_path_a)
-    segments_b = get_transcript_segments(audio_path_b)
-    transcript_b = " ".join(s["text"] for s in segments_b if s.get("text")).strip() \
-        or get_transcript(audio_path_b)
+    # Get transcripts
+    asr_a = get_transcript_result(audio_path_a)
+    asr_b = get_transcript_result(audio_path_b)
+    transcript_a = asr_a["text"]
+    transcript_b = asr_b["text"]
 
     def _safe_duration(path):
         try:
@@ -216,6 +230,9 @@ def analyze_voices(audio_path_a, audio_path_b):
         "mean_pitch": calculate_pitch_stats(audio_path_a)[0],
         "std_pitch": calculate_pitch_stats(audio_path_a)[1],
         "transcript": transcript_a,
+        "transcript_segments": asr_a["segments"],
+        "transcript_status": asr_a["status"],
+        "transcript_error": asr_a["error"],
         "duration": _safe_duration(audio_path_a),
     }
 
@@ -226,7 +243,9 @@ def analyze_voices(audio_path_a, audio_path_b):
         "mean_pitch": calculate_pitch_stats(audio_path_b)[0],
         "std_pitch": calculate_pitch_stats(audio_path_b)[1],
         "transcript": transcript_b,
-        "segments": segments_b,   # ms-timestamped diarization segments
+        "transcript_segments": asr_b["segments"],
+        "transcript_status": asr_b["status"],
+        "transcript_error": asr_b["error"],
         "duration": _safe_duration(audio_path_b),
     }
 
@@ -270,32 +289,12 @@ def analyze_voices(audio_path_a, audio_path_b):
 
         except Exception as e:
             print(f"Error calculating aesthetic metrics: {e}")
-    else:
-        # Use mock values when audiobox_aesthetics is not available
-        print("Using mock aesthetic metrics (audiobox_aesthetics not available)")
-        aesthetic_metrics = {
-            "response_a": {
-                "production_quality": 6.5,
-                "content_usefulness": 7.2,
-                "content_enjoyment": 6.8,
-                "production_complexity": 5.5,
-            },
-            "response_b": {
-                "production_quality": 7.1,
-                "content_usefulness": 6.9,
-                "content_enjoyment": 7.5,
-                "production_complexity": 6.2,
-            }
-        }
-
-
     return {
         "response_a": metrics_a,
         "response_b": metrics_b,
         "comparison": comparison_metrics,
         "aesthetics": aesthetic_metrics,
-        # False => aesthetics are placeholder/mock values (audiobox not installed);
-        # the study saver records this so mock aesthetics aren't analyzed as real.
+        # False means the fields above are null because the optional model is absent.
         "audiobox_available": AUDIOBOX_AVAILABLE,
     }
 

@@ -177,28 +177,29 @@ function YamlPanel({ token, studyId, onChange }: any) {
 
 function TargetsPanel({ token, studyId, targets, engines, onChange }: any) {
   const [speakerId, setSpeakerId] = useState("")
-  const [engine, setEngine] = useState(engines[0] || "meanvc")
+  const [engine, setEngine] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const selectedEngine = engines.includes(engine) ? engine : (engines[0] || "")
 
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-end gap-2 rounded-lg border p-3">
         <Labeled label="Speaker ID"><Input value={speakerId} onChange={e => setSpeakerId(e.target.value)} placeholder="e.g. p225" className="w-36" /></Labeled>
         <Labeled label="Engine">
-          <select className="rounded-md border bg-background px-2 py-2 text-sm" value={engine} onChange={e => setEngine(e.target.value)}>
+          <select className="rounded-md border bg-background px-2 py-2 text-sm" value={selectedEngine} onChange={e => setEngine(e.target.value)}>
             {engines.map((en: string) => <option key={en} value={en}>{en}</option>)}
           </select>
         </Labeled>
         <input type="file" accept="audio/*" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm" />
-        <Button size="sm" disabled={busy || !speakerId.trim() || !file} onClick={async () => {
+        <Button size="sm" disabled={busy || !speakerId.trim() || !file || !selectedEngine} onClick={async () => {
           if (!file) return
           const id = speakerId.trim()
           setBusy(true); setErr(null)
           // One identifier names the voice: used as the link key, the display name,
           // and the target_speaker_id saved with each session.
-          try { await adminApi.uploadTarget(token, studyId, id, id, id, engine, file); setSpeakerId(""); setFile(null); onChange() }
+          try { await adminApi.uploadTarget(token, studyId, id, id, id, selectedEngine, file); setSpeakerId(""); setFile(null); onChange() }
           catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(false) }
         }}>Upload voice</Button>
         {err && <span className="text-xs text-destructive">{err}</span>}
@@ -225,6 +226,10 @@ function TargetsPanel({ token, studyId, targets, engines, onChange }: any) {
 function ParticipantsPanel({ token, studyId, participants, hasScenarios, onChange }: any) {
   const [count, setCount] = useState(5)
   const [err, setErr] = useState<string | null>(null)
+  const [balance, setBalance] = useState<any>(null)
+  useEffect(() => {
+    adminApi.counterbalance(token, studyId).then(setBalance).catch((e: any) => setErr(e?.message || String(e)))
+  }, [token, studyId, participants.length])
   return (
     <div>
       <div className="mb-4 flex items-end gap-2">
@@ -236,14 +241,28 @@ function ParticipantsPanel({ token, studyId, participants, hasScenarios, onChang
         {!hasScenarios && <span className="text-xs text-muted-foreground">Add a scenario first.</span>}
         {err && <span className="text-xs text-destructive">{err}</span>}
       </div>
+      {balance?.configured && (
+        <div className="mb-4 rounded-md border p-3 text-xs">
+          <div className="mb-1 font-semibold">Counterbalance allocation</div>
+          <div className="font-mono">{Object.entries(balance.variant_counts || {}).map(([id, n]) => `${id}: ${n}`).join(" · ")}</div>
+          {balance.awaiting_profile > 0 && <div className="mt-1">Awaiting gender response: {balance.awaiting_profile}</div>}
+          {Object.entries(balance.stratum_variant_counts || {}).map(([stratum, counts]: [string, any]) => (
+            <div key={stratum} className="mt-1 font-mono">{stratum}: {Object.entries(counts).map(([id, n]) => `${id}=${n}`).join(" · ")}</div>
+          ))}
+          {(balance.warnings || []).map((warning: string) => <p key={warning} className="mt-1 text-destructive">{warning}</p>)}
+        </div>
+      )}
       <div className="max-h-72 overflow-auto rounded-md border">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-left"><tr><th className="p-2">Participant</th><th className="p-2">Code</th></tr></thead>
+          <thead className="bg-muted/50 text-left"><tr><th className="p-2">Participant</th><th className="p-2">Code</th><th className="p-2">Gender group</th><th className="p-2">Variant</th><th className="p-2">Target</th></tr></thead>
           <tbody>
             {participants.map((p: any) => (
               <tr key={p.participant_id} className="border-t">
                 <td className="p-2">{p.participant_id}</td>
                 <td className="p-2 font-mono">{p.code}</td>
+                <td className="p-2">{p.allocation_stratum || (p.allocation_status === "awaiting_profile" ? "Awaiting response" : "—")}</td>
+                <td className="p-2 font-mono">{p.variant_id || (p.allocation_status === "awaiting_profile" ? "pending" : "manual")}</td>
+                <td className="p-2 font-mono">{p.target_ref || "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -257,12 +276,33 @@ function DataPanel({ token, studyId }: any) {
   const [runs, setRuns] = useState<any[]>([])
   const [sessions, setSessions] = useState<any[]>([])
   const [status, setStatus] = useState<any>(null)
+  const [vcStatus, setVcStatus] = useState<any>(null)
+  const [vcScope, setVcScope] = useState("all")
   const load = () => {
     adminApi.runs(token, studyId).then(r => setRuns(r.runs || [])).catch(() => {})
     adminApi.sessions(token, studyId).then(r => setSessions(r.sessions || [])).catch(() => {})
     adminApi.analyzeStatus(token, studyId).then(setStatus).catch(() => {})
+    adminApi.vcQualityStatus(token, studyId).then(setVcStatus).catch(() => {})
   }
   useEffect(() => { load() }, [token, studyId]) // eslint-disable-line
+  useEffect(() => {
+    if (!status?.running) return
+    const poll = setInterval(async () => {
+      const next = await adminApi.analyzeStatus(token, studyId)
+      setStatus(next)
+      if (!next.running) load()
+    }, 1500)
+    return () => clearInterval(poll)
+  }, [status?.running, token, studyId]) // eslint-disable-line
+  useEffect(() => {
+    if (!vcStatus?.running) return
+    const poll = setInterval(async () => {
+      const next = await adminApi.vcQualityStatus(token, studyId)
+      setVcStatus(next)
+      if (!next.running) load()
+    }, 1500)
+    return () => clearInterval(poll)
+  }, [vcStatus?.running, token, studyId]) // eslint-disable-line
   const download = async (fmt: "json" | "zip") => {
     const r = await fetch(adminApi.exportUrl(studyId, fmt), { headers: { "X-Study-Admin-Token": token } })
     const blob = await r.blob()
@@ -270,15 +310,19 @@ function DataPanel({ token, studyId }: any) {
     a.download = `study${studyId}_export.${fmt}`; a.click(); URL.revokeObjectURL(a.href)
   }
   const runAnalysis = async (force: boolean) => {
-    await adminApi.analyze(token, studyId, force)
-    const poll = setInterval(async () => {
-      const s = await adminApi.analyzeStatus(token, studyId)
-      setStatus(s)
-      if (!s.running) { clearInterval(poll); load() }
-    }, 1500)
+    setStatus(await adminApi.analyze(token, studyId, force))
   }
-  const pending = sessions.filter(s => !s.metrics).length
+  const pending = sessions.filter(s => !s.metrics || s.vc_quality_status !== "complete").length
   const running = status?.running
+  const vcRunning = vcStatus?.running
+  const phaseLabel = status?.phase === "vc_quality" ? "VC quality" : "Transcription and timing"
+  const runVCQuality = async (force: boolean) => {
+    const body: { participant_id?: string; session_id?: string; force?: boolean } = { force }
+    if (vcScope.startsWith("participant:")) body.participant_id = vcScope.slice("participant:".length)
+    if (vcScope.startsWith("session:")) body.session_id = vcScope.slice("session:".length)
+    setVcStatus(await adminApi.vcQuality(token, studyId, body))
+  }
+  const participants = Array.from(new Set(sessions.map(s => s.participant_id)))
 
   return (
     <div>
@@ -289,24 +333,47 @@ function DataPanel({ token, studyId }: any) {
       </div>
 
       <div className="mb-4 rounded-lg border p-3">
-        <div className="mb-1 text-sm font-semibold">Analysis (transcription + VC-quality metrics)</div>
+        <div className="mb-1 text-sm font-semibold">Analysis pipeline</div>
         <p className="mb-2 text-xs text-muted-foreground">
-          Run this <b>after data collection</b> — it's model inference and competes with live study sessions.
+          Runs transcription and interaction timing first, then VC-quality scoring. Run after data collection.
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" disabled={running} onClick={() => runAnalysis(false)}>
-            {running ? `Analyzing ${status.done}/${status.total}…` : `Run analysis (${pending} pending)`}
+          <Button size="sm" disabled={running || vcRunning} onClick={() => runAnalysis(false)}>
+            {running ? `${phaseLabel} ${status.done}/${status.total}…` : `Run analysis (${pending} pending)`}
           </Button>
-          <Button size="sm" variant="ghost" disabled={running} onClick={() => runAnalysis(true)}>Re-analyze all</Button>
+          <Button size="sm" variant="ghost" disabled={running || vcRunning}
+            onClick={() => runAnalysis(true)}>Create all new snapshots</Button>
           {running && status.current && <span className="text-xs text-muted-foreground">{status.current}</span>}
+          {!running && status?.error && <span className="text-xs text-destructive">{status.error}</span>}
+        </div>
+      </div>
+
+      <div className="mb-4 rounded-lg border p-3">
+        <div className="mb-1 text-sm font-semibold">VC-quality rerun</div>
+        <p className="mb-2 text-xs text-muted-foreground">
+          Optional scoped rerun using the frozen target, raw microphone, transmitted audio, and route events.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="rounded-md border bg-background px-2 py-1.5 text-sm" value={vcScope}
+            onChange={e => setVcScope(e.target.value)} disabled={running || vcRunning}>
+            <option value="all">All study sessions</option>
+            {participants.map(pid => <option key={pid} value={`participant:${pid}`}>Participant {pid}</option>)}
+            {sessions.map(s => <option key={s.session_id} value={`session:${s.session_id}`}>Session {s.session_id}</option>)}
+          </select>
+          <Button size="sm" disabled={running || vcRunning} onClick={() => runVCQuality(false)}>
+            {vcRunning ? `Scoring ${vcStatus.done}/${vcStatus.total}…` : "Run VC quality"}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={running || vcRunning}
+            onClick={() => runVCQuality(true)}>Create new snapshot</Button>
+          {vcRunning && vcStatus.current && <span className="text-xs text-muted-foreground">{vcStatus.current}</span>}
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Table title="Runs" head={["Participant", "Status", "Left"]}
           rows={runs.map(r => [r.participant_id, r.status, r.remaining_seconds ? `${Math.floor(r.remaining_seconds / 60)}m` : "—"])} />
-        <Table title="Sessions" head={["Session", "Condition", "Analysis"]}
-          rows={sessions.map(s => [s.session_id, s.voice_condition, s.metrics ? "✓ analyzed" : "pending"])} />
+        <Table title="Sessions" head={["Session", "Condition", "Preprocess", "VC quality"]}
+          rows={sessions.map(s => [s.session_id, s.voice_condition, s.metrics ? "analyzed" : "pending", s.vc_quality_status || "pending"])} />
       </div>
     </div>
   )

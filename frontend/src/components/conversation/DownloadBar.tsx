@@ -1,8 +1,16 @@
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@shared/ui/button"
 import { Spinner } from "@shared/ui/spinner"
-import { Download, Play, Pause, BarChart3 } from "lucide-react"
+import { Download, Play, Pause, BarChart3, FileJson, Activity, ChevronDown } from "lucide-react"
 import { formatTime } from "@shared/lib/utils"
+import type { VcQualityMetric } from "@shared/services/api"
+
+// X-VC objective metrics available for explicit ad-hoc analysis.
+const METRIC_CHOICES: { key: VcQualityMetric; label: string; hint: string }[] = [
+  { key: "intelligibility",   label: "Intelligibility (WER)", hint: "source and converted ASR" },
+  { key: "speaker_similarity", label: "Speaker similarity (SIM)", hint: "WavLM-large" },
+  { key: "utmos",              label: "Naturalness (UTMOS)", hint: "UTMOS22" },
+]
 
 interface Props {
   userWavUrl: string | null
@@ -14,18 +22,56 @@ interface Props {
   onPlayingChange: (p: boolean) => void
   vcMetricsLoading?: boolean
   vcMetricsReady?: boolean
+  canTriggerVcMetrics?: boolean
+  onTriggerVcMetrics?: () => void
   onShowVcMetrics?: () => void
+  vcQualityLoading?: boolean
+  vcQualityReady?: boolean
+  canTriggerVcQuality?: boolean
+  onTriggerVcQuality?: (skipMetrics: VcQualityMetric[]) => void
+  onShowVcQuality?: () => void
+  onDownloadVcQuality?: () => void
 }
 
 export function DownloadBar({
   userWavUrl, personaplexWavUrl, mergedWavUrl, originalUserWavUrl,
   onDownloadTranscript, onPlayTimeChange, onPlayingChange,
-  vcMetricsLoading, vcMetricsReady, onShowVcMetrics,
+  vcMetricsLoading, vcMetricsReady, canTriggerVcMetrics, onTriggerVcMetrics, onShowVcMetrics,
+  vcQualityLoading, vcQualityReady, canTriggerVcQuality, onTriggerVcQuality, onShowVcQuality, onDownloadVcQuality,
 }: Props) {
   const [playing, setPlaying] = useState(false)
   const [playTime, setPlayTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  // Dropdown state for the "Analyze VC quality" button.
+  const [vcQualityMenuOpen, setVcQualityMenuOpen] = useState(false)
+  const [enabledMetrics, setEnabledMetrics] = useState<Record<VcQualityMetric, boolean>>({
+    intelligibility: true,
+    speaker_similarity: true,
+    utmos: true,
+  })
+  const vcQualityMenuRef = useRef<HTMLDivElement | null>(null)
+
+  // Close the dropdown when clicking outside.
+  useEffect(() => {
+    if (!vcQualityMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (vcQualityMenuRef.current && !vcQualityMenuRef.current.contains(e.target as Node)) {
+        setVcQualityMenuOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", onDown)
+    return () => document.removeEventListener("mousedown", onDown)
+  }, [vcQualityMenuOpen])
+
+  const handleRunVcQuality = () => {
+    const skip = (Object.entries(enabledMetrics) as [VcQualityMetric, boolean][])
+      .filter(([, on]) => !on)
+      .map(([k]) => k)
+    setVcQualityMenuOpen(false)
+    onTriggerVcQuality?.(skip)
+  }
 
   const updatePlaying = (p: boolean) => { setPlaying(p); onPlayingChange(p) }
   const updatePlayTime = (t: number) => { setPlayTime(t); onPlayTimeChange(t) }
@@ -69,9 +115,94 @@ export function DownloadBar({
               <Spinner className="size-3" /> Analyzing voice…
             </span>
           )}
+          {!vcMetricsLoading && !vcMetricsReady && canTriggerVcMetrics && onTriggerVcMetrics && (
+            <Button variant="outline" size="xs" onClick={onTriggerVcMetrics} className="border-purple-500/50 text-purple-300 hover:bg-purple-500/10">
+              <BarChart3 /> Analyze voice change
+            </Button>
+          )}
           {vcMetricsReady && !vcMetricsLoading && (
             <Button variant="outline" size="xs" onClick={onShowVcMetrics} className="border-purple-500/50 text-purple-300 hover:bg-purple-500/10">
               <BarChart3 /> Voice change metrics
+            </Button>
+          )}
+          {vcQualityLoading && (
+            <span className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+              <Spinner className="size-3" /> Scoring VC quality…
+            </span>
+          )}
+          {!vcQualityLoading && !vcQualityReady && canTriggerVcQuality && onTriggerVcQuality && (
+            <div ref={vcQualityMenuRef} className="relative">
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => setVcQualityMenuOpen((v) => !v)}
+                aria-haspopup="true"
+                aria-expanded={vcQualityMenuOpen}
+                className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10"
+              >
+                <Activity /> Analyze VC quality <ChevronDown className="ml-0.5 size-3" />
+              </Button>
+              {vcQualityMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 z-30 mt-1 w-72 rounded-lg border bg-card shadow-xl p-3 space-y-2"
+                >
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Metrics to compute
+                  </div>
+                  <div className="space-y-1.5">
+                    {METRIC_CHOICES.map((m) => (
+                      <label
+                        key={m.key}
+                        className="flex items-start gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 size-3.5 accent-emerald-500"
+                          checked={enabledMetrics[m.key]}
+                          onChange={() =>
+                            setEnabledMetrics((prev) => ({ ...prev, [m.key]: !prev[m.key] }))
+                          }
+                        />
+                        <span className="flex-1 leading-tight">
+                          <span className="font-medium">{m.label}</span>
+                          <span className="block text-[10px] text-muted-foreground">{m.hint}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      className="text-[10px] text-muted-foreground hover:text-foreground"
+                      onClick={() =>
+                        setEnabledMetrics({
+                          intelligibility: true, speaker_similarity: true, utmos: true,
+                        })
+                      }
+                    >
+                      Enable all
+                    </button>
+                    <Button
+                      variant="default"
+                      size="xs"
+                      onClick={handleRunVcQuality}
+                      className="bg-emerald-600 text-white hover:bg-emerald-500"
+                    >
+                      Run analysis
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {vcQualityReady && !vcQualityLoading && onShowVcQuality && (
+            <Button variant="outline" size="xs" onClick={onShowVcQuality} className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10">
+              <Activity /> VC quality
+            </Button>
+          )}
+          {vcQualityReady && !vcQualityLoading && onDownloadVcQuality && (
+            <Button variant="outline" size="xs" onClick={onDownloadVcQuality} className="border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10">
+              <FileJson /> VC quality (JSON)
             </Button>
           )}
           <Button variant="outline" size="xs" onClick={onDownloadTranscript}>

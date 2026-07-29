@@ -4,9 +4,14 @@ import { adminApi } from "@/api"
 import { ItemListEditor, type Item } from "@/components/admin/ItemListEditor"
 
 const SECTIONS: { key: string; label: string }[] = [
-  { key: "consent", label: "Audio check" },
+  { key: "eligibility", label: "Eligibility" },
+  { key: "consent", label: "Consent" },
   { key: "background", label: "Background" },
+  { key: "audio_check", label: "Audio check" },
   { key: "post", label: "Post (shared)" },
+  { key: "pre_playback", label: "Before playback" },
+  { key: "playback", label: "Playback" },
+  { key: "debrief", label: "Debrief" },
   { key: "final", label: "Final" },
 ]
 

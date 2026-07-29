@@ -25,7 +25,6 @@ export function useRecorder(onAudioData: (buf: ArrayBuffer) => void) {
   });
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const animFrameRef = useRef<number>(0);
   const mergedCtxRef = useRef<AudioContext | null>(null);
   const mergedDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const mergedRecorderRef = useRef<MediaRecorder | null>(null);
@@ -53,20 +52,13 @@ export function useRecorder(onAudioData: (buf: ArrayBuffer) => void) {
     await recorder.start();
     setState((s) => ({ ...s, recorder, isRecording: true, recordedChunks: [], recordingAvailable: false }));
 
-    // Amplitude analyzer
-    const analyzerContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const analyzer = analyzerContext.createAnalyser();
-    analyzer.fftSize = 256;
-    const sourceNode = analyzerContext.createMediaStreamSource(stream);
-    sourceNode.connect(analyzer);
-    const dataArray = new Uint8Array(256);
-    const poll = () => {
-      analyzer.getByteFrequencyData(dataArray as any);
-      const avg = (dataArray as unknown as number[]).reduce((a, b) => a + b, 0) / dataArray.length;
-      setState((s) => ({ ...s, amplitude: avg }));
-      animFrameRef.current = requestAnimationFrame(poll);
-    };
-    poll();
+    // NOTE: a per-frame amplitude analyzer used to live here, calling setState
+    // ~60×/sec. `amplitude` is consumed nowhere, so that was re-rendering the
+    // whole conversation tree on every animation frame — starving the main
+    // thread that also decodes/schedules PersonaPlex's Opus audio in the WS
+    // onmessage handler, which caused audible playback stutter. Removed. (It
+    // also leaked an AudioContext that was never closed.) Re-add a THROTTLED
+    // meter if a mic level indicator is ever needed.
 
     // Mic-only WebM recorder
     const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
@@ -102,8 +94,6 @@ export function useRecorder(onAudioData: (buf: ArrayBuffer) => void) {
     setState((s) => ({ ...s, isRecording: false }));
     mediaRecorderRef.current?.stop();
     recordingStreamRef.current?.getTracks().forEach((t) => t.stop());
-    cancelAnimationFrame(animFrameRef.current);
-    setState((s) => ({ ...s, amplitude: 0 }));
     mergedRecorderRef.current?.stop();
     setTimeout(() => {
       mergedCtxRef.current?.close();

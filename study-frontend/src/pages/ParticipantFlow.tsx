@@ -10,11 +10,18 @@ import { AudioCheck } from "@/components/AudioCheck"
 
 type Phase =
   | "code" | "welcome"
-  | "consent" | "audiocheck" | "background" | "practice"
-  | "scenario" | "post" | "final" | "completion"
+  | "eligibility" | "ineligible" | "consent" | "declined" | "background" | "audio_check"
+  | "scenario" | "post" | "pre_playback" | "playback" | "debrief" | "final" | "completion"
 
-function sessionIdFor(pid: string, order: number) {
-  return `${pid}_S${String(order).padStart(2, "0")}`
+function mergePostItems(shared: QItem[], scenarioItems: QItem[]): QItem[] {
+  const merged = [...shared]
+  for (const item of scenarioItems) {
+    const anchor = item.insert_after
+    const index = anchor ? merged.findIndex(candidate => candidate.id === anchor) : -1
+    if (index < 0) merged.push(item)
+    else merged.splice(index + 1, 0, item)
+  }
+  return merged
 }
 
 export function ParticipantFlow() {
@@ -22,6 +29,7 @@ export function ParticipantFlow() {
   const [data, setData] = useState<EnterResult | null>(null)
   const [phase, setPhase] = useState<Phase>("code")
   const [scenarioIdx, setScenarioIdx] = useState(0)
+  const [postSessionId, setPostSessionId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deadline, setDeadline] = useState<number | null>(null)
@@ -78,17 +86,20 @@ export function ParticipantFlow() {
     const step = run.current_step || {}
     const p = step.phase as Phase | undefined
     if (p === "background") { setPhase("background"); return }
+    if (p === "audio_check") { setPhase("audio_check"); return }
     if (p === "consent") { setPhase("consent"); return }
-    if (p === "audiocheck") { setPhase("audiocheck"); return }
+    if (p === "eligibility") { setPhase("eligibility"); return }
     if (p === "scenario" || p === "post") {
       setScenarioIdx(Math.max(0, (step.scenario_order ?? 1) - 1))
+      setPostSessionId(typeof step.session_id === "string" ? step.session_id : null)
       setPhase(p)
       return
     }
     if (p === "final") { setPhase("final"); return }
+    if (p === "pre_playback" || p === "playback" || p === "debrief") { setPhase(p); return }
     setScenarioIdx(0)
-    setPhase("consent")
-  }, [])
+    setPhase(q("eligibility").length ? "eligibility" : "consent")
+  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const setStep = useCallback((current_step: Record<string, any>, completed: Record<string, any> = {}) => {
     if (code) api.progress(code, current_step, completed).catch(() => {})
@@ -102,14 +113,15 @@ export function ParticipantFlow() {
       const secs = res?.run?.remaining_seconds ?? 3600
       setDeadline(Date.now() + secs * 1000)
       if (mode === "restart") {
-        setScenarioIdx(0); setStep({ phase: "consent" }); setPhase("consent")
+        const first = q("eligibility").length ? "eligibility" : "consent"
+        setScenarioIdx(0); setPostSessionId(null); setStep({ phase: first }); setPhase(first)
       } else {
         goToRunStep(res.run)
       }
     } catch (e: any) {
       setError(e?.message || "Could not start")
     } finally { setBusy(false) }
-  }, [code, goToRunStep, setStep])
+  }, [code, data, goToRunStep, setStep]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- render ----------
   if (phase === "code") {
@@ -132,7 +144,6 @@ export function ParticipantFlow() {
     return (
       <Centered>
         <h1 className="text-2xl font-bold">{data.study_name}</h1>
-        <p className="text-sm text-muted-foreground">Participant {data.participant_id}</p>
         {st === "submitted" ? (
           <>
             <p className="text-sm">You have already completed this study. Thank you!</p>
@@ -173,16 +184,39 @@ export function ParticipantFlow() {
     </div>
   )
 
-  // Consent FIRST — nothing is recorded/sent to the VC engine until the participant agrees.
-  if (phase === "consent" && data) {
+  if (phase === "eligibility" && data) {
     return Frame(
-      <QuestionnaireForm title="Consent" items={q("consent")} submitLabel="I agree — continue" busy={busy}
+      <QuestionnaireForm title="Eligibility" items={q("eligibility")} busy={busy}
+        onSubmit={async (ans) => {
+          if (ans.eligibility_18 !== "Yes") { setPhase("ineligible"); return }
+          setBusy(true)
+          try {
+            await api.questionnaire(null, code, "eligibility", ans)
+            setStep({ phase: "consent" })
+            setPhase("consent")
+          } catch (e) { handleErr(e) } finally { setBusy(false) }
+        }} />
+    )
+  }
+
+  if (phase === "ineligible") {
+    return <Centered><h1 className="text-2xl font-bold">Thank you for your interest</h1><p className="text-sm text-muted-foreground">This study is limited to participants aged 18 or older.</p></Centered>
+  }
+
+  if (phase === "declined") {
+    return <Centered><h1 className="text-2xl font-bold">Thank you</h1><p className="text-sm text-muted-foreground">You have chosen not to participate. No study interaction will begin.</p></Centered>
+  }
+
+  if (phase === "background" && data) {
+    return Frame(
+      <QuestionnaireForm title="Background questionnaire" items={q("background")} submitLabel="Continue to audio check" busy={busy}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
-            await api.questionnaire(null, code, "consent", ans)
-            setStep({ phase: "audiocheck" })
-            setPhase("audiocheck")
+            await api.questionnaire(null, code, "background", ans)
+            setData(await api.enter(code))
+            setStep({ phase: "audio_check" })
+            setPhase("audio_check")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
     )
@@ -190,8 +224,9 @@ export function ParticipantFlow() {
 
   if (phase === "audiocheck" && data) {
     return Frame(
-      <AudioCheck code={code}
-        onDone={async (ans) => {
+      <QuestionnaireForm title="Participant information and consent" items={q("consent")} submitLabel="Continue" busy={busy}
+        onSubmit={async (ans) => {
+          if (ans.consent_decision !== "I consent and wish to continue.") { setPhase("declined"); return }
           setBusy(true)
           try {
             await api.questionnaire(null, code, "consent", ans)   // { _audio_check: … }
@@ -202,38 +237,27 @@ export function ParticipantFlow() {
     )
   }
 
-  if (phase === "background" && data) {
+  if (phase === "audio_check" && data) {
     return Frame(
-      <QuestionnaireForm title="Background questionnaire" items={q("background")}
-        submitLabel={data.test_scenario ? "Continue to practice" : "Start scenarios"} busy={busy}
-        onSubmit={async (ans) => {
+      <AudioCheck code={code} items={q("audio_check")}
+        onDone={async (ans) => {
           setBusy(true)
           try {
-            await api.questionnaire(null, code, "background", ans)
-            if (data.test_scenario) { setStep({ phase: "practice" }); setPhase("practice") }
-            else { setScenarioIdx(0); setStep({ phase: "scenario", scenario_order: 1 }); setPhase("scenario") }
+            await api.questionnaire(null, code, "audio_check", ans)
+            setScenarioIdx(0)
+            setStep({ phase: "scenario", scenario_order: 1 })
+            setPhase("scenario")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
-    )
-  }
-
-  // Practice/test scenario — always runs first; shown as practice, still recorded but
-  // flagged (session id ends _TEST) so it doesn't count toward the study.
-  if (phase === "practice" && data && data.test_scenario) {
-    return Frame(
-      <ScenarioCall code={code} scenario={data.test_scenario} isTest onDone={() => {
-        setScenarioIdx(0)
-        setStep({ phase: "scenario", scenario_order: 1 })
-        setPhase("scenario")
-      }} />
     )
   }
 
   if (phase === "scenario" && data) {
     const scenario = data.scenarios[scenarioIdx]
     return Frame(
-      <ScenarioCall code={code} scenario={scenario} onDone={() => {
-        setStep({ phase: "post", scenario_order: scenario.scenario_order })
+      <ScenarioCall code={code} scenario={scenario} onDone={(sessionId) => {
+        setPostSessionId(sessionId)
+        setStep({ phase: "post", scenario_order: scenario.scenario_order, session_id: sessionId })
         setPhase("post")
       }} />
     )
@@ -241,34 +265,90 @@ export function ParticipantFlow() {
 
   if (phase === "post" && data) {
     const scenario = data.scenarios[scenarioIdx]
-    const sid = sessionIdFor(data.participant_id, scenario.scenario_order)
-    const postItems = [...q("post"), ...((scenario.post_items as QItem[]) || [])]
+    const sid = postSessionId
+    const isPractice = scenario.study_role === "practice"
+    const postItems = isPractice
+      ? ((scenario.post_items as QItem[]) || [])
+      : mergePostItems(q("post"), (scenario.post_items as QItem[]) || [])
     return Frame(
-      <QuestionnaireForm title={`After scenario ${scenario.scenario_order}`} items={postItems}
+      <QuestionnaireForm title={isPractice ? "Practice check" : `After scenario ${scenario.scenario_order - 1}`} items={postItems}
         submitLabel={scenarioIdx < data.scenarios.length - 1 ? "Next scenario" : "Final questions"} busy={busy}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
-            await api.questionnaire(sid, code, "post", ans)
+            if (!sid) throw new Error("Could not identify the completed scenario session")
+            await api.questionnaire(sid, code, isPractice ? "practice_post" : "post", ans)
             if (scenarioIdx < data.scenarios.length - 1) {
               const next = scenarioIdx + 1
               setScenarioIdx(next)
+              setPostSessionId(null)
               setStep({ phase: "scenario", scenario_order: data.scenarios[next].scenario_order })
               setPhase("scenario")
             } else {
-              setStep({ phase: "final" })
-              setPhase("final")
+              const nextPhase = q("pre_playback").length ? "pre_playback" : "final"
+              setStep({ phase: nextPhase })
+              setPhase(nextPhase)
             }
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
     )
   }
 
+  const analyticalScenarioOptions = data?.scenarios
+    .filter(s => s.study_role !== "practice")
+    .map(s => s.title)
+    .filter(Boolean) || []
+
+  if (phase === "pre_playback" && data) {
+    return Frame(
+      <QuestionnaireForm title="Post-session questionnaire" items={q("pre_playback")}
+        submitLabel="Continue to recording" busy={busy} scenarioOptions={analyticalScenarioOptions}
+        onSubmit={async (ans) => {
+          setBusy(true)
+          try {
+            await api.questionnaire(null, code, "pre_playback", ans)
+            setStep({ phase: "playback" }); setPhase("playback")
+          } catch (e) { handleErr(e) } finally { setBusy(false) }
+        }} />
+    )
+  }
+
+  if (phase === "playback" && data) {
+    return Frame(
+      <QuestionnaireForm title="Recording and voice ratings" items={q("playback")}
+        submitLabel="Continue to debriefing" busy={busy}
+        playbackUrl={(item) => api.playbackUrl(
+          code, item.scenario_order, item.track, item.condition, item.max_duration_s)}
+        onSubmit={async (ans) => {
+          setBusy(true)
+          try {
+            await api.questionnaire(null, code, "playback", ans)
+            setStep({ phase: "debrief" }); setPhase("debrief")
+          } catch (e) { handleErr(e) } finally { setBusy(false) }
+        }} />
+    )
+  }
+
+  if (phase === "debrief" && data) {
+    return Frame(
+      <QuestionnaireForm title="Final comment and debriefing" items={q("debrief")}
+        submitLabel="Submit study" busy={busy}
+        onSubmit={async (ans) => {
+          setBusy(true)
+          try {
+            await api.questionnaire(null, code, "debrief", ans)
+            await api.submit(code)
+            setDeadline(null); setPhase("completion")
+          } catch (e) { handleErr(e) } finally { setBusy(false) }
+        }} />
+    )
+  }
+
   if (phase === "final" && data) {
-    const scenarioOptions = data.scenarios.map(s => s.title).filter(Boolean)
     return Frame(
       <QuestionnaireForm title="Final questionnaire" items={q("final")} submitLabel="Submit study" busy={busy}
-        scenarioOptions={scenarioOptions} playbackUrl={(item) => api.playbackUrl(code, item.scenario_order, item.track)}
+        scenarioOptions={analyticalScenarioOptions} playbackUrl={(item) => api.playbackUrl(
+          code, item.scenario_order, item.track, item.condition, item.max_duration_s)}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
