@@ -106,6 +106,7 @@ device: torch.device | None = None
 SR = 16000
 HP_CUT = 0.0
 MASK_TARGET_COND = True
+CONTENT_PATH_WARMED = False
 
 # target_id -> (speaker_condition, frame_condition)
 targets: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -269,6 +270,7 @@ class XVCStreamSession:
 
 async def handle_load_target(request: web.Request) -> web.Response:
     """POST /api/meanvc/load-target - upload target WAV, precompute conditions."""
+    global CONTENT_PATH_WARMED
     post = await request.post()
     field = post.get("wav")
     if field is None:
@@ -293,6 +295,12 @@ async def handle_load_target(request: web.Request) -> web.Response:
         else:
             target_wav_cond = target_wav
         spk, frame = precompute_conditions(model, target_wav, target_wav_cond)
+        if not CONTENT_PATH_WARMED:
+            warmup_started = time.perf_counter()
+            XVCStreamSession(spk, frame).warm()
+            CONTENT_PATH_WARMED = True
+            logger.info("[xvc] content path warmed in %.1f ms",
+                        (time.perf_counter() - warmup_started) * 1000.0)
         targets[target_id] = (spk, frame)
         duration = round(len(target_np) / SR, 2)
         logger.info(f"[xvc] loaded target {target_id} ({duration}s)")
@@ -452,21 +460,6 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         return schedule[-1]
 
     loop = asyncio.get_event_loop()
-    xvc_session_warmup_ms = 0.0
-    if vc_sessions:
-        warmup_started = time.perf_counter()
-        try:
-            for vc_session in vc_sessions.values():
-                await loop.run_in_executor(None, vc_session.warm)
-        except Exception as exc:
-            logger.exception("[xvc proxy] session warm-up failed")
-            await browser_ws.send_json({"error": f"XVC warm-up failed: {exc}"})
-            await browser_ws.close()
-            return browser_ws
-        xvc_session_warmup_ms = (time.perf_counter() - warmup_started) * 1000.0
-        logger.info("[xvc proxy] warmed %d session(s) in %.1f ms",
-                    len(vc_sessions), xvc_session_warmup_ms)
-
     # X-VC outputs 16 kHz; sphn's Opus encoder only accepts 24/48 kHz (PersonaPlex
     # uses 24 kHz = its mimi rate). Encode at 24 kHz and upsample before encoding.
     opus_writer = sphn.OpusStreamWriter(24000)
@@ -529,8 +522,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     if events:
         events.add("stream_start", input_sample_rate_hz=SR,
                    transmitted_sample_rate_hz=SR, model_bound_sample_rate_hz=24000,
-                   schedule=schedule,
-                   xvc_session_warmup_ms=round(xvc_session_warmup_ms, 3))
+                   schedule=schedule, xvc_content_path_warmed=CONTENT_PATH_WARMED)
         for segment in schedule[1:]:
             events.add("route_switch_requested", requested_start_s=segment.get("start_s"),
                        requested_input_sample=int(float(segment.get("start_s") or 0) * SR),
@@ -795,7 +787,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     "xvc_silence_bypassed_windows": vc_silence_bypassed_windows,
                     "xvc_silence_gate_rms": SILENCE_GATE_RMS,
                     "xvc_silence_hangover_ms": SILENCE_HANGOVER_MS,
-                    "xvc_session_warmup_ms": round(xvc_session_warmup_ms, 3),
+                    "xvc_content_path_warmed": CONTENT_PATH_WARMED,
                     "frame_header": "HMO1/<4sIIII>",
                 },
             )
