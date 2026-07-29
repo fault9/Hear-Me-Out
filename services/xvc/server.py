@@ -198,6 +198,7 @@ class XVCStreamSession:
             0, int(np.ceil(SILENCE_HANGOVER_MS / self.current_ms)))
         self.silence_hangover_remaining = 0
 
+    @torch.inference_mode()
     def feed(self, pcm: np.ndarray) -> list[np.ndarray]:
         """Append incoming 16 kHz PCM, return any completed current-region chunks."""
         self.buf = np.concatenate([self.buf, pcm.astype(np.float32)])
@@ -242,6 +243,7 @@ class XVCStreamSession:
             self.i += 1
         return outs
 
+    @torch.inference_mode()
     def warm(self) -> None:
         """Warm content-path CUDA kernels without consuming participant audio."""
         segment_samples = (
