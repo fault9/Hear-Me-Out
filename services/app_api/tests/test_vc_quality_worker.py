@@ -61,6 +61,16 @@ class VCQualityWorkerTests(unittest.TestCase):
             [(1, "wer"), (1, "sim")],
         )
 
+    def test_old_complete_profile_is_rescored(self):
+        self.assertTrue(vc_quality_worker._needs_scoring({
+            "vc_quality_status": "complete",
+            "vc_quality": {"metric_profile": "xvc_objective_v1"},
+        }))
+        self.assertFalse(vc_quality_worker._needs_scoring({
+            "vc_quality_status": "complete",
+            "vc_quality": {"metric_profile": vc_quality_worker.METRIC_PROFILE},
+        }))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,7 @@ from study.vc_quality_analysis import STUDY_DATA_DIR, status_path  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VC_QUALITY_DIR = Path(os.environ.get("VC_QUAL_DIR", REPO_ROOT / "services" / "vc_quality"))
 VC_QUALITY_SCRIPT = VC_QUALITY_DIR / "vc_quality.py"
+METRIC_PROFILE = "xvc_objective_v2"
 
 
 def _write(**values) -> None:
@@ -108,6 +109,13 @@ def _completion(scores: list[dict]) -> tuple[str, list[dict]]:
     return ("complete" if not unavailable else "partial"), unavailable
 
 
+def _needs_scoring(session: dict) -> bool:
+    result = session.get("vc_quality") or {}
+    return (session.get("vc_quality_status") != "complete"
+            or not isinstance(result, dict)
+            or result.get("metric_profile") != METRIC_PROFILE)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("study_id", type=int)
@@ -124,7 +132,7 @@ def main() -> None:
         sessions = [s for s in sessions if s["session_id"] == args.session]
     sessions = [s for s in sessions if (s.get("files") or {}).get("participant")
                 and (s.get("files") or {}).get("participant_raw")
-                and (args.force or s.get("vc_quality_status") != "complete")]
+                and (args.force or _needs_scoring(s))]
     total = len(sessions)
     done = 0
     analysis_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -184,7 +192,7 @@ def main() -> None:
             result_status = completion if scores else "not_applicable"
             storage_status = completion if scores else "complete"
             result = {"status": result_status, "analysis_id": analysis_id,
-                      "metric_profile": "xvc_objective_v1",
+                      "metric_profile": METRIC_PROFILE,
                       "inputs": item["inputs"], "scores": scores,
                       "unavailable_metrics": unavailable,
                       "scorer_log": scorer_log}
