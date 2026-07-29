@@ -507,6 +507,7 @@ class TimingAnalysisTests(unittest.TestCase):
             self.assertEqual(
                 result["route_switches"][0]["participant_timeline_ms"], 128)
             self.assertEqual(result["summary"]["barge_in_attempts"], 1)
+            self.assertEqual(result["schema"], "hmo.timing-analysis.v2")
             self.assertEqual(result["status"], "estimated_pending_validation")
             self.assertTrue((session_dir / "analysis" / "timing" / "analysis-1"
                              / "timing.json").exists())

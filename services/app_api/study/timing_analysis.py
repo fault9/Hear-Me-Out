@@ -14,6 +14,8 @@ import numpy as np
 from .artifacts import atomic_write_json, file_record
 from .transition_analysis import read_events
 
+TIMING_SCHEMA = "hmo.timing-analysis.v2"
+
 
 def _mono_float(path: Path) -> tuple[int, np.ndarray]:
     with wave.open(str(path), "rb") as wav:
@@ -275,7 +277,7 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
     overlaps = _overlaps(participant, assistant, 200.0)
     barge_ins = _barge_ins(participant, assistant)
     result: dict[str, Any] = {
-        "schema": "hmo.timing-analysis.v1", "analysis_id": analysis_id,
+        "schema": TIMING_SCHEMA, "analysis_id": analysis_id,
         "session_id": session.get("session_id"),
         "status": "estimated_pending_validation",
         "participant_intervals": participant, "assistant_intervals": assistant,

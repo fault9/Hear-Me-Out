@@ -39,7 +39,7 @@ except Exception:  # noqa: BLE001
 from study.analysis import (STUDY_DATA_DIR, _session_paths, run_session_analysis,
                             status_path)  # noqa: E402
 from study.storage import get_backend  # noqa: E402
-from study.timing_analysis import prepare_timing_analysis  # noqa: E402
+from study.timing_analysis import TIMING_SCHEMA, prepare_timing_analysis  # noqa: E402
 from study.vc_quality_analysis import status_path as vc_quality_status_path  # noqa: E402
 
 # Shared OTel helper (services/ is on sys.path via the insert above). No-op unless
@@ -89,19 +89,28 @@ def _run_vc_quality(study_id: int, force: bool) -> str | None:
     return None
 
 
+def _needs_timing(session: dict) -> bool:
+    analysis = (session.get("artifact_manifest") or {}).get("analysis") or {}
+    latest = analysis.get("timing_latest") or {}
+    relative_path = latest.get("path") if isinstance(latest, dict) else None
+    if not relative_path:
+        return True
+    try:
+        result = json.loads((STUDY_DATA_DIR / relative_path).read_text())
+    except (OSError, ValueError, TypeError):
+        return True
+    return result.get("schema") != TIMING_SCHEMA
+
+
 def main() -> None:
     study_id = int(sys.argv[1])
     force = "--force" in sys.argv[2:]
 
     backend = get_backend()
     sessions = backend.list_sessions(study_id)
-    def needs_timing(session: dict) -> bool:
-        analysis = (session.get("artifact_manifest") or {}).get("analysis") or {}
-        return not analysis.get("timing_latest")
-
     pending = [s for s in sessions
                if (s.get("files") or {}).get("participant")
-               and (force or s.get("metrics") is None or needs_timing(s))]
+               and (force or s.get("metrics") is None or _needs_timing(s))]
     total = len(pending)
     done = 0
     _write(running=True, phase="preprocessing", done=0, total=total,
@@ -121,7 +130,7 @@ def main() -> None:
             with span_cm:
                 if force or s.get("metrics") is None:
                     run_session_analysis(s["session_id"], conv, raw, mt)
-                if force or needs_timing(s):
+                if force or _needs_timing(s):
                     analysis_id = (
                         f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}."
                         f"{time.time_ns() % 1_000_000_000:09d}Z"
