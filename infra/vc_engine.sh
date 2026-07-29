@@ -39,6 +39,8 @@ case "$ACTION" in
       export XVC_CURRENT_MS="${XVC_CURRENT_MS:-120}"
       export XVC_SMOOTH_MS="${XVC_SMOOTH_MS:-20}"
       export XVC_FUTURE_MS="${XVC_FUTURE_MS:-100}"
+      export XVC_SILENCE_GATE_RMS="${XVC_SILENCE_GATE_RMS:-0.01}"
+      export XVC_SILENCE_HANGOVER_MS="${XVC_SILENCE_HANGOVER_MS:-240}"
       [ -d "$XVC_DIR" ] || { echo "ERROR: X-VC not installed at $XVC_DIR"; exit 1; }
       nohup bash -c "cd '$XVC_DIR' && exec uv run --project '$SERVICES/xvc' python '$SERVICES/xvc/server.py'" >"$LOG" 2>&1 &
     else

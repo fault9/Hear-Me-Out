@@ -21,6 +21,7 @@ Env:
   XVC_DEVICE           CUDA device index (default 0)
   XVC_EMA_LOAD         load EMA weights (default 1)
   XVC_CHUNK_MS/CURRENT_MS/SMOOTH_MS/FUTURE_MS  streaming window (default 2400/120/20/100)
+  XVC_SILENCE_GATE_RMS / XVC_SILENCE_HANGOVER_MS  quiet-window GPU bypass (0.01 / 240)
   MEANVC_PORT          listen port (default 5002)
   SSL_DIR              dir with cert.pem/key.pem
   PERSONAPLEX_PROXY_HOST / PERSONAPLEX_PROXY_PORT   default 127.0.0.1 / 8000
@@ -92,6 +93,8 @@ CHUNK_MS = int(os.environ.get("XVC_CHUNK_MS", 2400))
 CURRENT_MS = int(os.environ.get("XVC_CURRENT_MS", 120))
 SMOOTH_MS = int(os.environ.get("XVC_SMOOTH_MS", 20))
 FUTURE_MS = int(os.environ.get("XVC_FUTURE_MS", 100))
+SILENCE_GATE_RMS = float(os.environ.get("XVC_SILENCE_GATE_RMS", "0.01"))
+SILENCE_HANGOVER_MS = int(os.environ.get("XVC_SILENCE_HANGOVER_MS", "240"))
 
 PERSONAPLEX_HOST = os.environ.get("PERSONAPLEX_PROXY_HOST", "127.0.0.1")
 PERSONAPLEX_PORT = os.environ.get("PERSONAPLEX_PROXY_PORT", "8000")
@@ -188,6 +191,11 @@ class XVCStreamSession:
             self.fade_in = self.fade_out = self.tail_buffer = None
         self.buf = np.zeros(0, dtype=np.float32)
         self.i = 0
+        self.inference_windows = 0
+        self.silence_bypassed_windows = 0
+        self.silence_hangover_windows = max(
+            0, int(np.ceil(SILENCE_HANGOVER_MS / self.current_ms)))
+        self.silence_hangover_remaining = 0
 
     def feed(self, pcm: np.ndarray) -> list[np.ndarray]:
         """Append incoming 16 kHz PCM, return any completed current-region chunks."""
@@ -206,7 +214,30 @@ class XVCStreamSession:
                 seg = np.concatenate([np.zeros(left_pad, dtype=np.float32), seg])
             if HP_CUT:
                 seg = audio_highpass_filter(seg, self.sr, HP_CUT).astype(np.float32)
-            outs.append(self._forward(seg))
+            cur_start = self.history_ms * self.sr // 1000
+            activity_end = (
+                self.history_ms + self.current_ms + self.smooth_ms + self.future_ms
+            ) * self.sr // 1000
+            activity = seg[cur_start:activity_end]
+            rms = float(np.sqrt(np.mean(activity * activity))) if len(activity) else 0.0
+            active = SILENCE_GATE_RMS <= 0 or rms >= SILENCE_GATE_RMS
+            if active:
+                self.silence_hangover_remaining = self.silence_hangover_windows
+            elif self.silence_hangover_remaining > 0:
+                self.silence_hangover_remaining -= 1
+                active = True
+
+            if active:
+                outs.append(self._forward(seg))
+                self.inference_windows += 1
+            else:
+                # PersonaPlex still receives a continuous, sample-exact stream,
+                # but quiet microphone windows do not compete with it for GPU.
+                cur_end = (self.history_ms + self.current_ms) * self.sr // 1000
+                outs.append(seg[cur_start:cur_end].copy())
+                self.silence_bypassed_windows += 1
+                if self.tail_buffer is not None:
+                    self.tail_buffer.zero_()
             self.i += 1
         return outs
 
@@ -464,6 +495,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     first_model_done = False         # first PersonaPlex audio frame seen
     vc_ms_total = 0.0                # sum of per-window X-VC inference time
     vc_windows = 0
+    vc_silence_bypassed_windows = 0
     capture_study_artifacts = bool(session_id and not session_id.endswith("_CHECK"))
     proxy_received_pcm: list[np.ndarray] = []
     proxy_transmitted_pcm: list[np.ndarray] = []
@@ -485,6 +517,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         nonlocal input_chunk_sequence, model_input_packet_sequence
         nonlocal current_mode, current_transmitted_mode
         nonlocal opus_pcm_buf, first_send_ts, vc_ms_total, vc_windows
+        nonlocal vc_silence_bypassed_windows
         async for msg in browser_ws:
             if msg.type == web.WSMsgType.BINARY:
                 try:
@@ -528,6 +561,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     curs = [incoming]
                 else:
                     _t0 = time.perf_counter()
+                    inference_before = sess.inference_windows
+                    bypassed_before = sess.silence_bypassed_windows
                     try:
                         curs = await loop.run_in_executor(None, sess.feed, incoming)
                     except Exception as e:
@@ -536,11 +571,27 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                             events.add("inference_failure", input_start_sample=input_start,
                                        input_end_sample=input_end, error=str(e))
                         continue
-                    if curs:  # X-VC GPU forward latency, per produced window
-                        dt = (time.perf_counter() - _t0) * 1000.0 / len(curs)
-                        vc_ms_total += dt * len(curs); vc_windows += len(curs)
+                    elapsed_ms = (time.perf_counter() - _t0) * 1000.0
+                    inferred = sess.inference_windows - inference_before
+                    bypassed = sess.silence_bypassed_windows - bypassed_before
+                    vc_silence_bypassed_windows += bypassed
+                    if inferred:  # X-VC GPU forward latency, per inferred window
+                        dt = elapsed_ms / inferred
+                        vc_ms_total += elapsed_ms
+                        vc_windows += inferred
                         if otel:
                             otel.record_latency("vc.inference_ms", dt, engine="xvc")
+                    if events and curs:
+                        events.add(
+                            "xvc_inference_batch",
+                            input_start_sample=input_start,
+                            input_end_sample=input_end,
+                            output_windows=len(curs),
+                            inference_windows=inferred,
+                            silence_bypassed_windows=bypassed,
+                            elapsed_ms=round(elapsed_ms, 3),
+                            silence_gate_rms=SILENCE_GATE_RMS,
+                        )
 
                 for cur in curs:
                     if capture_study_artifacts:
@@ -716,6 +767,10 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     "input_chunks": input_chunk_sequence,
                     "model_input_packets": model_input_packet_sequence,
                     "model_packets": model_packet_sequence,
+                    "xvc_inference_windows": vc_windows,
+                    "xvc_silence_bypassed_windows": vc_silence_bypassed_windows,
+                    "xvc_silence_gate_rms": SILENCE_GATE_RMS,
+                    "xvc_silence_hangover_ms": SILENCE_HANGOVER_MS,
                     "frame_header": "HMO1/<4sIIII>",
                 },
             )
@@ -742,7 +797,9 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                    input_chunks=input_chunk_sequence,
                    model_input_packets=model_input_packet_sequence,
                    model_output_packets=model_packet_sequence,
-                   output_windows=chunk_count)
+                   output_windows=chunk_count,
+                   xvc_inference_windows=vc_windows,
+                   xvc_silence_bypassed_windows=vc_silence_bypassed_windows)
         await events.flush(force=True)
 
     if debug_dir and debug_pcm:
@@ -758,7 +815,9 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         otel.set_session_attributes(chunks=chunk_count)
         if vc_windows:
             otel.set_session_attributes(vc_inference_avg_ms=round(vc_ms_total / vc_windows, 1))
-    logger.info(f"[xvc proxy] closed after {chunk_count} chunks")
+    logger.info(
+        "[xvc proxy] closed after %d chunks (%d inferred, %d silence-bypassed)",
+        chunk_count, vc_windows, vc_silence_bypassed_windows)
     return browser_ws
 
 

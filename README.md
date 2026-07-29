@@ -81,7 +81,7 @@ cd <workspace> && bash Hear-Me-Out/infra/run_all.sh
 | `SSL_DIR` | `<ws>/ssl` | all (TLS) |
 | `PERSONAPLEX_PROXY_HOST` / `PERSONAPLEX_PROXY_PORT` | `127.0.0.1` / `8000` | MeanVC chat-proxy → PersonaPlex |
 
-When `VC_ENGINE=xvc`, `run_all.sh` instead sets `XVC_DIR`, `XVC_CONFIG`, `XVC_CKPT`, and the streaming window `XVC_CHUNK_MS` / `XVC_CURRENT_MS` / `XVC_SMOOTH_MS` / `XVC_FUTURE_MS` (default `2400/120/20/100` ms), and runs `services/xvc/server.py` via the `services/xvc` uv env.
+When `VC_ENGINE=xvc`, `run_all.sh` instead sets `XVC_DIR`, `XVC_CONFIG`, `XVC_CKPT`, and the streaming window `XVC_CHUNK_MS` / `XVC_CURRENT_MS` / `XVC_SMOOTH_MS` / `XVC_FUTURE_MS` (default `2400/120/20/100` ms), and runs `services/xvc/server.py` via the `services/xvc` uv env. Quiet XVC windows bypass GPU inference by default (`XVC_SILENCE_GATE_RMS=0.01`, `XVC_SILENCE_HANGOVER_MS=240`) while retaining the same number of transmitted samples; set the threshold to `0` to disable this gate.
 
 Frontend post-VC voice analysis is controlled independently from PersonaPlex
 session reset:

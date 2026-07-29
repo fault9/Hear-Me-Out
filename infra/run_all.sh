@@ -296,7 +296,10 @@ if [ "$VC_ENGINE" = "xvc" ]; then
     export XVC_CURRENT_MS="${XVC_CURRENT_MS:-120}"
     export XVC_SMOOTH_MS="${XVC_SMOOTH_MS:-20}"
     export XVC_FUTURE_MS="${XVC_FUTURE_MS:-100}"
+    export XVC_SILENCE_GATE_RMS="${XVC_SILENCE_GATE_RMS:-0.01}"
+    export XVC_SILENCE_HANGOVER_MS="${XVC_SILENCE_HANGOVER_MS:-240}"
     echo -e "  ${DIM}xvc window${NC} chunk=${XVC_CHUNK_MS} current=${XVC_CURRENT_MS} smooth=${XVC_SMOOTH_MS} future=${XVC_FUTURE_MS} ms"
+    echo -e "  ${DIM}xvc gate${NC}   rms=${XVC_SILENCE_GATE_RMS} hangover=${XVC_SILENCE_HANGOVER_MS} ms"
     VC_LABEL="X-VC"
     { [ "$APP_MODE" = "study" ] || [ -d "$XVC_DIR" ]; } || { echo -e "  ${YELLOW}ERROR:${NC} X-VC not installed — rerun setup.sh with --xvc."; exit 1; }
 else
