@@ -274,6 +274,16 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
         internal_missing_at_client = assistant_missing_at_client
     playback_crosswalk_complete = (not internal_missing_at_client
                                    and not assistant_missing_at_proxy)
+    playback_diagnostics = {
+        "schema": playback.get("schema"),
+        "decode_strategy": playback.get("decode_strategy"),
+        "initial_jitter_buffer_ms": playback.get("initial_jitter_buffer_ms"),
+        "base_latency_ms": playback.get("base_latency_ms"),
+        "output_latency_ms": playback.get("output_latency_ms"),
+        "queue_underrun_count": playback.get("queue_underrun_count"),
+        "queue_underrun_total_ms": playback.get("queue_underrun_total_ms"),
+        "queue_underrun_max_ms": playback.get("queue_underrun_max_ms"),
+    }
     overlaps = _overlaps(participant, assistant, 200.0)
     barge_ins = _barge_ins(participant, assistant)
     result: dict[str, Any] = {
@@ -304,6 +314,7 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
             "crosswalk_complete": (capture_crosswalk_complete
                                    and playback_crosswalk_complete),
             "estimated_dropped_samples": capture.get("estimated_dropped_samples"),
+            "playback": playback_diagnostics,
             "assistant_vad_rms_threshold": assistant_threshold,
             "valid_for_timing": bool(participant and assistant
                                      and capture_crosswalk_complete

@@ -32,6 +32,9 @@ browser or adding a synchronous network request to the audio loop:
   scheduled assistant playback packets to the PersonaPlex-handshake
   `performance.now()` epoch. `client_timeline.json` records callback sample
   offsets, scheduled playback spans, and browser output-latency estimates.
+  PersonaPlex Opus packets are decoded serially and begin behind a 120 ms
+  startup buffer. The buffer and queue-underrun diagnostics are persisted per
+  session; the scheduled spans already include this buffer.
 - The proxy/model timeline records X-VC input, route activation, transmitted
   windows, exact PersonaPlex-bound Opus bytes, PersonaPlex output packets, and
   monotonic server timestamps in `events.jsonl`, `proxy_timeline.json`, and the
@@ -50,6 +53,8 @@ labelled `estimated_pending_validation`; use `validate_intervals` with manually
 annotated pilot intervals before treating these measures as validated outcomes.
 New captures store packet RMS on the browser AudioContext schedule. Existing
 captures fall back to RMS over the silence-preserving `model.wav` artifact.
+The saved `model.wav` is reconstructed at the actual scheduled browser-playback
+offsets, rather than at network packet-arrival offsets.
 
 ## Post-hoc processing
 

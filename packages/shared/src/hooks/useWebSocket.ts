@@ -14,6 +14,10 @@ const PP_WORDS_PER_SECOND = 2.7            // typical PP speech rate, used to es
 // events on the performance.now() clock so they align with soundboard slot
 // playback timing — the basis for response latency / overlap / barge-in.
 const PP_SILENCE_GAP_MS = 400
+// One and a half PersonaPlex packets. This absorbs ordinary network/decode
+// jitter without letting the browser's queue repeatedly run dry. It is part of
+// the participant-experienced timeline and is persisted with every study run.
+const PP_INITIAL_JITTER_BUFFER_MS = 120
 
 export type PpSpeechEventType = "pp_speech_start" | "pp_speech_end"
 export interface PpSpeechEvent {
@@ -47,6 +51,10 @@ interface AssistantPlaybackEntry {
   sample_rate_hz: number;
   rms: number;
   peak_abs: number;
+  arrival_timeline_ms: number;
+  decode_completed_timeline_ms: number;
+  queue_lead_ms: number;
+  underrun_ms: number;
 }
 
 declare global {
@@ -150,6 +158,9 @@ export function useWebSocket() {
   const modelPacketSequenceRef = useRef(0);
   const assistantPlaybackRef = useRef<AssistantPlaybackEntry[]>([]);
   const playbackDecodeTasksRef = useRef<Promise<void>[]>([]);
+  // OggOpusDecoder is stateful. Chaining calls prevents overlapping decode()
+  // operations from corrupting or reordering one logical Opus stream.
+  const playbackDecodeChainRef = useRef<Promise<void>>(Promise.resolve());
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
@@ -188,6 +199,9 @@ export function useWebSocket() {
     if (!decoder || !ctx) return;
 
     const raw = new Uint8Array(payload);
+    const arrivalTimelineMs = Math.max(
+      0, performance.now() - conversationStartPerf.current,
+    );
     personaplexOpus.current.push({ packet: raw, time: Date.now(), sequence: packetSequence });
 
     // PP speech-run detection on the performance.now() clock. A packet means PP
@@ -212,7 +226,8 @@ export function useWebSocket() {
       }, PP_SILENCE_GAP_MS);
     }
 
-    const decodeTask = decoder.decode(raw).then(({ channelData, samplesDecoded }) => {
+    const decodeTask = playbackDecodeChainRef.current.catch(() => {}).then(async () => {
+      const { channelData, samplesDecoded } = await decoder.decode(raw);
       if (runId !== runIdRef.current) return;
       if (samplesDecoded === 0) return;
 
@@ -223,10 +238,18 @@ export function useWebSocket() {
       src.buffer = buffer;
       src.connect(ctx.destination);
       const now = ctx.currentTime;
-      const start = Math.max(scheduledEnd.current, now);
+      const previousEnd = scheduledEnd.current;
+      const firstPacket = previousEnd <= 0;
+      const underrunMs = firstPacket ? 0 : Math.max(0, (now - previousEnd) * 1000);
+      const start = firstPacket
+        ? now + PP_INITIAL_JITTER_BUFFER_MS / 1000
+        : Math.max(previousEnd, now);
       src.start(start);
       scheduledEnd.current = start + buffer.duration;
       const scheduledPerfMs = performance.now() + (start - now) * 1000;
+      const decodeCompletedTimelineMs = Math.max(
+        0, performance.now() - conversationStartPerf.current,
+      );
       let sumSquares = 0;
       let peakAbs = 0;
       for (const sample of channelData[0]) {
@@ -244,6 +267,10 @@ export function useWebSocket() {
         sample_rate_hz: ctx.sampleRate,
         rms: Math.sqrt(sumSquares / samplesDecoded),
         peak_abs: peakAbs,
+        arrival_timeline_ms: arrivalTimelineMs,
+        decode_completed_timeline_ms: decodeCompletedTimelineMs,
+        queue_lead_ms: Math.max(0, (scheduledEnd.current - now) * 1000),
+        underrun_ms: underrunMs,
       });
 
       // Also route to merged capture stream
@@ -260,7 +287,10 @@ export function useWebSocket() {
         msrc.start(mstart);
         mergedEndRef.current = mstart + mbuf.duration;
       }
-    }).catch(() => {});
+    }).catch((decodeError) => {
+      console.warn("PersonaPlex Opus decode failed", decodeError);
+    });
+    playbackDecodeChainRef.current = decodeTask;
     playbackDecodeTasksRef.current.push(decodeTask);
   }, []);
 
@@ -520,12 +550,17 @@ export function useWebSocket() {
     const decoded: { pcm: Float32Array; offset: number }[] = [];
     let sampleRate = 48000;
     try {
-      for (const { packet, time } of packets) {
+      const playbackBySequence = new Map(
+        assistantPlaybackRef.current.map((row) => [row.packet_sequence, row]),
+      );
+      for (const { packet, time, sequence } of packets) {
         try {
           const { channelData, samplesDecoded, sampleRate: decodedSampleRate } = await decoder.decode(packet);
           if (samplesDecoded > 0) {
-            const offsetSeconds =
-              conversationStart.current > 0
+            const scheduled = playbackBySequence.get(sequence);
+            const offsetSeconds = scheduled
+              ? scheduled.timeline_start_ms / 1000
+              : conversationStart.current > 0
                 ? Math.max(0, (time - conversationStart.current) / 1000)
                 : 0;
             sampleRate = decodedSampleRate || sampleRate;
@@ -601,12 +636,20 @@ export function useWebSocket() {
     // not lost when the participant ends a scenario.
     await Promise.allSettled(playbackDecodeTasksRef.current.slice());
     const ctx = audioCtxRef.current as (AudioContext & { outputLatency?: number }) | null;
+    const underruns = assistantPlaybackRef.current
+      .map((row) => row.underrun_ms)
+      .filter((value) => value > 1);
     return {
-      schema: "hmo.client-playback-timeline.v1",
+      schema: "hmo.client-playback-timeline.v2",
       epoch: "personaplex_handshake_performance_now",
       audio_context_sample_rate_hz: ctx?.sampleRate ?? null,
       base_latency_ms: ctx ? ctx.baseLatency * 1000 : null,
       output_latency_ms: ctx?.outputLatency == null ? null : ctx.outputLatency * 1000,
+      initial_jitter_buffer_ms: PP_INITIAL_JITTER_BUFFER_MS,
+      decode_strategy: "serialized",
+      queue_underrun_count: underruns.length,
+      queue_underrun_total_ms: underruns.reduce((sum, value) => sum + value, 0),
+      queue_underrun_max_ms: underruns.length ? Math.max(...underruns) : 0,
       assistant_packets: assistantPlaybackRef.current.slice(),
     };
   }, []);

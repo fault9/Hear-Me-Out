@@ -474,6 +474,12 @@ class TimingAnalysisTests(unittest.TestCase):
                     ],
                 },
                 "playback": {
+                    "schema": "hmo.client-playback-timeline.v2",
+                    "decode_strategy": "serialized",
+                    "initial_jitter_buffer_ms": 120,
+                    "queue_underrun_count": 0,
+                    "queue_underrun_total_ms": 0,
+                    "queue_underrun_max_ms": 0,
                     "output_latency_ms": 0,
                     "assistant_packets": [{
                         "packet_sequence": 1, "timeline_start_ms": 500,
@@ -507,6 +513,10 @@ class TimingAnalysisTests(unittest.TestCase):
             self.assertEqual(
                 result["route_switches"][0]["participant_timeline_ms"], 128)
             self.assertEqual(result["summary"]["barge_in_attempts"], 1)
+            self.assertEqual(
+                result["integrity"]["playback"]["decode_strategy"], "serialized")
+            self.assertEqual(
+                result["integrity"]["playback"]["initial_jitter_buffer_ms"], 120)
             self.assertEqual(result["schema"], "hmo.timing-analysis.v2")
             self.assertEqual(result["status"], "estimated_pending_validation")
             self.assertTrue((session_dir / "analysis" / "timing" / "analysis-1"
