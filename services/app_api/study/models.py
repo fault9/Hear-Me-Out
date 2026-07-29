@@ -110,6 +110,9 @@ class Scenario(BaseModel):
     time_limit_s: int = 300
     # Scenario-specific post-questionnaire items (appended after the shared post items).
     post_items: list[QuestionnaireItem] = Field(default_factory=list)
+    # Practice scenario: always runs first, shown to the participant as practice, still
+    # recorded but flagged so it doesn't count toward the study. At most one per study.
+    is_test: bool = False
 
     class Config:
         extra = "allow"

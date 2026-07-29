@@ -10,7 +10,8 @@ import { AudioCheck } from "@/components/AudioCheck"
 
 type Phase =
   | "code" | "welcome"
-  | "consent" | "background" | "scenario" | "post" | "final" | "completion"
+  | "consent" | "audiocheck" | "background" | "practice"
+  | "scenario" | "post" | "final" | "completion"
 
 function sessionIdFor(pid: string, order: number) {
   return `${pid}_S${String(order).padStart(2, "0")}`
@@ -78,6 +79,7 @@ export function ParticipantFlow() {
     const p = step.phase as Phase | undefined
     if (p === "background") { setPhase("background"); return }
     if (p === "consent") { setPhase("consent"); return }
+    if (p === "audiocheck") { setPhase("audiocheck"); return }
     if (p === "scenario" || p === "post") {
       setScenarioIdx(Math.max(0, (step.scenario_order ?? 1) - 1))
       setPhase(p)
@@ -171,32 +173,59 @@ export function ParticipantFlow() {
     </div>
   )
 
-  if (phase === "background" && data) {
+  // Consent FIRST — nothing is recorded/sent to the VC engine until the participant agrees.
+  if (phase === "consent" && data) {
     return Frame(
-      <QuestionnaireForm title="Background questionnaire" items={q("background")} submitLabel="Start scenarios" busy={busy}
+      <QuestionnaireForm title="Consent" items={q("consent")} submitLabel="I agree — continue" busy={busy}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
-            await api.questionnaire(null, code, "background", ans)
-            setScenarioIdx(0)
-            setStep({ phase: "scenario", scenario_order: 1 })
-            setPhase("scenario")
+            await api.questionnaire(null, code, "consent", ans)
+            setStep({ phase: "audiocheck" })
+            setPhase("audiocheck")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
     )
   }
 
-  if (phase === "consent" && data) {
+  if (phase === "audiocheck" && data) {
     return Frame(
-      <AudioCheck code={code} items={q("consent")}
+      <AudioCheck code={code}
         onDone={async (ans) => {
           setBusy(true)
           try {
-            await api.questionnaire(null, code, "consent", ans)
+            await api.questionnaire(null, code, "consent", ans)   // { _audio_check: … }
             setStep({ phase: "background" })
             setPhase("background")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
+    )
+  }
+
+  if (phase === "background" && data) {
+    return Frame(
+      <QuestionnaireForm title="Background questionnaire" items={q("background")}
+        submitLabel={data.test_scenario ? "Continue to practice" : "Start scenarios"} busy={busy}
+        onSubmit={async (ans) => {
+          setBusy(true)
+          try {
+            await api.questionnaire(null, code, "background", ans)
+            if (data.test_scenario) { setStep({ phase: "practice" }); setPhase("practice") }
+            else { setScenarioIdx(0); setStep({ phase: "scenario", scenario_order: 1 }); setPhase("scenario") }
+          } catch (e) { handleErr(e) } finally { setBusy(false) }
+        }} />
+    )
+  }
+
+  // Practice/test scenario — always runs first; shown as practice, still recorded but
+  // flagged (session id ends _TEST) so it doesn't count toward the study.
+  if (phase === "practice" && data && data.test_scenario) {
+    return Frame(
+      <ScenarioCall code={code} scenario={data.test_scenario} isTest onDone={() => {
+        setScenarioIdx(0)
+        setStep({ phase: "scenario", scenario_order: 1 })
+        setPhase("scenario")
+      }} />
     )
   }
 

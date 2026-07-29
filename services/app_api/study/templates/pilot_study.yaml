@@ -143,7 +143,7 @@ questionnaires:
     - { id: comp_correct, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "In which scenario was it easiest to correct or interrupt the assistant?" }
     - { id: comp_trust, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "In which scenario did you trust the assistant most to use your information correctly?" }
     - { id: comp_confidence, type: radio, options_source: scenarios, options: ["No meaningful difference", "I do not remember well enough to compare"], label: "In which scenario were you most confident about the final outcome?" }
-    - { id: playback, type: audio_playback, scenario_order: 4, track: merged, label: "You will now hear a recording of one of your conversations. Your voice is converted during the first part and returns to your natural voice during the later part. Please listen to both parts before answering. You may replay it as needed." }
+    - { id: playback, type: audio_playback, scenario_order: 4, track: merged, max_seconds: 30, max_plays: 3, label: "You will now hear a recording of one of your conversations. Your voice is converted during the first part and returns to your natural voice during the later part. Please listen to both parts before answering. You may replay it as needed (first 30 seconds, up to 3 times)." }
     - { id: conv_understand, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice was easy to understand." }
     - { id: conv_natural, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded natural." }
     - { id: conv_similar, type: scale, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded similar to how I think of my own voice." }
@@ -205,6 +205,26 @@ _additional_details: &additional_details >
   provide any real personal information.
 
 scenarios:
+  # 0) Practice — NATURAL only, always runs first, recorded but excluded from the study.
+  - title: Practice conversation
+    is_test: true
+    time_limit_s: 180
+    voice_prompt: NATF2.pt
+    system_prompt: >
+      You are a friendly general-purpose assistant helping the caller get comfortable talking to
+      you. There is no task to complete and nothing is being recorded for assessment. Chat briefly
+      and naturally, answer simple questions, and keep the tone relaxed.
+    scenario_card:
+      role: "This is a short practice conversation so you can get used to the system."
+      current_situation: "Nothing here counts towards the study. Use it to check that you can hear the assistant and to get comfortable speaking and interrupting."
+      goal: "Just have a short, relaxed chat — ask the assistant anything you like, e.g. how it is or what it can help with."
+      how_to_interact: *how_to_interact
+      suggested_first_line: "Hi, this is a practice call — can you hear me okay?"
+      additional_details: *additional_details
+    voice_schedule:
+      - { mode: natural, start_s: 0, end_s: null }
+    post_items: []
+
   # 1) Warranty — NATURAL only
   - title: Warranty
     time_limit_s: 300

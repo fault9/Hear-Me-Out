@@ -98,8 +98,32 @@ def _schedule_label(scenario: dict) -> str:
     return f"{modes[0]}->{modes[1]}@{int(sw) if sw else '?'}" + (f":{eng}" if eng else "")
 
 
-def _resolve_scenario(backend, participant: dict, scenario_order: int) -> dict:
+def _test_scenario(backend, study_id: int) -> Optional[dict]:
+    """The study's practice/test scenario (is_test), if any. At most one."""
+    for sc in backend.list_scenarios(study_id):
+        if sc.get("is_test"):
+            return sc
+    return None
+
+
+def _participant_order(backend, participant: dict) -> list:
+    """The participant's assigned scenario IDs in order, EXCLUDING the practice scenario.
+    Real scenarios keep 1-based positions over this list, so the test scenario never
+    shifts them (and playback/session ids stay valid)."""
     order = participant.get("scenario_order") or []
+    test = _test_scenario(backend, participant["study_id"])
+    tid = test.get("id") if test else None
+    return [sid for sid in order if sid != tid]
+
+
+def _resolve_scenario(backend, participant: dict, scenario_order: int) -> dict:
+    # scenario_order 0 => the practice/test scenario (always runs first).
+    if scenario_order == 0:
+        test = _test_scenario(backend, participant["study_id"])
+        if not test:
+            raise HTTPException(status_code=400, detail="no test scenario for this study")
+        return test
+    order = _participant_order(backend, participant)
     if scenario_order < 1 or scenario_order > len(order):
         raise HTTPException(status_code=400, detail="scenario_order out of range")
     scenario = backend.get_scenario(order[scenario_order - 1])
@@ -114,6 +138,7 @@ def _scenario_card(scenario: dict, scenario_order: int) -> dict:
         "scenario_order": scenario_order,
         "scenario_id": scenario.get("id"),
         "title": scenario.get("title", ""),
+        "is_test": bool(scenario.get("is_test")),
         "extra_fields": [f for f in (card.get("extra_fields") or []) if f.get("label")],
         "post_items": scenario.get("post_items") or [],   # scenario-specific post questions
         "time_limit_s": scenario.get("time_limit_s", 300),
@@ -354,16 +379,19 @@ def build_study_router() -> APIRouter:
         study = backend.get_study(p["study_id"])
         if not study:
             raise HTTPException(status_code=404, detail="Study not found")
-        order = p.get("scenario_order") or []
+        order = _participant_order(backend, p)   # real scenarios, practice excluded
         scenarios = []
         for i, sid in enumerate(order):
             sc = backend.get_scenario(sid)
             if sc:
                 scenarios.append(_scenario_card(sc, i + 1))
+        test = _test_scenario(backend, p["study_id"])   # practice scenario, runs first
+        test_card = _scenario_card(test, 0) if test else None
         run = backend.get_latest_run(p["participant_id"])
         settings = study.get("settings") or {}
         return {"participant_id": p["participant_id"], "study_name": study["name"],
-                "scenarios": scenarios, "questionnaires": study.get("questionnaires") or {},
+                "scenarios": scenarios, "test_scenario": test_card,
+                "questionnaires": study.get("questionnaires") or {},
                 "welcome_text": settings.get("welcome_text", ""),
                 "estimated_duration": settings.get("estimated_duration", ""),
                 "run": _run_public(run)}
@@ -438,7 +466,10 @@ def build_study_router() -> APIRouter:
         # watches the prepare SSE and connects only when ready.
         manager.start_prepare_async(backend, p["study_id"], engine)
 
-        session_id = f"{p['participant_id']}_S{body.scenario_order:02d}"
+        # scenario_order 0 => the practice/test session (runs first). Distinct id so it's
+        # easy to exclude from study counting/analysis; still recorded + saved.
+        is_test = body.scenario_order == 0
+        session_id = f"{p['participant_id']}_TEST" if is_test else f"{p['participant_id']}_S{body.scenario_order:02d}"
         _trace_session(session_id=session_id, participant_id=p["participant_id"],
                        study_id=p["study_id"], scenario_order=body.scenario_order, engine=engine)
         # target speaker id from the first vc segment (for metadata)
@@ -606,7 +637,7 @@ def build_study_router() -> APIRouter:
         if not p:
             raise HTTPException(status_code=404, detail="Invalid code")
         track_key = "participant" if track == "participant" else "merged"
-        order = p.get("scenario_order") or []
+        order = _participant_order(backend, p)   # positions match session ids (practice excluded)
 
         def serve(order_idx: int):
             session = backend.get_session(f"{p['participant_id']}_S{order_idx:02d}")

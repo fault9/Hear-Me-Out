@@ -4,13 +4,12 @@ import { Spinner } from "@shared/ui/spinner"
 import { CheckCircle2, Mic } from "lucide-react"
 import { useStudyConversation } from "@/hooks/useStudyConversation"
 import { api, streamPrepare } from "@/api"
-import { QuestionnaireForm, type QItem } from "@/components/QuestionnaireForm"
 
 type Phase = "idle" | "preparing" | "testing" | "passed" | "error"
 const MIC_THRESHOLD = 0.03
 
-export function AudioCheck({ code, items, onDone }: {
-  code: string; items: QItem[]; onDone: (answers: Record<string, any>) => void
+export function AudioCheck({ code, onDone }: {
+  code: string; onDone: (answers: Record<string, any>) => void
 }) {
   const conv = useStudyConversation()
   const [phase, setPhase] = useState<Phase>("idle")
@@ -120,9 +119,10 @@ export function AudioCheck({ code, items, onDone }: {
       </div>
 
       {canContinue && (
-        <div className="mt-6">
-          <QuestionnaireForm title="Please confirm" items={items} submitLabel="Continue"
-            onSubmit={(ans) => onDone({ ...ans, _audio_check: { mic_ok: micOk, heard_ok: heardOk, overridden } })} />
+        <div className="mt-6 flex justify-end">
+          <Button onClick={() => onDone({ _audio_check: { mic_ok: micOk, heard_ok: heardOk, overridden } })}>
+            Continue
+          </Button>
         </div>
       )}
     </div>

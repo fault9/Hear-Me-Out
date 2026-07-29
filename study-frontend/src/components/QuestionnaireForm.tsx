@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Button } from "@shared/ui/button"
 import { cn } from "@shared/lib/utils"
 
@@ -20,6 +20,8 @@ export interface QItem {
   placeholder?: string
   scenario_order?: number   // audio_playback: which scenario's recording
   track?: string            // audio_playback: merged | participant
+  max_seconds?: number      // audio_playback: only the first N seconds are playable
+  max_plays?: number        // audio_playback: allow at most M plays
 }
 
 type Answers = Record<string, any>
@@ -136,12 +138,15 @@ function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
 
   if (item.type === "audio_playback") {
     const src = playbackUrl?.(item)
+    const limited = item.max_seconds != null || item.max_plays != null
     return (
       <div className="flex flex-col gap-2">
         {item.label && <p className="text-sm">{item.label}</p>}
-        {src
-          ? <audio controls src={src} className="w-full">Your browser cannot play this audio.</audio>
-          : <p className="text-sm text-muted-foreground">Recording not available.</p>}
+        {!src
+          ? <p className="text-sm text-muted-foreground">Recording not available.</p>
+          : limited
+            ? <LimitedAudio src={src} maxSeconds={item.max_seconds} maxPlays={item.max_plays} />
+            : <audio controls src={src} className="w-full">Your browser cannot play this audio.</audio>}
       </div>
     )
   }
@@ -257,5 +262,47 @@ function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
     <input type="text" className="w-full rounded-md border bg-background px-3 py-2 text-sm"
       value={(value as string) ?? ""} placeholder={item.placeholder ?? "Your answer…"}
       onChange={e => set(item.id, e.target.value)} />
+  )
+}
+
+// Playback capped to the first `maxSeconds` and at most `maxPlays` plays. Uses a custom
+// Play control (no native seek/replay) so the limits can't be bypassed.
+function LimitedAudio({ src, maxSeconds, maxPlays }: { src: string; maxSeconds?: number; maxPlays?: number }) {
+  const ref = useRef<HTMLAudioElement>(null)
+  const [plays, setPlays] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [t, setT] = useState(0)
+  const limitReached = maxPlays != null && plays >= maxPlays
+
+  const play = () => {
+    const a = ref.current
+    if (!a || playing || limitReached) return
+    a.currentTime = 0
+    a.play().then(() => { setPlaying(true); setPlays(p => p + 1) }).catch(() => {})
+  }
+  const onTime = () => {
+    const a = ref.current; if (!a) return
+    if (maxSeconds != null && a.currentTime >= maxSeconds) { a.pause(); a.currentTime = 0; setPlaying(false); setT(0); return }
+    setT(a.currentTime)
+  }
+  const stop = () => { setPlaying(false); setT(0) }
+  const pct = maxSeconds ? Math.min(100, (t / maxSeconds) * 100) : (playing ? 50 : 0)
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <audio ref={ref} src={src} onTimeUpdate={onTime} onEnded={stop} onPause={() => setPlaying(false)} preload="metadata" className="hidden" />
+      <div className="flex items-center gap-3">
+        <Button type="button" size="sm" disabled={playing || limitReached} onClick={play}>
+          {playing ? "Playing…" : "▶ Play"}
+        </Button>
+        <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary transition-[width] duration-100" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      <div className="flex justify-between text-xs text-muted-foreground">
+        <span>{maxSeconds != null ? `First ${maxSeconds}s only` : ""}</span>
+        <span>{maxPlays != null && (limitReached ? "Playback limit reached" : `${maxPlays - plays}/${maxPlays} plays left`)}</span>
+      </div>
+    </div>
   )
 }

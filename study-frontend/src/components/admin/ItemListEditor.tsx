@@ -55,8 +55,15 @@ export function ItemListEditor({ items, onChange, scenarios = [] }: {
               <select className="rounded-md border bg-background px-2 py-1 text-sm"
                 value={it.track || "merged"} onChange={e => update(i, { track: e.target.value })}>
                 <option value="merged">Full conversation</option>
-                <option value="participant">Participant only</option>
+                <option value="participant">Participant only (VC)</option>
               </select>
+              <span className="text-muted-foreground">First</span>
+              <input type="number" className="w-16 rounded-md border bg-background px-2 py-1 text-sm" placeholder="∞"
+                value={it.max_seconds ?? ""} onChange={e => update(i, { max_seconds: e.target.value ? Number(e.target.value) : undefined })} />
+              <span className="text-muted-foreground">sec ·</span>
+              <input type="number" className="w-16 rounded-md border bg-background px-2 py-1 text-sm" placeholder="∞"
+                value={it.max_plays ?? ""} onChange={e => update(i, { max_plays: e.target.value ? Number(e.target.value) : undefined })} />
+              <span className="text-muted-foreground">plays max</span>
             </div>
           )}
 

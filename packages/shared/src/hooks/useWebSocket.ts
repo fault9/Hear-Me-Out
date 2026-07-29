@@ -59,6 +59,9 @@ export function useWebSocket() {
   const personaplexOpus = useRef<{ packet: Uint8Array; time: number }[]>([]);
   const vcUserPcm = useRef<Float32Array[]>([]);
   const conversationStart = useRef(0);
+  // Transcript turn time in SECONDS from conversation start, millisecond precision — so
+  // model and (Whisper-timed) participant turns share one timeline for diarization.
+  const relSeconds = () => Math.round(Date.now() - conversationStart.current) / 1000;
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
@@ -244,7 +247,7 @@ export function useWebSocket() {
           setPartialTranscript((prev) => {
             const updated = prev + text;
             if (updated.endsWith(".") || updated.endsWith("!") || updated.endsWith("?")) {
-              setTranscripts((t) => [...t, { text: updated, timestamp: Date.now(), speaker: "personaplex" }]);
+              setTranscripts((t) => [...t, { text: updated, timestamp: relSeconds(), speaker: "personaplex" }]);
               return "";
             }
             return updated;
@@ -357,7 +360,7 @@ export function useWebSocket() {
 
   const addUserTranscript = useCallback((text: string) => {
     if (!text) return;
-    setTranscripts((prev) => [...prev, { text, timestamp: Date.now(), speaker: "user" }]);
+    setTranscripts((prev) => [...prev, { text, timestamp: relSeconds(), speaker: "user" }]);
   }, []);
 
   return {

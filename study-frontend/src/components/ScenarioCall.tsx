@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@shared/ui/button"
 import { Badge } from "@shared/ui/badge"
 import { Spinner } from "@shared/ui/spinner"
-import { Phone, AlertTriangle, CheckCircle2, XCircle } from "lucide-react"
+import { Phone, AlertTriangle, CheckCircle2, XCircle, Info } from "lucide-react"
 import { useStudyConversation } from "@/hooks/useStudyConversation"
 import { api, streamPrepare, type ScenarioInfo, type PrepareState } from "@/api"
 
@@ -13,14 +13,15 @@ function fmt(s: number) {
 
 type Phase = "preparing" | "ready" | "connecting" | "active" | "processing" | "error"
 
-export function ScenarioCall({ code, scenario, onDone }: {
-  code: string; scenario: ScenarioInfo; onDone: () => void
+export function ScenarioCall({ code, scenario, onDone, isTest = false }: {
+  code: string; scenario: ScenarioInfo; onDone: () => void; isTest?: boolean
 }) {
   const conv = useStudyConversation()
   const [phase, setPhase] = useState<Phase>("preparing")
   const [prepare, setPrepare] = useState<PrepareState | null>(null)
   const [remaining, setRemaining] = useState(scenario.time_limit_s)
   const [errMsg, setErrMsg] = useState<string | null>(null)
+  const [readConfirmed, setReadConfirmed] = useState(false)
   const sessionIdRef = useRef<string | null>(null)
   const started = useRef(false)
 
@@ -92,11 +93,23 @@ export function ScenarioCall({ code, scenario, onDone }: {
   }
 
   return (
-    <div className="grid gap-5 md:grid-cols-[1fr_320px]">
-      <div className="rounded-xl border bg-card p-5">
-        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Scenario {scenario.scenario_order}{scenario.title ? ` — ${scenario.title}` : ""}
+    <div className="flex flex-col gap-5">
+      {isTest && (
+        <div className="flex items-start gap-3 rounded-xl border-2 border-amber-500 bg-amber-500/15 p-4 text-amber-900 dark:text-amber-200">
+          <Info className="mt-0.5 size-6 shrink-0 text-amber-600" />
+          <div>
+            <p className="text-base font-bold">This first session is for practice.</p>
+            <p className="text-sm">It will <b>not</b> be used towards the actual study — use it to get
+              comfortable with the system before the real scenarios.</p>
+          </div>
         </div>
+      )}
+      <div className="grid gap-5 md:grid-cols-[1fr_320px]">
+      <div className="rounded-xl border bg-card p-6">
+        <div className="mb-4 text-sm font-semibold uppercase tracking-wide text-primary">
+          {isTest ? "Practice scenario" : `Scenario ${scenario.scenario_order}`}{scenario.title ? ` — ${scenario.title}` : ""}
+        </div>
+        <p className="mb-4 text-sm text-muted-foreground">Please read the whole scenario before you start.</p>
         <Field label="Your role" value={scenario.role} />
         <Field label="Current situation" value={scenario.current_situation} />
         <Field label="Your goal" value={scenario.goal} />
@@ -104,6 +117,12 @@ export function ScenarioCall({ code, scenario, onDone }: {
         <Field label="Suggested first line" value={scenario.suggested_first_line} />
         <Field label="Additional details" value={scenario.additional_details} />
         {(scenario.extra_fields || []).map((f, i) => <Field key={i} label={f.label} value={f.value} />)}
+
+        <label className="mt-5 flex cursor-pointer items-center gap-2 rounded-lg border bg-background p-3 text-base font-medium">
+          <input type="checkbox" className="size-5" checked={readConfirmed}
+            onChange={e => setReadConfirmed(e.target.checked)} />
+          I have read and understood the scenario.
+        </label>
       </div>
 
       <div className="flex flex-col gap-4 rounded-xl border bg-card p-5">
@@ -127,7 +146,16 @@ export function ScenarioCall({ code, scenario, onDone }: {
         )}
 
         {phase === "ready" && (
-          <Button className="w-full gap-2" onClick={startCall}><Phone className="size-4" /> Start Call</Button>
+          <div className="flex flex-col gap-2">
+            <Button className="w-full gap-2" onClick={startCall} disabled={!readConfirmed}>
+              <Phone className="size-4" /> Start Call
+            </Button>
+            {!readConfirmed && (
+              <p className="text-center text-xs text-muted-foreground">
+                Tick "I have read and understood the scenario" to start.
+              </p>
+            )}
+          </div>
         )}
 
         {phase === "connecting" && (
@@ -160,6 +188,7 @@ export function ScenarioCall({ code, scenario, onDone }: {
           </Button>
         )}
       </div>
+      </div>
     </div>
   )
 }
@@ -167,9 +196,9 @@ export function ScenarioCall({ code, scenario, onDone }: {
 function Field({ label, value }: { label: string; value: string }) {
   if (!value) return null
   return (
-    <div className="mb-3">
-      <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="whitespace-pre-wrap text-sm">{value}</div>
+    <div className="mb-4">
+      <div className="mb-0.5 text-sm font-bold text-foreground">{label}</div>
+      <div className="whitespace-pre-wrap text-base leading-relaxed">{value}</div>
     </div>
   )
 }

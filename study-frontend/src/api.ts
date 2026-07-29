@@ -55,6 +55,7 @@ export interface ScenarioInfo {
   extra_fields?: { label: string; value: string }[];
   post_items?: any[];
   time_limit_s: number;
+  is_test?: boolean;   // practice scenario (runs first, shown as practice, not counted)
 }
 export interface RunState {
   status: "not_started" | "in_progress" | "submitted" | "expired";
@@ -67,6 +68,7 @@ export interface EnterResult {
   participant_id: string;
   study_name: string;
   scenarios: ScenarioInfo[];
+  test_scenario?: ScenarioInfo | null;   // practice scenario, runs before scenario 1
   questionnaires?: Record<string, any[]>;
   welcome_text?: string;
   estimated_duration?: string;

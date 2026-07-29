@@ -69,6 +69,7 @@ def main() -> None:
     sessions = backend.list_sessions(study_id)
     pending = [s for s in sessions
                if (s.get("files") or {}).get("participant")
+               and not str(s.get("session_id", "")).endswith("_TEST")  # practice: recorded, not counted
                and (force or s.get("metrics") is None)]
     total = len(pending)
     done = 0

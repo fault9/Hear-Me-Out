@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 RUN_WINDOW_SECONDS = 3600
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _now() -> float:
@@ -130,7 +130,8 @@ CREATE TABLE IF NOT EXISTS scenario (
   voice_prompt TEXT NOT NULL DEFAULT '',
   voice_schedule_json TEXT NOT NULL DEFAULT '[]',
   post_items_json TEXT NOT NULL DEFAULT '[]',
-  time_limit_s INTEGER NOT NULL DEFAULT 300
+  time_limit_s INTEGER NOT NULL DEFAULT 300,
+  is_test INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS target (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,6 +225,8 @@ class SqliteBackend(StorageBackend):
             if ver < 3:
                 self._add_column(c, "study", "settings_json", "TEXT NOT NULL DEFAULT '{}'")
                 self._add_column(c, "scenario", "post_items_json", "TEXT NOT NULL DEFAULT '[]'")
+            if ver < 4:
+                self._add_column(c, "scenario", "is_test", "INTEGER NOT NULL DEFAULT 0")
             c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
                       (str(SCHEMA_VERSION),))
 
@@ -297,6 +300,7 @@ class SqliteBackend(StorageBackend):
             "voice_schedule_json": json.dumps(data.get("voice_schedule", [])),
             "post_items_json": json.dumps(data.get("post_items", [])),
             "time_limit_s": int(data.get("time_limit_s", 300)),
+            "is_test": 1 if data.get("is_test") else 0,
         }
 
     def add_scenario(self, study_id, data) -> dict:
@@ -307,10 +311,11 @@ class SqliteBackend(StorageBackend):
                 cols["order_idx"] = n
             cur = c.execute(
                 "INSERT INTO scenario(study_id, order_idx, title, scenario_card_json, system_prompt, "
-                "voice_prompt, voice_schedule_json, post_items_json, time_limit_s) VALUES(?,?,?,?,?,?,?,?,?)",
+                "voice_prompt, voice_schedule_json, post_items_json, time_limit_s, is_test) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (study_id, cols["order_idx"], cols["title"], cols["scenario_card_json"],
                  cols["system_prompt"], cols["voice_prompt"], cols["voice_schedule_json"],
-                 cols["post_items_json"], cols["time_limit_s"]))
+                 cols["post_items_json"], cols["time_limit_s"], cols["is_test"]))
             sid = cur.lastrowid
         return self.get_scenario(sid)
 
@@ -319,10 +324,10 @@ class SqliteBackend(StorageBackend):
         with self._conn() as c:
             c.execute(
                 "UPDATE scenario SET order_idx=?, title=?, scenario_card_json=?, system_prompt=?, "
-                "voice_prompt=?, voice_schedule_json=?, post_items_json=?, time_limit_s=? WHERE id=?",
+                "voice_prompt=?, voice_schedule_json=?, post_items_json=?, time_limit_s=?, is_test=? WHERE id=?",
                 (cols["order_idx"], cols["title"], cols["scenario_card_json"], cols["system_prompt"],
                  cols["voice_prompt"], cols["voice_schedule_json"], cols["post_items_json"],
-                 cols["time_limit_s"], scenario_id))
+                 cols["time_limit_s"], cols["is_test"], scenario_id))
         return self.get_scenario(scenario_id)
 
     def delete_scenario(self, scenario_id) -> None:

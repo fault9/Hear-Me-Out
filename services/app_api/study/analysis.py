@@ -47,7 +47,11 @@ def run_session_analysis(session_id: str, converted_wav: str | None,
             from metrics import analyze_voices
 
             metrics = analyze_voices(clip_a, clip_b)
-            transcript["participant"] = (metrics.get("response_b") or {}).get("transcript")
+            resp_b = metrics.get("response_b") or {}
+            transcript["participant"] = resp_b.get("transcript")
+            # ms-timestamped diarization segments (0-based = conversation start), so the
+            # participant timeline aligns with the model turns (already relative-ms).
+            transcript["participant_segments"] = resp_b.get("segments") or []
             audiobox = bool(metrics.get("audiobox_available"))
     except Exception as e:  # noqa: BLE001 - analysis is best-effort; audio is already saved
         logger.warning(f"[study] analysis failed for {session_id}: {e}")

@@ -90,6 +90,33 @@ def get_transcript(audio_path):
         print(f"Error during transcription: {e}")
         return ""
 
+
+def get_transcript_segments(audio_path):
+    """Whisper transcription as timestamped segments [{start, end, text}] (seconds with
+    millisecond precision) for ms-level diarization / model↔participant overlap. Times are
+    0-based from the start of this audio (= conversation start for the recorded clips)."""
+    try:
+        processor, model = _get_asr()
+        audio, _ = librosa.load(audio_path, sr=16000)
+        inputs = processor(audio, sampling_rate=16000, return_tensors="pt",
+                           truncation=False, padding="longest", return_attention_mask=True)
+        with torch.no_grad():
+            ids = model.generate(**inputs, return_timestamps=True, language="en", task="transcribe")
+        decoded = processor.batch_decode(ids, skip_special_tokens=True, output_offsets=True)
+        offsets = (decoded[0] or {}).get("offsets", []) if decoded else []
+        segs = []
+        for o in offsets:
+            ts = o.get("timestamp") or (None, None)
+            segs.append({
+                "start": round(ts[0], 3) if ts[0] is not None else None,
+                "end": round(ts[1], 3) if ts[1] is not None else None,
+                "text": (o.get("text") or "").strip(),
+            })
+        return segs
+    except Exception as e:
+        print(f"Error during segmented transcription: {e}")
+        return []
+
 # --- Metric 1: Speech Rate ---
 def calculate_speech_rate(audio_path, transcript):
     """
@@ -168,9 +195,12 @@ def analyze_voices(audio_path_a, audio_path_b):
     """
     Runs all analyses on the two provided audio files.
     """
-    # Get transcripts
+    # Get transcripts. The participant clip (B) is transcribed with ms segment timestamps
+    # for diarization; its plain text is derived from the segments (one Whisper pass).
     transcript_a = get_transcript(audio_path_a)
-    transcript_b = get_transcript(audio_path_b)
+    segments_b = get_transcript_segments(audio_path_b)
+    transcript_b = " ".join(s["text"] for s in segments_b if s.get("text")).strip() \
+        or get_transcript(audio_path_b)
 
     def _safe_duration(path):
         try:
@@ -196,6 +226,7 @@ def analyze_voices(audio_path_a, audio_path_b):
         "mean_pitch": calculate_pitch_stats(audio_path_b)[0],
         "std_pitch": calculate_pitch_stats(audio_path_b)[1],
         "transcript": transcript_b,
+        "segments": segments_b,   # ms-timestamped diarization segments
         "duration": _safe_duration(audio_path_b),
     }
 

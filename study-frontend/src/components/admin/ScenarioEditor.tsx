@@ -48,6 +48,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
   const [postItems, setPostItems] = useState<any[]>(scenario.post_items || [])
   const [voicePrompt, setVoicePrompt] = useState(scenario.voice_prompt || voices[0] || "NATF2.pt")
   const [timeLimit, setTimeLimit] = useState(scenario.time_limit_s || 300)
+  const [isTest, setIsTest] = useState(!!scenario.is_test)
   const [preset, setPreset] = useState<Preset>(init.preset)
   const [engine, setEngine] = useState(init.engine)
   const [target, setTarget] = useState(init.target)
@@ -79,7 +80,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
         },
         system_prompt: prompt, voice_prompt: voicePrompt, time_limit_s: Number(timeLimit),
         voice_schedule: scheduleFromPreset(preset, engine, target, Number(switchS)),
-        post_items: postItems,
+        post_items: postItems, is_test: isTest,
       })
       onChange()
     } catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(false) }
@@ -88,12 +89,20 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
   return (
     <div className="rounded-lg border">
       <button className="flex w-full items-center justify-between px-4 py-3 text-left" onClick={() => setOpen(o => !o)}>
-        <span className="font-medium">{index + 1}. {title || "Untitled scenario"}</span>
+        <span className="font-medium">
+          {index + 1}. {title || "Untitled scenario"}
+          {isTest && <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-semibold text-amber-700">PRACTICE</span>}
+        </span>
         <span className="text-xs text-muted-foreground">{preset.replace("_", "→")}{needsTarget ? ` · ${engine}` : ""}</span>
       </button>
       {open && (
         <div className="flex flex-col gap-3 border-t p-4">
           <p className="text-xs text-muted-foreground">All fields below are required.</p>
+          <label className="flex items-center gap-2 rounded-md border bg-amber-500/5 p-2 text-sm">
+            <input type="checkbox" checked={isTest} onChange={e => setIsTest(e.target.checked)} />
+            <span><b>Test / practice scenario</b> — always runs first, shown to the participant as practice;
+              recorded but excluded from study results. (Only one per study is used.)</span>
+          </label>
           <Field label="Title *"><Input value={title} onChange={e => setTitle(e.target.value)} /></Field>
           <Field label="Your role *"><Textarea value={role} onChange={setRole} /></Field>
           <Field label="Current situation *"><Textarea value={situation} onChange={setSituation} /></Field>
