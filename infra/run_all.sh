@@ -278,6 +278,10 @@ PID2=$!
 # Set the engine env in all modes (so the study prepare step's launcher inherits
 # it); the engine PROCESS is started here only in hmo mode. In study mode it is
 # started on demand by infra/vc_engine.sh when a participant begins a run.
+# These evaluation resources are shared by MeanVC and the post-hoc X-VC quality
+# worker. Export them regardless of the live conversion engine.
+export MEANVC_SV_CKPT="$WORKSPACE/models/meanvc-sv/wavlm_large_finetune.pth"
+export SPEAKER_VERIFICATION_ROOT="$WORKSPACE"
 if [ "$VC_ENGINE" = "xvc" ]; then
     export XVC_DIR="$WORKSPACE/X-VC"
     export XVC_CONFIG="$XVC_DIR/configs/xvc.yaml"
@@ -297,8 +301,6 @@ if [ "$VC_ENGINE" = "xvc" ]; then
     { [ "$APP_MODE" = "study" ] || [ -d "$XVC_DIR" ]; } || { echo -e "  ${YELLOW}ERROR:${NC} X-VC not installed — rerun setup.sh with --xvc."; exit 1; }
 else
     export MEANVC_CKPT_DIR="$WORKSPACE/models/meanvc"
-    export MEANVC_SV_CKPT="$WORKSPACE/models/meanvc-sv/wavlm_large_finetune.pth"
-    export SPEAKER_VERIFICATION_ROOT="$WORKSPACE"
     export MEANVC_PORT=5002
     VC_LABEL="MeanVC"
 fi

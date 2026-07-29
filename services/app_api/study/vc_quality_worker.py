@@ -36,9 +36,10 @@ def _write(**values) -> None:
     temp.replace(path)
 
 
-def _score_batch(jobs: list[dict], heartbeat: Callable[[], None] | None = None) -> list[dict]:
+def _score_batch(jobs: list[dict], heartbeat: Callable[[], None] | None = None
+                 ) -> tuple[list[dict], dict]:
     if not jobs:
-        return []
+        return [], {"stdout": "", "stderr": ""}
     with tempfile.TemporaryDirectory(prefix="hmo_vcq_") as temp_dir:
         manifest_path = Path(temp_dir) / "manifest.jsonl"
         output_path = Path(temp_dir) / "results.jsonl"
@@ -69,10 +70,15 @@ def _score_batch(jobs: list[dict], heartbeat: Callable[[], None] | None = None) 
                     raise TimeoutError(f"vc_quality.py exceeded {timeout_s} seconds")
                 time.sleep(5)
         if proc.returncode:
-            error = stderr_path.read_text().strip()
+            error = (stderr_path.read_text().strip()
+                     or stdout_path.read_text().strip())
             raise RuntimeError(
                 error[-1000:] or f"vc_quality.py exited {proc.returncode}")
         output_text = output_path.read_text()
+        diagnostics = {
+            "stdout": stdout_path.read_text()[-8000:],
+            "stderr": stderr_path.read_text()[-8000:],
+        }
     rows = [json.loads(line) for line in output_text.splitlines() if line.strip()]
     if len(rows) != len(jobs):
         raise RuntimeError(f"vc_quality.py returned {len(rows)} rows for {len(jobs)} jobs")
@@ -85,7 +91,21 @@ def _score_batch(jobs: list[dict], heartbeat: Callable[[], None] | None = None) 
         ordered[index] = result
     if any(result is None for result in ordered):
         raise RuntimeError("vc_quality.py returned duplicate or missing job indices")
-    return [result for result in ordered if result is not None]
+    return [result for result in ordered if result is not None], diagnostics
+
+
+def _completion(scores: list[dict]) -> tuple[str, list[dict]]:
+    """Require all three X-VC metrics; never call a soft failure complete."""
+    unavailable = []
+    for score in scores:
+        for metric in ("wer", "sim", "utmos"):
+            if not isinstance(score.get(metric), (int, float)):
+                unavailable.append({
+                    "region": score.get("_region"),
+                    "metric": metric,
+                    "error": score.get(f"{metric}_error"),
+                })
+    return ("complete" if not unavailable else "partial"), unavailable
 
 
 def main() -> None:
@@ -133,7 +153,7 @@ def main() -> None:
 
     try:
         _write(running=True, done=done, total=total, current="batch", **common)
-        metrics = _score_batch(
+        metrics, scorer_log = _score_batch(
             jobs,
             heartbeat=lambda: _write(
                 running=True, done=done, total=total, current="batch", **common),
@@ -152,19 +172,28 @@ def main() -> None:
         sid = session["session_id"]
         try:
             session_metrics = metrics[item["job_start"]:item["job_end"]]
+            for job, score in zip(item["inputs"]["score_jobs"], session_metrics):
+                score["_region"] = job["region"]
             scores = [
-                {"region": job["region"], "metrics": score}
+                {"region": job["region"],
+                 "metrics": {key: value for key, value in score.items()
+                             if key != "_region"}}
                 for job, score in zip(item["inputs"]["score_jobs"], session_metrics)
             ]
-            result = {"status": "complete", "analysis_id": analysis_id,
+            completion, unavailable = _completion(session_metrics)
+            result_status = completion if scores else "not_applicable"
+            storage_status = completion if scores else "complete"
+            result = {"status": result_status, "analysis_id": analysis_id,
                       "metric_profile": "xvc_objective_v1",
-                      "inputs": item["inputs"], "scores": scores}
+                      "inputs": item["inputs"], "scores": scores,
+                      "unavailable_metrics": unavailable,
+                      "scorer_log": scorer_log}
             out_dir = ((STUDY_DATA_DIR / (session.get("files") or {})["participant"]).parent /
                        "analysis" / "vc_quality" / analysis_id)
             atomic_write_json(out_dir / "results.json", result, exclusive=True)
             result["result_artifact"] = file_record(
                 out_dir / "results.json", relative_to=STUDY_DATA_DIR)
-            backend.update_session_vc_quality(sid, "complete", result)
+            backend.update_session_vc_quality(sid, storage_status, result)
         except Exception as exc:
             backend.update_session_vc_quality(sid, "failed", {
                 "status": "failed", "analysis_id": analysis_id,

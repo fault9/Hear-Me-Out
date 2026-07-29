@@ -38,11 +38,28 @@ class VCQualityWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as data_root:
             with patch.object(vc_quality_worker, "STUDY_DATA_DIR", Path(data_root)), \
                     patch.object(vc_quality_worker.subprocess, "Popen", fake_popen):
-                results = vc_quality_worker._score_batch(jobs)
+                results, diagnostics = vc_quality_worker._score_batch(jobs)
 
         self.assertEqual([result["wer"] for result in results], [0.0, 0.1])
         self.assertEqual(results[0]["converted_path"], "b/converted.wav")
         self.assertEqual(results[1]["target_path"], "a/target.wav")
+        self.assertEqual(diagnostics, {"stdout": "", "stderr": ""})
+
+    def test_missing_required_metrics_make_result_partial(self):
+        status, unavailable = vc_quality_worker._completion([{
+            "_region": 1,
+            "wer": None,
+            "wer_error": "ASR failed for: converted, reference",
+            "sim": None,
+            "sim_error": "SV checkpoint not found",
+            "utmos": 2.4,
+        }])
+
+        self.assertEqual(status, "partial")
+        self.assertEqual(
+            [(item["region"], item["metric"]) for item in unavailable],
+            [(1, "wer"), (1, "sim")],
+        )
 
 
 if __name__ == "__main__":

@@ -80,7 +80,11 @@ UTMOS_MODEL_NAME = os.environ.get("UTMOS_MODEL_NAME", "utmos22_strong")
 
 # Module-level singletons so batch runs don't reload models per file.
 _asr_pipeline = None
+_asr_load_attempted = False
+_asr_load_error: str | None = None
 _sv_model = None
+_sv_load_attempted = False
+_sv_load_error: str | None = None
 _utmos_predictor = None
 _target_sv_embeddings: dict[str, torch.Tensor] = {}
 
@@ -96,19 +100,23 @@ _MIN_SEG_S = {"sim": 0.5, "utmos": 0.8}
 # Model loaders (lazy, cached)
 # --------------------------------------------------------------------------
 def _get_asr():
-    global _asr_pipeline
-    if _asr_pipeline is None:
-        try:
-            from transformers import pipeline
-        except ImportError as e:
-            print(f"[vc_quality] transformers not available ({e}); "
-                  f"transcription will be skipped.")
-            return None
+    global _asr_pipeline, _asr_load_attempted, _asr_load_error
+    if _asr_pipeline is not None:
+        return _asr_pipeline
+    if _asr_load_attempted:
+        return None
+    _asr_load_attempted = True
+    try:
+        from transformers import pipeline
         _asr_pipeline = pipeline(
             "automatic-speech-recognition",
             model="openai/whisper-small",
             device=DEVICE,
         )
+    except Exception as e:
+        _asr_load_error = f"{type(e).__name__}: {e}"
+        print(f"[vc_quality] ASR load failed ({_asr_load_error}); "
+              "transcription will be skipped.")
     return _asr_pipeline
 
 
@@ -120,15 +128,20 @@ def _get_sv_model(sv_ckpt_path=None, sv_root=None):
     sv_root      : repo root so `from src.runtime...` resolves
                    (default: env SPEAKER_VERIFICATION_ROOT)
     """
-    global _sv_model
+    global _sv_model, _sv_load_attempted, _sv_load_error
     if _sv_model is not None:
         return _sv_model
+
+    if _sv_load_attempted:
+        return None
+    _sv_load_attempted = True
 
     sv_ckpt_path = sv_ckpt_path or os.environ.get("MEANVC_SV_CKPT")
     sv_root = sv_root or os.environ.get("SPEAKER_VERIFICATION_ROOT", os.getcwd())
 
     if not sv_ckpt_path or not os.path.exists(sv_ckpt_path):
-        print(f"[vc_quality] SV checkpoint not found ({sv_ckpt_path}); "
+        _sv_load_error = f"SV checkpoint not found: {sv_ckpt_path}"
+        print(f"[vc_quality] {_sv_load_error}; "
               f"SIM will be skipped.")
         return None
 
@@ -142,7 +155,8 @@ def _get_sv_model(sv_ckpt_path=None, sv_root=None):
         _sv_model = model
         return _sv_model
     except Exception as e:
-        print(f"[vc_quality] SV load failed ({e}); SIM will be skipped.")
+        _sv_load_error = f"{type(e).__name__}: {e}"
+        print(f"[vc_quality] SV load failed ({_sv_load_error}); SIM will be skipped.")
         return None
 
 
@@ -186,12 +200,13 @@ def _normalize_text(s):
 def _asr_run(path):
     """Run Whisper on a file, requesting word-level timestamps. Returns the
     full HF pipeline dict ({"text": str, "chunks": [{"text", "timestamp"}, ...]}),
-    or a minimal dict on failure / missing model. Word timestamps may be absent
+    or a diagnostic dict on failure / missing model. Word timestamps may be absent
     (older HF versions or test fakes) — callers must tolerate empty chunks."""
     try:
         asr = _get_asr()
         if asr is None:
-            return {"text": "", "chunks": []}
+            return {"text": "", "chunks": [], "status": "failed",
+                    "error": _asr_load_error or "ASR model unavailable"}
         try:
             res = asr(path, chunk_length_s=30, batch_size=8,
                       return_timestamps="word")
@@ -199,13 +214,17 @@ def _asr_run(path):
             # Fakes / older HF: fall back to a plain call.
             res = asr(path, chunk_length_s=30, batch_size=8)
         if not isinstance(res, dict):
-            return {"text": "", "chunks": []}
+            return {"text": "", "chunks": [], "status": "failed",
+                    "error": f"ASR returned {type(res).__name__}, expected dict"}
         res.setdefault("chunks", [])
         res.setdefault("text", "")
+        res["status"] = "complete"
+        res["error"] = None
         return res
     except Exception as e:
-        print(f"[vc_quality] transcription failed for {path}: {e}")
-        return {"text": "", "chunks": []}
+        error = f"{type(e).__name__}: {e}"
+        print(f"[vc_quality] transcription failed for {path}: {error}")
+        return {"text": "", "chunks": [], "status": "failed", "error": error}
 
 
 def _transcribe(path):
@@ -468,6 +487,10 @@ def _intelligibility_eval(
     (when available) word-aligned reference text from `src`."""
     conv_asr = _ensure_asr(conv)
     vc_text = _normalize_text(conv_asr.get("text", ""))
+    conv_status = {
+        "status": conv_asr.get("status", "complete"),
+        "error": conv_asr.get("error"),
+    }
 
     if ref_text is not None:
         ref = _normalize_text(ref_text)
@@ -481,6 +504,26 @@ def _intelligibility_eval(
         return {
             "wer": None,
             "vc_transcript": vc_text, "ref_transcript": None, "ref_kind": None,
+            "wer_status": "unavailable", "wer_error": "reference unavailable",
+            "asr_diagnostics": {"converted": conv_status, "reference": None},
+            "wer_segments": None,
+        }
+
+    ref_status = ({"status": src_asr.get("status", "complete"),
+                   "error": src_asr.get("error")}
+                  if src_asr is not None else
+                  {"status": "provided", "error": None})
+    asr_diagnostics = {"converted": conv_status, "reference": ref_status}
+
+    failed_asr = [name for name, diagnostic in asr_diagnostics.items()
+                  if diagnostic and diagnostic["status"] == "failed"]
+    if failed_asr:
+        return {
+            "wer": None,
+            "vc_transcript": vc_text, "ref_transcript": ref, "ref_kind": ref_kind,
+            "wer_status": "unavailable",
+            "wer_error": f"ASR failed for: {', '.join(failed_asr)}",
+            "asr_diagnostics": asr_diagnostics,
             "wer_segments": None,
         }
 
@@ -492,14 +535,25 @@ def _intelligibility_eval(
         return {
             "wer": None,
             "vc_transcript": vc_text, "ref_transcript": ref, "ref_kind": ref_kind,
+            "wer_status": "unavailable", "wer_error": "jiwer is not installed",
+            "asr_diagnostics": asr_diagnostics,
             "wer_segments": None,
         }
 
-    try:
-        wer = jiwer.wer(ref, vc_text) if (ref or vc_text) else 0.0
-    except Exception as e:
-        print(f"[vc_quality] WER failed: {e}")
+    wer_error = None
+    if not ref:
         wer = None
+        wer_error = "reference transcript is empty"
+    elif not vc_text:
+        wer = None
+        wer_error = "converted transcript is empty"
+    else:
+        try:
+            wer = jiwer.wer(ref, vc_text)
+        except Exception as e:
+            print(f"[vc_quality] WER failed: {e}")
+            wer = None
+            wer_error = f"{type(e).__name__}: {e}"
 
     wer_segments: list[dict] | None = None
     if segments is not None:
@@ -529,6 +583,9 @@ def _intelligibility_eval(
     return {
         "wer": wer,
         "vc_transcript": vc_text, "ref_transcript": ref, "ref_kind": ref_kind,
+        "wer_status": "complete" if wer is not None else "unavailable",
+        "wer_error": wer_error,
+        "asr_diagnostics": asr_diagnostics,
         "wer_reference_note": reference_note,
         "wer_segments": wer_segments,
     }
@@ -546,12 +603,16 @@ def _speaker_similarity_eval(
     per-segment cosine."""
     model = _get_sv_model(sv_ckpt_path, sv_root)
     if model is None:
-        return {"sim": None, "sim_segments": None}
+        return {"sim": None, "sim_status": "unavailable",
+                "sim_error": _sv_load_error or "speaker model unavailable",
+                "sim_segments": None}
 
     e_conv = _ensure_sv_emb(conv, model)
     e_tgt = _ensure_target_sv_emb(tgt, model)
     if e_conv is None or e_tgt is None:
-        return {"sim": None, "sim_segments": None}
+        return {"sim": None, "sim_status": "unavailable",
+                "sim_error": "speaker embedding failed",
+                "sim_segments": None}
 
     try:
         whole = float(torch.nn.functional.cosine_similarity(
@@ -559,6 +620,9 @@ def _speaker_similarity_eval(
     except Exception as e:
         print(f"[vc_quality] SIM cosine failed: {e}")
         whole = None
+        sim_error = f"{type(e).__name__}: {e}"
+    else:
+        sim_error = None
 
     sim_segments: list[dict] | None = None
     if segments is not None:
@@ -575,7 +639,10 @@ def _speaker_similarity_eval(
                 v = None
             sim_segments.append({"start": s, "end": e, "sim": v})
 
-    return {"sim": whole, "sim_segments": sim_segments}
+    return {"sim": whole,
+            "sim_status": "complete" if whole is not None else "unavailable",
+            "sim_error": sim_error,
+            "sim_segments": sim_segments}
 
 
 def _utmos_eval(
@@ -583,7 +650,8 @@ def _utmos_eval(
     segments: list[tuple[float, float]] | None = None,
 ) -> dict:
     """X-VC's reference-free naturalness score."""
-    out: dict[str, Any] = {"utmos": None}
+    out: dict[str, Any] = {"utmos": None, "utmos_status": "unavailable",
+                           "utmos_error": None}
 
     def _f(v):
         try:
@@ -592,6 +660,8 @@ def _utmos_eval(
             return None
 
     predictor = _get_utmos()
+    if predictor is None:
+        out["utmos_error"] = "UTMOS model unavailable; see scorer log"
 
     if predictor is not None:
         try:
@@ -602,6 +672,9 @@ def _utmos_eval(
             out["utmos"] = _f(score.mean().item())
         except Exception as e:
             print(f"[vc_quality] UTMOS compute failed for {conv.path}: {e}")
+            out["utmos_error"] = f"{type(e).__name__}: {e}"
+    if out["utmos"] is not None:
+        out["utmos_status"] = "complete"
 
     if segments is None:
         out["utmos_segments"] = None

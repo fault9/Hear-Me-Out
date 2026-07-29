@@ -105,6 +105,61 @@ def _write_slice(source: Path, destination: Path, start_s: float, end_s: float,
     return file_record(destination, relative_to=relative_to)
 
 
+def _participant_speech_intervals(events: list[dict]) -> list[tuple[int, int]]:
+    """Return ordered raw-input speech intervals from the recorded RMS events."""
+    intervals: list[tuple[int, int]] = []
+    start: int | None = None
+    for row in sorted(events, key=lambda item: item.get("event_sequence", 0)):
+        if row.get("event") == "participant_speech_start":
+            start = int(row.get("input_sample", 0))
+        elif row.get("event") == "participant_speech_end" and start is not None:
+            end = int(row.get("input_sample", start))
+            if end > start:
+                intervals.append((start, end))
+            start = None
+    if start is not None:
+        stop = next((row for row in reversed(events)
+                     if row.get("event") == "stream_stop"), {})
+        end = int(stop.get("input_samples", start))
+        if end > start:
+            intervals.append((start, end))
+    return intervals
+
+
+def _write_concatenated_slices(source: Path, destination: Path,
+                               intervals_s: list[tuple[float, float]],
+                               relative_to: Path,
+                               separator_s: float = 0.15) -> dict:
+    """Write ordered speech slices with a short silence between utterances."""
+    params, samples = _read_wav(source)
+    pieces: list[np.ndarray] = []
+    separator_frames = max(0, round(separator_s * params.framerate))
+    separator_shape = ((separator_frames, params.nchannels)
+                       if samples.ndim == 2 else (separator_frames,))
+    separator = np.zeros(separator_shape, dtype=samples.dtype)
+    for start_s, end_s in intervals_s:
+        start = max(0, min(len(samples), round(start_s * params.framerate)))
+        end = max(start, min(len(samples), round(end_s * params.framerate)))
+        if end <= start:
+            continue
+        if pieces and separator_frames:
+            pieces.append(separator)
+        pieces.append(samples[start:end])
+    output = (np.concatenate(pieces) if pieces
+              else np.empty((0,) + samples.shape[1:], dtype=samples.dtype))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(destination), "wb") as wav:
+        wav.setparams(params)
+        wav.writeframes(output.tobytes())
+    record = file_record(destination, relative_to=relative_to)
+    record.update({
+        "selection": "participant_rms_speech_concatenation",
+        "source_intervals": len(intervals_s),
+        "separator_s": separator_s,
+    })
+    return record
+
+
 def _mono_float(path: Path) -> tuple[int, np.ndarray]:
     params, samples = _read_wav(path)
     values = samples.astype(np.float64)
@@ -155,6 +210,7 @@ def prepare_session_analysis(session: dict, data_root: Path, analysis_id: str,
 
     events = read_events(event_path)
     regions = route_regions(events)
+    speech_intervals = _participant_speech_intervals(events)
     out_dir = transmitted.parent / "analysis" / "vc_quality" / analysis_id
     out_dir.mkdir(parents=True, exist_ok=False)
     tx_rate, tx_audio = _mono_float(transmitted)
@@ -176,10 +232,56 @@ def prepare_session_analysis(session: dict, data_root: Path, analysis_id: str,
             item["source"] = _write_slice(source, src_path, *stable_input, data_root)
             item["transmitted"] = _write_slice(transmitted, tx_path, *stable_tx, data_root)
             if region["mode"] == "vc":
+                selected = [
+                    (max(start, round(stable_input[0] * 16000)),
+                     min(end, round(stable_input[1] * 16000)))
+                    for start, end in speech_intervals
+                    if end > stable_input[0] * 16000 and start < stable_input[1] * 16000
+                ]
+                selected = [(start, end) for start, end in selected if end > start]
+                score_source = src_path
+                score_transmitted = tx_path
+                if selected:
+                    padding_samples = round(0.2 * 16000)
+                    input_start = round(stable_input[0] * 16000)
+                    input_end = round(stable_input[1] * 16000)
+                    tx_start = round(stable_tx[0] * 16000)
+                    tx_end = round(stable_tx[1] * 16000)
+                    input_span = max(1, input_end - input_start)
+                    tx_span = max(1, tx_end - tx_start)
+                    source_slices: list[tuple[float, float]] = []
+                    transmitted_slices: list[tuple[float, float]] = []
+                    for start, end in selected:
+                        padded_start = max(input_start, start - padding_samples)
+                        padded_end = min(input_end, end + padding_samples)
+                        source_slices.append((padded_start / 16000, padded_end / 16000))
+                        mapped_start = tx_start + round(
+                            (padded_start - input_start) * tx_span / input_span)
+                        mapped_end = tx_start + round(
+                            (padded_end - input_start) * tx_span / input_span)
+                        transmitted_slices.append(
+                            (mapped_start / 16000, mapped_end / 16000))
+                    score_source = out_dir / f"region_{index:02d}_vc_source_speech.wav"
+                    score_transmitted = out_dir / f"region_{index:02d}_vc_transmitted_speech.wav"
+                    item["score_source"] = _write_concatenated_slices(
+                        source, score_source, source_slices, data_root)
+                    item["score_transmitted"] = _write_concatenated_slices(
+                        transmitted, score_transmitted, transmitted_slices, data_root)
+                    item["score_selection"] = {
+                        "mode": "participant_rms_speech_concatenation",
+                        "speech_intervals": len(selected),
+                        "boundary_padding_s": 0.2,
+                        "mapping": "linear_within_route_region",
+                    }
+                else:
+                    item["score_selection"] = {
+                        "mode": "whole_region_fallback",
+                        "reason": "no_participant_speech_events_in_region",
+                    }
                 score_jobs.append({
                     "region": index,
-                    "source": str(src_path.relative_to(data_root)),
-                    "converted": str(tx_path.relative_to(data_root)),
+                    "source": str(score_source.relative_to(data_root)),
+                    "converted": str(score_transmitted.relative_to(data_root)),
                     "target": str(target.relative_to(data_root)),
                 })
         derived.append(item)

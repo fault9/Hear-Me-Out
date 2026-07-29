@@ -349,6 +349,48 @@ class TransitionTests(unittest.TestCase):
             with wave.open(str(scored_clip), "rb") as wav:
                 self.assertEqual(wav.getnframes(), 16000)
 
+    def test_vc_scoring_concatenates_recorded_participant_speech(self):
+        events = [
+            {"event": "route_activated", "event_sequence": 1, "from_mode": None,
+             "to_mode": "vc", "input_sample": 0, "transmitted_sample": 0,
+             "requested_start_s": 0},
+            {"event": "transmitted_window", "event_sequence": 2, "route_mode": "vc",
+             "input_start_sample": 0, "input_end_sample": 48000,
+             "transmitted_start_sample": 0, "transmitted_end_sample": 48000},
+            {"event": "participant_speech_start", "event_sequence": 3,
+             "input_sample": 16000},
+            {"event": "participant_speech_end", "event_sequence": 4,
+             "input_sample": 24000},
+            {"event": "participant_speech_start", "event_sequence": 5,
+             "input_sample": 32000},
+            {"event": "participant_speech_end", "event_sequence": 6,
+             "input_sample": 40000},
+            {"event": "stream_stop", "event_sequence": 7, "input_samples": 48000},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session_dir = root / "sessions" / "attempt"
+            session_dir.mkdir(parents=True)
+            for name in ("participant.wav", "participant_raw.wav", "target.wav"):
+                write_wav(session_dir / name)
+            with (session_dir / "events.jsonl").open("w") as stream:
+                for row in events:
+                    stream.write(json.dumps(row) + "\n")
+            session = {"session_id": "s1", "files": {
+                "participant": "sessions/attempt/participant.wav",
+                "participant_raw": "sessions/attempt/participant_raw.wav",
+            }}
+
+            result = prepare_session_analysis(session, root, "analysis-speech")
+
+            region = result["regions"][0]
+            self.assertEqual(region["score_selection"]["speech_intervals"], 2)
+            self.assertIn("_speech.wav", result["score_jobs"][0]["converted"])
+            scored_clip = root / result["score_jobs"][0]["converted"]
+            with wave.open(str(scored_clip), "rb") as wav:
+                # Two padded 0.9 s utterances plus the 0.15 s separator.
+                self.assertEqual(wav.getnframes(), 31200)
+
     def test_playback_clip_contains_converted_then_natural_speech(self):
         events = [
             {"event": "route_activated", "event_sequence": 1, "from_mode": None,
