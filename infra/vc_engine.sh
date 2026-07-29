@@ -33,14 +33,6 @@ case "$ACTION" in
       export XVC_DIR="${XVC_DIR:-$WORKSPACE/X-VC}"
       export XVC_CONFIG="${XVC_CONFIG:-$XVC_DIR/configs/xvc.yaml}"
       export XVC_CKPT="${XVC_CKPT:-$XVC_DIR/ckpts/xvc.pt}"
-      # X-VC stock streaming window (model-coupled — see run_all.sh; lowering CHUNK
-      # breaks conversion). Defaulted here too for standalone starts; overrides win.
-      export XVC_CHUNK_MS="${XVC_CHUNK_MS:-2400}"
-      export XVC_CURRENT_MS="${XVC_CURRENT_MS:-120}"
-      export XVC_SMOOTH_MS="${XVC_SMOOTH_MS:-20}"
-      export XVC_FUTURE_MS="${XVC_FUTURE_MS:-100}"
-      export XVC_SILENCE_GATE_RMS="${XVC_SILENCE_GATE_RMS:-0.008}"
-      export XVC_SILENCE_HANGOVER_MS="${XVC_SILENCE_HANGOVER_MS:-360}"
       [ -d "$XVC_DIR" ] || { echo "ERROR: X-VC not installed at $XVC_DIR"; exit 1; }
       nohup bash -c "cd '$XVC_DIR' && exec uv run --project '$SERVICES/xvc' python '$SERVICES/xvc/server.py'" >"$LOG" 2>&1 &
     else

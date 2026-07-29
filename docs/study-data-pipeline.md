@@ -92,11 +92,11 @@ should be described as diarization ground truth.
 
 ## X-VC technical-pilot calibration
 
-Before freezing the live X-VC profile, compare the observed pilot recording
-against matched offline and streaming rerenders of the same raw-microphone
-utterances. Run this only on technical-pilot sessions that are excluded from
-the study dataset, while the live services are stopped so the renderer can use
-the GPU:
+The study uses one frozen X-VC stream: 120 ms current audio, 20 ms smoothing,
+100 ms future context, and RMS silence gate 0.008. The calibration tool compares
+the observed pilot recording, official offline X-VC, and that production stream.
+It does not expose alternative live latency profiles. Run it only on excluded
+technical-pilot sessions while the live services are stopped:
 
 ```bash
 uv run --project services/vc_quality python \
@@ -105,15 +105,13 @@ uv run --project services/vc_quality python \
   --data-root /workspace/data/media
 ```
 
-The default matrix contains the observed live output, official offline X-VC,
-and 120/200/320 ms streaming-current windows crossed with RMS silence gates
-0.006 and 0.008. Participant RMS speech events define contiguous utterances;
-route events map each utterance to the corresponding observed transmitted
-interval. The terminal report gives per-profile median utterance UTMOS, change
-from raw-microphone UTMOS, median target-speaker SIM, aggregate SIM, aggregate
-free-speech pseudo-WER, and median rendering RTF. WER compares Whisper ASR of
-the concatenated converted utterances with one cached Whisper transcription of
-the concatenated raw utterances. It is not ground-truth WER.
+Participant RMS speech events define contiguous utterances; route events map
+each utterance to the corresponding observed transmitted interval. The terminal
+report gives median utterance UTMOS, change from raw-microphone UTMOS, median
+target-speaker SIM, aggregate SIM, aggregate free-speech pseudo-WER, and median
+rendering RTF. WER compares Whisper ASR of concatenated converted utterances
+with one cached Whisper transcription of concatenated raw utterances. It is not
+ground-truth WER.
 
 Streaming variants render each complete VC route before utterance slicing so
 X-VC history, real pauses, and silence-gate hangover are not reset at speech
@@ -126,29 +124,27 @@ pilot renders need to be retained; the directory must not already exist.
 Neither mode updates `study.db`, session artifacts, or canonical analysis
 results.
 
-Browser processing choices such as echo cancellation cannot be reconstructed
-from one saved raw track. Compare those settings using separate technical-pilot
-captures under otherwise matched conditions.
-
-To test zero-additional-latency naturalness changes at the production 120 ms
-current window, hold `smooth_ms + future_ms` at 120 ms and compare raw input
-with X-VC's fixed whole-route normalization rule:
+Screen candidate targets separately with the same production stream. Point the
+command at one presentation category at a time and use an excluded pilot source
+whose conversion direction matches that category:
 
 ```bash
 uv run --project services/vc_quality python \
-  services/vc_quality/pilot_calibration.py \
+  services/vc_quality/target_screening.py \
   --session P01001_R01_S05_A01 \
   --data-root /workspace/data/media \
-  --profiles observed,offline,stream120 \
-  --gates 0.008 \
-  --smooth-future 20:100,40:80,60:60 \
-  --input-levels raw,normalized
+  --candidates /workspace/data/target-screening/candidates/masculine
 ```
 
-The normalized profiles estimate the benefit of one fixed calibration-derived
-gain; they do not model dynamic AGC. Before deployment, derive that gain from
-the participant's audio check, freeze it for the run, apply it consistently to
-both natural and converted model-bound audio, and retain unmodified raw audio.
+The target screener loads X-VC once, renders every candidate over each complete
+VC route, and ranks converted UTMOS with WER and target SIM as guardrails. Run
+the feminine directory separately with an appropriate source pilot. Confirm
+finalists by blinded listening; do not select on the ranking alone. Temporary
+renders are deleted and neither candidate WAVs nor study data are modified.
+
+Browser processing choices such as echo cancellation cannot be reconstructed
+from one saved raw track. Compare those settings using separate technical-pilot
+captures under otherwise matched conditions.
 
 ## Gender-conditional target assignment and counterbalancing
 

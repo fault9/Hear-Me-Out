@@ -47,7 +47,6 @@ def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import server
     from bins.infer_utils import load_pair_as_tensors, load_xvc, run_offline
-    from utils.audio import audio_volume_normalize
 
     server.cfg, server.model, server.device = load_xvc(
         xvc["config"], xvc["checkpoint"], int(xvc.get("device", 0)),
@@ -59,13 +58,16 @@ def main() -> None:
         server.cfg.get("dataloader", {}).get("mask_target_condition", True)
     )
 
-    target_path = manifest["target_path"]
-    _, speaker_condition, frame_condition = server._target_conditions(target_path)
+    default_target_path = manifest.get("target_path")
+    target_conditions = {}
     profile_by_id = {row["id"]: row for row in manifest["profiles"]}
     results = []
 
     for job in manifest["jobs"]:
         source_path = job["source_path"]
+        target_path = job.get("target_path", default_target_path)
+        if not target_path:
+            raise ValueError(f"target_path is missing for {job['job_id']}")
         source_wave, source_rate = torchaudio.load(source_path)
         if source_wave.numel() == 0:
             raise ValueError(f"source audio is empty: {source_path}")
@@ -81,8 +83,6 @@ def main() -> None:
         for profile_id, output_path in job["outputs"].items():
             profile = profile_by_id[profile_id]
             started = time.perf_counter()
-            input_level = profile.get("input_level", "xvc_offline_normalized")
-            input_gain = None
             if profile["mode"] == "offline":
                 source_tensor, target_tensor, target_condition = load_pair_as_tensors(
                     source_path,
@@ -102,28 +102,15 @@ def main() -> None:
                 silence_bypassed_windows = 0
                 output_windows = 1
             elif profile["mode"] == "streaming":
-                profile_source = source_16k
-                if input_level == "normalized":
-                    profile_source = audio_volume_normalize(source_16k.copy()).astype(
-                        np.float32
+                if target_path not in target_conditions:
+                    _, speaker_condition, frame_condition = server._target_conditions(
+                        target_path
                     )
-                    denominator = float(np.dot(source_16k, source_16k))
-                    input_gain = (
-                        float(np.dot(source_16k, profile_source) / denominator)
-                        if denominator > 1e-12 else 1.0
+                    target_conditions[target_path] = (
+                        speaker_condition, frame_condition
                     )
-                elif input_level != "raw":
-                    raise ValueError(f"unsupported streaming input level: {input_level}")
-                session = server.XVCStreamSession(
-                    speaker_condition,
-                    frame_condition,
-                    chunk_ms=int(profile["chunk_ms"]),
-                    current_ms=int(profile["current_ms"]),
-                    smooth_ms=int(profile["smooth_ms"]),
-                    future_ms=int(profile["future_ms"]),
-                    silence_gate_rms=float(profile["silence_gate_rms"]),
-                    silence_hangover_ms=int(profile["silence_hangover_ms"]),
-                )
+                speaker_condition, frame_condition = target_conditions[target_path]
+                session = server.XVCStreamSession(speaker_condition, frame_condition)
                 current_samples = session.current_ms * server.SR // 1000
                 window_count = max(1, int(np.ceil(exact_samples / current_samples)))
                 required_samples = (
@@ -132,7 +119,7 @@ def main() -> None:
                     + session.smooth_ms
                     + session.future_ms
                 ) * server.SR // 1000
-                padded = _fit_length(profile_source, required_samples, np)
+                padded = _fit_length(source_16k, required_samples, np)
                 chunks = session.feed(padded)
                 if not chunks:
                     raise RuntimeError(
@@ -163,13 +150,10 @@ def main() -> None:
                 "output_windows": output_windows,
                 "inference_windows": inference_windows,
                 "silence_bypassed_windows": silence_bypassed_windows,
-                "input_level": input_level,
-                "input_gain": input_gain,
             })
             print(
                 f"[pilot-render] {job['job_id']} {profile_id}: "
-                f"{elapsed_s:.2f}s (RTF {elapsed_s / duration_s:.2f})"
-                + (f" input_gain={input_gain:.3f}" if input_gain is not None else ""),
+                f"{elapsed_s:.2f}s (RTF {elapsed_s / duration_s:.2f})",
                 flush=True,
             )
             if torch.cuda.is_available():

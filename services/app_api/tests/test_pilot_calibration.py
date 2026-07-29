@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -7,55 +8,32 @@ VC_QUALITY_DIR = Path(__file__).resolve().parents[2] / "vc_quality"
 if str(VC_QUALITY_DIR) not in sys.path:
     sys.path.insert(0, str(VC_QUALITY_DIR))
 
-from pilot_calibration import parse_profiles, select_vc_utterances  # noqa: E402
+from pilot_calibration import diagnostic_profiles, select_vc_utterances  # noqa: E402
+from target_screening import _candidate_wavs  # noqa: E402
 
 
 class PilotCalibrationTests(unittest.TestCase):
-    def test_profile_matrix_expands_each_stream_window_across_gates(self):
-        profiles = parse_profiles(
-            "observed,offline,stream120,stream200,stream320",
-            "0.006,0.008",
-        )
+    def test_diagnostics_use_only_the_frozen_production_stream(self):
+        profiles = diagnostic_profiles()
         self.assertEqual(
             [profile["id"] for profile in profiles],
-            [
-                "observed",
-                "offline",
-                "stream120_g0p006",
-                "stream120_g0p008",
-                "stream200_g0p006",
-                "stream200_g0p008",
-                "stream320_g0p006",
-                "stream320_g0p008",
-            ],
+            ["observed", "offline", "production_stream"],
         )
+        self.assertEqual(profiles[-1], {"id": "production_stream", "mode": "streaming"})
 
-    def test_fixed_latency_profiles_cross_smoothing_and_input_level(self):
-        profiles = parse_profiles(
-            "observed,stream120",
-            "0.008",
-            "20:100,40:80,60:60",
-            "raw,normalized",
-        )
+    def test_target_screening_discovers_only_wavs_recursively(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            nested = root / "speaker"
+            nested.mkdir()
+            (root / "a.wav").touch()
+            (nested / "b.WAV").touch()
+            (nested / "notes.txt").touch()
 
-        self.assertEqual(
-            [profile["id"] for profile in profiles],
-            [
-                "observed",
-                "stream120_g0p008",
-                "stream120_g0p008_norm",
-                "stream120_g0p008_s40_f80",
-                "stream120_g0p008_s40_f80_norm",
-                "stream120_g0p008_s60_f60",
-                "stream120_g0p008_s60_f60_norm",
-            ],
-        )
-        for profile in profiles[1:]:
-            self.assertEqual(profile["smooth_ms"] + profile["future_ms"], 120)
-
-    def test_fixed_latency_profiles_reject_larger_lookahead(self):
-        with self.assertRaisesRegex(ValueError, "must remain 120 ms"):
-            parse_profiles("stream120", "0.008", "40:100", "raw")
+            self.assertEqual(
+                [path.name for path in _candidate_wavs(root)],
+                ["a.wav", "b.WAV"],
+            )
 
     def test_vc_utterances_use_guard_padding_and_route_mapping(self):
         events = [

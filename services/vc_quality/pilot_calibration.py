@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import statistics
 import subprocess
 import sys
@@ -35,90 +34,20 @@ from study.transition_analysis import (  # noqa: E402
 )
 
 EVENT_SAMPLE_RATE = 16000
-DEFAULT_PROFILES = "observed,offline,stream120,stream200,stream320"
-DEFAULT_GATES = "0.006,0.008"
-DEFAULT_SMOOTH_FUTURE = "20:100"
-DEFAULT_INPUT_LEVELS = "raw"
-STREAM_LOOKAHEAD_BUDGET_MS = 120
 
 
-def parse_profiles(
-    profile_text: str,
-    gate_text: str,
-    smooth_future_text: str = DEFAULT_SMOOTH_FUTURE,
-    input_level_text: str = DEFAULT_INPUT_LEVELS,
-) -> list[dict]:
-    """Expand concise CLI names into explicit, reproducible configurations."""
-    names = [value.strip().lower() for value in profile_text.split(",") if value.strip()]
-    gates = [float(value.strip()) for value in gate_text.split(",") if value.strip()]
-    if any(gate < 0 for gate in gates):
-        raise ValueError("silence gates must be >= 0")
-    smooth_future = []
-    for value in smooth_future_text.split(","):
-        if not value.strip():
-            continue
-        try:
-            smooth, future = (int(item) for item in value.split(":", 1))
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                "smoothing/future values must use <smooth_ms>:<future_ms>"
-            ) from error
-        if smooth < 0 or future < 0:
-            raise ValueError("smoothing and future context must be >= 0")
-        if smooth + future != STREAM_LOOKAHEAD_BUDGET_MS:
-            raise ValueError(
-                "smoothing + future context must remain 120 ms for this "
-                "fixed-latency calibration"
-            )
-        smooth_future.append((smooth, future))
-    input_levels = [
-        value.strip().lower() for value in input_level_text.split(",") if value.strip()
+def production_stream_profile() -> dict:
+    """The single X-VC streaming profile used by the study."""
+    return {"id": "production_stream", "mode": "streaming"}
+
+
+def diagnostic_profiles() -> list[dict]:
+    """Observed/offline references plus the frozen production stream."""
+    return [
+        {"id": "observed", "mode": "observed"},
+        {"id": "offline", "mode": "offline"},
+        production_stream_profile(),
     ]
-    if not smooth_future:
-        raise ValueError("at least one smoothing/future pair is required")
-    if not input_levels or any(value not in {"raw", "normalized"} for value in input_levels):
-        raise ValueError("input levels must be raw and/or normalized")
-    profiles: list[dict] = []
-    seen: set[str] = set()
-    for name in names:
-        if name in seen:
-            continue
-        seen.add(name)
-        if name == "observed":
-            profiles.append({"id": "observed", "mode": "observed"})
-        elif name == "offline":
-            profiles.append({"id": "offline", "mode": "offline"})
-        elif match := re.fullmatch(r"stream(\d+)", name):
-            if not gates:
-                raise ValueError("streaming profiles require at least one silence gate")
-            current_ms = int(match.group(1))
-            for gate in gates:
-                for smooth_ms, future_ms in smooth_future:
-                    for input_level in input_levels:
-                        gate_id = f"{gate:g}".replace(".", "p")
-                        profile_id = f"stream{current_ms}_g{gate_id}"
-                        if (smooth_ms, future_ms) != (20, 100):
-                            profile_id += f"_s{smooth_ms}_f{future_ms}"
-                        if input_level == "normalized":
-                            profile_id += "_norm"
-                        profiles.append({
-                            "id": profile_id,
-                            "mode": "streaming",
-                            "chunk_ms": 2400,
-                            "current_ms": current_ms,
-                            "smooth_ms": smooth_ms,
-                            "future_ms": future_ms,
-                            "silence_gate_rms": gate,
-                            "silence_hangover_ms": 360,
-                            "input_level": input_level,
-                        })
-        else:
-            raise ValueError(
-                f"unknown profile {name!r}; use observed, offline, or stream<ms>"
-            )
-    if not profiles:
-        raise ValueError("at least one profile is required")
-    return profiles
 
 
 def select_vc_utterances(
@@ -339,7 +268,8 @@ def _render_profiles(
         "--manifest", str(manifest_path), "--results", str(result_path),
     ]
     print(
-        f"\nRendering {len(utterances)} offline utterances and "
+        f"\nRendering "
+        f"{len(utterances) if offline_profiles else 0} offline utterances and "
         f"{len(route_sources)} complete streaming VC routes..."
     )
     subprocess.run(command, check=True)
@@ -546,7 +476,8 @@ def _print_report(session_id: str, utterances: list[dict], result: dict) -> None
         print(f"{row['profile_id']} WER unavailable: {row['wer_error']}")
 
 
-def _run(args: argparse.Namespace, work_dir: Path) -> dict:
+def prepare_session_inputs(args: argparse.Namespace, work_dir: Path) -> dict:
+    """Extract reusable route-aware pilot clips without changing the session."""
     data_root = Path(args.data_root).expanduser().resolve()
     session_dir = _find_session(data_root, args.session, args.session_dir)
     source = session_dir / "participant_raw.wav"
@@ -601,9 +532,22 @@ def _run(args: argparse.Namespace, work_dir: Path) -> dict:
         )
         route_sources[region_index] = route_path
 
-    profiles = parse_profiles(
-        args.profiles, args.gates, args.smooth_future, args.input_levels
-    )
+    return {
+        "session_dir": session_dir,
+        "target": target,
+        "utterances": utterances,
+        "route_sources": route_sources,
+    }
+
+
+def _run(args: argparse.Namespace, work_dir: Path) -> dict:
+    prepared = prepare_session_inputs(args, work_dir)
+    session_dir = prepared["session_dir"]
+    target = prepared["target"]
+    utterances = prepared["utterances"]
+    route_sources = prepared["route_sources"]
+
+    profiles = diagnostic_profiles()
     render_rows = _render_profiles(
         profiles, utterances, route_sources, target, work_dir, args
     )
@@ -632,18 +576,6 @@ def main() -> None:
     parser.add_argument("--session", required=True, help="HMO session ID")
     parser.add_argument("--data-root", default="/workspace/data/media")
     parser.add_argument("--session-dir", help="explicit attempt directory override")
-    parser.add_argument("--profiles", default=DEFAULT_PROFILES)
-    parser.add_argument("--gates", default=DEFAULT_GATES)
-    parser.add_argument(
-        "--smooth-future",
-        default=DEFAULT_SMOOTH_FUTURE,
-        help="comma-separated smooth_ms:future_ms pairs; each must sum to 120",
-    )
-    parser.add_argument(
-        "--input-levels",
-        default=DEFAULT_INPUT_LEVELS,
-        help="raw, normalized, or raw,normalized",
-    )
     parser.add_argument("--guard-s", type=float, default=0.5)
     parser.add_argument("--padding-s", type=float, default=0.2)
     parser.add_argument("--min-utterance-s", type=float, default=0.8)

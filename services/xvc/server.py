@@ -20,8 +20,8 @@ Env:
   XVC_CKPT             default $XVC_DIR/ckpts/xvc.pt
   XVC_DEVICE           CUDA device index (default 0)
   XVC_EMA_LOAD         load EMA weights (default 1)
-  XVC_CHUNK_MS/CURRENT_MS/SMOOTH_MS/FUTURE_MS  streaming window (default 2400/120/20/100)
-  XVC_SILENCE_GATE_RMS / XVC_SILENCE_HANGOVER_MS  quiet-window GPU bypass (0.008 / 360)
+  Streaming window and silence gate are frozen for the study at
+  2400/120/20/100 ms and RMS 0.008 with 360 ms hangover.
   MEANVC_PORT          listen port (default 5002)
   SSL_DIR              dir with cert.pem/key.pem
   PERSONAPLEX_PROXY_HOST / PERSONAPLEX_PROXY_PORT   default 127.0.0.1 / 8000
@@ -91,12 +91,12 @@ XVC_CKPT = os.environ.get("XVC_CKPT", os.path.join(XVC_DIR, "ckpts/xvc.pt"))
 XVC_DEVICE = int(os.environ.get("XVC_DEVICE", 0))
 XVC_EMA_LOAD = os.environ.get("XVC_EMA_LOAD", "1") not in ("0", "false", "False")
 
-CHUNK_MS = int(os.environ.get("XVC_CHUNK_MS", 2400))
-CURRENT_MS = int(os.environ.get("XVC_CURRENT_MS", 120))
-SMOOTH_MS = int(os.environ.get("XVC_SMOOTH_MS", 20))
-FUTURE_MS = int(os.environ.get("XVC_FUTURE_MS", 100))
-SILENCE_GATE_RMS = float(os.environ.get("XVC_SILENCE_GATE_RMS", "0.008"))
-SILENCE_HANGOVER_MS = int(os.environ.get("XVC_SILENCE_HANGOVER_MS", "360"))
+CHUNK_MS = 2400
+CURRENT_MS = 120
+SMOOTH_MS = 20
+FUTURE_MS = 100
+SILENCE_GATE_RMS = 0.008
+SILENCE_HANGOVER_MS = 360
 
 PERSONAPLEX_HOST = os.environ.get("PERSONAPLEX_PROXY_HOST", "127.0.0.1")
 PERSONAPLEX_PORT = os.environ.get("PERSONAPLEX_PROXY_PORT", "8000")
@@ -252,37 +252,17 @@ class XVCStreamSession:
     is stateless except the overlap cross-fade tail_buffer.
     """
 
-    def __init__(
-        self,
-        speaker_condition,
-        frame_condition,
-        *,
-        chunk_ms: int = CHUNK_MS,
-        current_ms: int = CURRENT_MS,
-        smooth_ms: int = SMOOTH_MS,
-        future_ms: int = FUTURE_MS,
-        silence_gate_rms: float = SILENCE_GATE_RMS,
-        silence_hangover_ms: int = SILENCE_HANGOVER_MS,
-    ):
+    def __init__(self, speaker_condition, frame_condition):
         self.spk = speaker_condition
         self.frame = frame_condition
         self.sr = SR
-        self.chunk_ms = chunk_ms
-        self.current_ms = current_ms
-        self.smooth_ms = smooth_ms
-        self.future_ms = future_ms
-        self.silence_gate_rms = silence_gate_rms
-        self.silence_hangover_ms = silence_hangover_ms
-        if self.current_ms <= 0:
-            raise ValueError("current_ms must be > 0")
-        self.history_ms = (
-            self.chunk_ms - self.current_ms - self.smooth_ms - self.future_ms
-        )
+        self.current_ms = CURRENT_MS
+        self.smooth_ms = SMOOTH_MS
+        self.future_ms = FUTURE_MS
+        self.history_ms = CHUNK_MS - CURRENT_MS - SMOOTH_MS - FUTURE_MS
         if self.history_ms < 0:
-            raise ValueError(
-                "chunk_ms - current_ms - smooth_ms - future_ms must be >= 0"
-            )
-        self.overlap_len = self.smooth_ms * self.sr // 1000
+            raise ValueError("CHUNK_MS - CURRENT_MS - SMOOTH_MS - FUTURE_MS must be >= 0")
+        self.overlap_len = SMOOTH_MS * SR // 1000
         if self.overlap_len > 0:
             self.fade_in = 0.5 * (
                 1 - torch.cos(torch.pi * torch.linspace(0, 1, self.overlap_len, device=device))
@@ -296,7 +276,7 @@ class XVCStreamSession:
         self.inference_windows = 0
         self.silence_bypassed_windows = 0
         self.silence_hangover_windows = max(
-            0, int(np.ceil(self.silence_hangover_ms / self.current_ms)))
+            0, int(np.ceil(SILENCE_HANGOVER_MS / self.current_ms)))
         self.silence_hangover_remaining = 0
 
     @torch.inference_mode()
@@ -323,7 +303,7 @@ class XVCStreamSession:
             ) * self.sr // 1000
             activity = seg[cur_start:activity_end]
             rms = float(np.sqrt(np.mean(activity * activity))) if len(activity) else 0.0
-            active = self.silence_gate_rms <= 0 or rms >= self.silence_gate_rms
+            active = SILENCE_GATE_RMS <= 0 or rms >= SILENCE_GATE_RMS
             if active:
                 self.silence_hangover_remaining = self.silence_hangover_windows
             elif self.silence_hangover_remaining > 0:
