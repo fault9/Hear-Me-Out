@@ -21,7 +21,7 @@ Env:
   XVC_DEVICE           CUDA device index (default 0)
   XVC_EMA_LOAD         load EMA weights (default 1)
   XVC_CHUNK_MS/CURRENT_MS/SMOOTH_MS/FUTURE_MS  streaming window (default 2400/120/20/100)
-  XVC_SILENCE_GATE_RMS / XVC_SILENCE_HANGOVER_MS  quiet-window GPU bypass (0.01 / 240)
+  XVC_SILENCE_GATE_RMS / XVC_SILENCE_HANGOVER_MS  quiet-window GPU bypass (0.008 / 360)
   MEANVC_PORT          listen port (default 5002)
   SSL_DIR              dir with cert.pem/key.pem
   PERSONAPLEX_PROXY_HOST / PERSONAPLEX_PROXY_PORT   default 127.0.0.1 / 8000
@@ -93,8 +93,8 @@ CHUNK_MS = int(os.environ.get("XVC_CHUNK_MS", 2400))
 CURRENT_MS = int(os.environ.get("XVC_CURRENT_MS", 120))
 SMOOTH_MS = int(os.environ.get("XVC_SMOOTH_MS", 20))
 FUTURE_MS = int(os.environ.get("XVC_FUTURE_MS", 100))
-SILENCE_GATE_RMS = float(os.environ.get("XVC_SILENCE_GATE_RMS", "0.01"))
-SILENCE_HANGOVER_MS = int(os.environ.get("XVC_SILENCE_HANGOVER_MS", "240"))
+SILENCE_GATE_RMS = float(os.environ.get("XVC_SILENCE_GATE_RMS", "0.008"))
+SILENCE_HANGOVER_MS = int(os.environ.get("XVC_SILENCE_HANGOVER_MS", "360"))
 
 PERSONAPLEX_HOST = os.environ.get("PERSONAPLEX_PROXY_HOST", "127.0.0.1")
 PERSONAPLEX_PORT = os.environ.get("PERSONAPLEX_PROXY_PORT", "8000")
@@ -233,10 +233,11 @@ class XVCStreamSession:
                 outs.append(self._forward(seg))
                 self.inference_windows += 1
             else:
-                # PersonaPlex still receives a continuous, sample-exact stream,
-                # but quiet microphone windows do not compete with it for GPU.
+                # Preserve the sample-exact stream with digital silence. Passing
+                # raw mic audio here would leak natural speech into a VC condition
+                # whenever a quiet syllable fell below the gate.
                 cur_end = (self.history_ms + self.current_ms) * self.sr // 1000
-                outs.append(seg[cur_start:cur_end].copy())
+                outs.append(np.zeros(cur_end - cur_start, dtype=np.float32))
                 self.silence_bypassed_windows += 1
                 if self.tail_buffer is not None:
                     self.tail_buffer.zero_()

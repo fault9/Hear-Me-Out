@@ -270,6 +270,14 @@ class PilotTemplateTests(unittest.TestCase):
                 {variant["scenario_order"].index(scenario_id) + 1 for variant in compiled},
                 {2, 3, 4, 5},
             )
+        for condition in analytical_conditions:
+            positions = {
+                variant["scenario_order"].index(int(scenario_id)) + 1
+                for variant in compiled
+                for scenario_id, assignment in variant["assignment"].items()
+                if assignment["condition"] == condition
+            }
+            self.assertEqual(positions, {2, 3, 4, 5})
         for variant in compiled:
             self.assertEqual(variant["scenario_order"][0], 1)
             self.assertEqual(variant["assignment"]["1"]["condition"], "practice")
