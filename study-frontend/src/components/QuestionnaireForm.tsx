@@ -178,7 +178,7 @@ function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
     const min = item.min ?? 1, max = item.max ?? 7
     const nums = Array.from({ length: Math.max(0, max - min + 1) }, (_, i) => min + i)
     return (
-      <div>
+      <div className="max-w-xl">
         <div className="grid grid-cols-7 gap-2 sm:gap-3">
           {nums.map(n => (
             <button key={n} type="button" onClick={() => set(item.id, n)}
