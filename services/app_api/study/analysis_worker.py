@@ -17,6 +17,7 @@ import contextlib
 import copy
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -39,6 +40,7 @@ from study.analysis import (STUDY_DATA_DIR, _session_paths, run_session_analysis
                             status_path)  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 from study.timing_analysis import prepare_timing_analysis  # noqa: E402
+from study.vc_quality_analysis import status_path as vc_quality_status_path  # noqa: E402
 
 # Shared OTel helper (services/ is on sys.path via the insert above). No-op unless
 # OTEL_* is configured; the worker exports to the same collector as app-api.
@@ -64,6 +66,29 @@ def _write(**kw) -> None:
     tmp.replace(p)  # atomic-ish: readers never see a half-written file
 
 
+def _read_vc_quality_status() -> dict:
+    try:
+        return json.loads(vc_quality_status_path().read_text())
+    except (OSError, ValueError):
+        return {"running": True, "done": 0, "total": 0, "current": None}
+
+
+def _run_vc_quality(study_id: int, force: bool) -> str | None:
+    args = [sys.executable, "-m", "study.vc_quality_worker", str(study_id)]
+    if force:
+        args.append("--force")
+    proc = subprocess.Popen(args, cwd=Path(__file__).resolve().parents[1])
+    while proc.poll() is None:
+        status = _read_vc_quality_status()
+        _write(running=True, phase="vc_quality", done=status.get("done", 0),
+               total=status.get("total", 0), current=status.get("current"),
+               study_id=study_id, error=None)
+        time.sleep(2)
+    if proc.returncode:
+        return f"VC-quality worker exited with status {proc.returncode}"
+    return None
+
+
 def main() -> None:
     study_id = int(sys.argv[1])
     force = "--force" in sys.argv[2:]
@@ -79,10 +104,12 @@ def main() -> None:
                and (force or s.get("metrics") is None or needs_timing(s))]
     total = len(pending)
     done = 0
-    _write(running=True, done=0, total=total, current=None, study_id=study_id)
+    _write(running=True, phase="preprocessing", done=0, total=total,
+           current=None, study_id=study_id, error=None)
 
     for s in pending:
-        _write(running=True, done=done, total=total, current=s["session_id"], study_id=study_id)
+        _write(running=True, phase="preprocessing", done=done, total=total,
+               current=s["session_id"], study_id=study_id, error=None)
         if logging_setup:
             logging_setup.set_log_session(s["session_id"], study_id)
         conv, raw, mt = _session_paths(s)
@@ -108,9 +135,14 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001 - one bad session shouldn't kill the batch
             print(f"[analysis_worker] error for {s['session_id']}: {e}", file=sys.stderr)
         done += 1
-        _write(running=True, done=done, total=total, current=None, study_id=study_id)
+        _write(running=True, phase="preprocessing", done=done, total=total,
+               current=None, study_id=study_id, error=None)
 
-    _write(running=False, done=done, total=total, current=None, study_id=study_id)
+    error = _run_vc_quality(study_id, force)
+    final_status = _read_vc_quality_status()
+    _write(running=False, phase="complete" if error is None else "failed",
+           done=final_status.get("done", 0), total=final_status.get("total", 0),
+           current=None, study_id=study_id, error=error)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from .artifacts import atomic_write_json
+from .transition_analysis import read_events, route_regions
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,14 @@ def run_session_analysis(session_id: str, converted_wav: str | None,
                 "route_warning": "Natural and VC intervals are mixed for switching sessions.",
                 "vc_quality": False,
             }
-            transcript["participant"] = (metrics.get("response_b") or {}).get("transcript")
+            raw_result = metrics.get("response_a") or {}
+            transmitted_result = metrics.get("response_b") or {}
+            transcript["participant"] = raw_result.get("transcript")
+            transcript["participant_transmitted"] = transmitted_result.get("transcript")
+            transcript["participant_segments"] = _participant_segments(
+                raw_result.get("transcript_segments") or [], raw_wav)
+            transcript["participant_transmitted_segments"] = (
+                transmitted_result.get("transcript_segments") or [])
             audiobox = bool(metrics.get("audiobox_available"))
     except Exception as e:  # noqa: BLE001 - analysis is best-effort; audio is already saved
         logger.warning(f"[study] analysis failed for {session_id}: {e}")
@@ -74,6 +82,41 @@ def run_session_analysis(session_id: str, converted_wav: str | None,
         logger.error(f"[study] could not persist analysis for {session_id}: {e}")
 
 
+def _participant_segments(segments: list[dict], raw_wav: str | None) -> list[dict]:
+    if not raw_wav:
+        return []
+    session_dir = Path(raw_wav).parent
+    offset_s = 0.0
+    try:
+        timeline = json.loads((session_dir / "client_timeline.json").read_text())
+        chunks = ((timeline.get("capture") or {}).get("chunks") or [])
+        offset_s = next((float(row["timeline_start_ms"]) / 1000 for row in chunks
+                         if row.get("timeline_start_ms") is not None), 0.0)
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        regions = route_regions(read_events(session_dir / "events.jsonl"))
+    except OSError:
+        regions = []
+    output = []
+    for segment in segments:
+        start = float(segment.get("start", 0))
+        end = float(segment.get("end", start))
+        midpoint_sample = round((start + end) * 0.5 * 16000)
+        route = next((region.get("mode") for region in regions
+                      if region.get("input_start_sample", 0) <= midpoint_sample
+                      < region.get("input_end_sample", 0)), None)
+        output.append({
+            "text": segment.get("text", ""),
+            "start": round(start + offset_s, 3),
+            "end": round(end + offset_s, 3),
+            "speaker": "participant",
+            "voice_mode": route,
+            "timeline": "browser_audio_clock",
+        })
+    return output
+
+
 def _session_paths(session: dict):
     files = session.get("files") or {}
     conv = files.get("participant")
@@ -90,7 +133,7 @@ def status_path() -> Path:
 
 
 _IDLE = {"running": False, "done": 0, "total": 0, "current": None, "study_id": None}
-_STATUS_KEYS = ("running", "done", "total", "current", "study_id")
+_STATUS_KEYS = ("running", "phase", "done", "total", "current", "study_id", "error")
 
 
 def _pid_alive(pid) -> bool:
@@ -147,14 +190,17 @@ class AnalysisRunner:
         try:
             p = status_path()
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps({"running": True, "done": 0, "total": 0, "current": None,
-                                     "study_id": study_id, "pid": None, "heartbeat": time.time()}))
+            p.write_text(json.dumps({"running": True, "phase": "preprocessing",
+                                     "done": 0, "total": 0, "current": None,
+                                     "study_id": study_id, "pid": None,
+                                     "heartbeat": time.time()}))
         except OSError as e:  # noqa: BLE001
             logger.warning(f"[study] could not seed analysis status: {e}")
 
         self._proc = subprocess.Popen(args, cwd=app_api_dir)
         logger.info(f"[study] launched analysis worker pid={self._proc.pid} study={study_id} force={force}")
-        return {"running": True, "done": 0, "total": 0, "current": None, "study_id": study_id}
+        return {"running": True, "phase": "preprocessing", "done": 0,
+                "total": 0, "current": None, "study_id": study_id, "error": None}
 
 
 _runner: Optional[AnalysisRunner] = None

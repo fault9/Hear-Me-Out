@@ -455,6 +455,9 @@ def build_study_router() -> APIRouter:
         live study. force=true re-analyzes already-processed sessions."""
         if not backend.get_study(study_id):
             raise HTTPException(status_code=404, detail="Unknown study")
+        if get_vc_quality_runner().get_status().get("running"):
+            raise HTTPException(status_code=409,
+                                detail="VC-quality analysis is already running")
         return get_runner().start(backend, study_id, force)
 
     @router.get("/studies/{study_id}/analyze/status", dependencies=[Depends(require_admin)])
@@ -467,6 +470,9 @@ def build_study_router() -> APIRouter:
         or every captured session in this study. Original artifacts are read-only."""
         if not backend.get_study(study_id):
             raise HTTPException(status_code=404, detail="Unknown study")
+        if get_runner().get_status().get("running"):
+            raise HTTPException(status_code=409,
+                                detail="The full analysis pipeline is already running")
         participant_id = body.get("participant_id") or None
         session_id = body.get("session_id") or None
         if participant_id and session_id:

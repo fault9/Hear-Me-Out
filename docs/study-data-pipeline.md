@@ -45,18 +45,24 @@ processed and regular non-study calls retain the legacy raw-float frame format.
 Admin-triggered preprocessing writes versioned
 `analysis/timing/<analysis-id>/timing.json` outputs with overlap, barge-in,
 stop-latency, route-switch projection, and crosswalk integrity diagnostics. RMS
-participant boundaries and scheduled-packet assistant boundaries remain labelled
-`estimated_pending_validation`; use `validate_intervals` with manually annotated
-pilot intervals before treating these measures as validated study outcomes.
+participant boundaries and decoded-playback RMS assistant boundaries remain
+labelled `estimated_pending_validation`; use `validate_intervals` with manually
+annotated pilot intervals before treating these measures as validated outcomes.
+New captures store packet RMS on the browser AudioContext schedule. Existing
+captures fall back to RMS over the silence-preserving `model.wav` artifact.
 
 ## Post-hoc processing
 
-Use the admin Data tab after collection. `Session preprocessing and diagnostics`
-transcribes and summarizes whole recordings, and must not be used as a
-route-specific VC comparison for switching sessions.
+Use the admin Data tab after collection. The primary `Analysis pipeline` action
+first transcribes recordings and derives interaction timing, then automatically
+runs VC quality. It is backend-owned and continues if the admin page is closed.
+The general transcript includes raw participant text, browser-clock participant
+segments with route labels, the transmitted transcript, and PersonaPlex turns.
+Whole-recording metrics must not be used as a route-specific VC comparison for
+switching sessions.
 
-`Voice-conversion quality` runs the repository's real `vc_quality.py` for one
-session, one participant, or the full study. It:
+The optional `VC-quality rerun` control runs the repository's real
+`vc_quality.py` for one session, one participant, or the full study. It:
 
 - reads the frozen raw, transmitted, target, and event artifacts;
 - derives stable route clips using actual input/transmitted sample boundaries;
@@ -72,9 +78,9 @@ not used for latency.
 
 Before preregistration/data collection, freeze the transition guard duration,
 transition-window duration, RMS speech threshold/hangover, vc_quality model
-versions, and rules for failed/incomplete captures. Validate the RMS speech
-estimate against a manually annotated subset; packet-gap assistant speech is an
-estimate, not diarization ground truth.
+versions, and rules for failed/incomplete captures. Validate participant and
+assistant RMS speech estimates against a manually annotated subset; neither
+should be described as diarization ground truth.
 
 ## Gender-conditional target assignment and counterbalancing
 

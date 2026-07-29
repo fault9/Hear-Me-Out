@@ -285,6 +285,24 @@ function DataPanel({ token, studyId }: any) {
     adminApi.vcQualityStatus(token, studyId).then(setVcStatus).catch(() => {})
   }
   useEffect(() => { load() }, [token, studyId]) // eslint-disable-line
+  useEffect(() => {
+    if (!status?.running) return
+    const poll = setInterval(async () => {
+      const next = await adminApi.analyzeStatus(token, studyId)
+      setStatus(next)
+      if (!next.running) load()
+    }, 1500)
+    return () => clearInterval(poll)
+  }, [status?.running, token, studyId]) // eslint-disable-line
+  useEffect(() => {
+    if (!vcStatus?.running) return
+    const poll = setInterval(async () => {
+      const next = await adminApi.vcQualityStatus(token, studyId)
+      setVcStatus(next)
+      if (!next.running) load()
+    }, 1500)
+    return () => clearInterval(poll)
+  }, [vcStatus?.running, token, studyId]) // eslint-disable-line
   const download = async (fmt: "json" | "zip") => {
     const r = await fetch(adminApi.exportUrl(studyId, fmt), { headers: { "X-Study-Admin-Token": token } })
     const blob = await r.blob()
@@ -292,26 +310,17 @@ function DataPanel({ token, studyId }: any) {
     a.download = `study${studyId}_export.${fmt}`; a.click(); URL.revokeObjectURL(a.href)
   }
   const runAnalysis = async (force: boolean) => {
-    await adminApi.analyze(token, studyId, force)
-    const poll = setInterval(async () => {
-      const s = await adminApi.analyzeStatus(token, studyId)
-      setStatus(s)
-      if (!s.running) { clearInterval(poll); load() }
-    }, 1500)
+    setStatus(await adminApi.analyze(token, studyId, force))
   }
-  const pending = sessions.filter(s => !s.metrics).length
+  const pending = sessions.filter(s => !s.metrics || s.vc_quality_status !== "complete").length
   const running = status?.running
   const vcRunning = vcStatus?.running
+  const phaseLabel = status?.phase === "vc_quality" ? "VC quality" : "Transcription and timing"
   const runVCQuality = async (force: boolean) => {
     const body: { participant_id?: string; session_id?: string; force?: boolean } = { force }
     if (vcScope.startsWith("participant:")) body.participant_id = vcScope.slice("participant:".length)
     if (vcScope.startsWith("session:")) body.session_id = vcScope.slice("session:".length)
-    await adminApi.vcQuality(token, studyId, body)
-    const poll = setInterval(async () => {
-      const s = await adminApi.vcQualityStatus(token, studyId)
-      setVcStatus(s)
-      if (!s.running) { clearInterval(poll); load() }
-    }, 1500)
+    setVcStatus(await adminApi.vcQuality(token, studyId, body))
   }
   const participants = Array.from(new Set(sessions.map(s => s.participant_id)))
 
@@ -324,35 +333,38 @@ function DataPanel({ token, studyId }: any) {
       </div>
 
       <div className="mb-4 rounded-lg border p-3">
-        <div className="mb-1 text-sm font-semibold">Session preprocessing and diagnostics</div>
+        <div className="mb-1 text-sm font-semibold">Analysis pipeline</div>
         <p className="mb-2 text-xs text-muted-foreground">
-          Run this <b>after data collection</b> — it's model inference and competes with live study sessions.
+          Runs transcription and interaction timing first, then VC-quality scoring. Run after data collection.
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" disabled={running} onClick={() => runAnalysis(false)}>
-            {running ? `Analyzing ${status.done}/${status.total}…` : `Run analysis (${pending} pending)`}
+          <Button size="sm" disabled={running || vcRunning} onClick={() => runAnalysis(false)}>
+            {running ? `${phaseLabel} ${status.done}/${status.total}…` : `Run analysis (${pending} pending)`}
           </Button>
-          <Button size="sm" variant="ghost" disabled={running} onClick={() => runAnalysis(true)}>Re-analyze all</Button>
+          <Button size="sm" variant="ghost" disabled={running || vcRunning}
+            onClick={() => runAnalysis(true)}>Create all new snapshots</Button>
           {running && status.current && <span className="text-xs text-muted-foreground">{status.current}</span>}
+          {!running && status?.error && <span className="text-xs text-destructive">{status.error}</span>}
         </div>
       </div>
 
       <div className="mb-4 rounded-lg border p-3">
-        <div className="mb-1 text-sm font-semibold">Voice-conversion quality</div>
+        <div className="mb-1 text-sm font-semibold">VC-quality rerun</div>
         <p className="mb-2 text-xs text-muted-foreground">
-          Uses frozen target, raw microphone, transmitted audio, and route events. Run after data collection.
+          Optional scoped rerun using the frozen target, raw microphone, transmitted audio, and route events.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <select className="rounded-md border bg-background px-2 py-1.5 text-sm" value={vcScope}
-            onChange={e => setVcScope(e.target.value)} disabled={vcRunning}>
+            onChange={e => setVcScope(e.target.value)} disabled={running || vcRunning}>
             <option value="all">All study sessions</option>
             {participants.map(pid => <option key={pid} value={`participant:${pid}`}>Participant {pid}</option>)}
             {sessions.map(s => <option key={s.session_id} value={`session:${s.session_id}`}>Session {s.session_id}</option>)}
           </select>
-          <Button size="sm" disabled={vcRunning} onClick={() => runVCQuality(false)}>
+          <Button size="sm" disabled={running || vcRunning} onClick={() => runVCQuality(false)}>
             {vcRunning ? `Scoring ${vcStatus.done}/${vcStatus.total}…` : "Run VC quality"}
           </Button>
-          <Button size="sm" variant="ghost" disabled={vcRunning} onClick={() => runVCQuality(true)}>Create new snapshot</Button>
+          <Button size="sm" variant="ghost" disabled={running || vcRunning}
+            onClick={() => runVCQuality(true)}>Create new snapshot</Button>
           {vcRunning && vcStatus.current && <span className="text-xs text-muted-foreground">{vcStatus.current}</span>}
         </div>
       </div>

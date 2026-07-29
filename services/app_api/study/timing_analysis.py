@@ -34,7 +34,8 @@ def _mono_float(path: Path) -> tuple[int, np.ndarray]:
 
 def speech_intervals(audio: np.ndarray, sample_rate: int, *, offset_ms: float = 0.0,
                      threshold: float = 0.012, frame_ms: int = 20,
-                     hangover_ms: int = 250) -> list[dict]:
+                     hangover_ms: int = 250,
+                     minimum_speech_ms: int = 120) -> list[dict]:
     """Deterministic RMS intervals used as estimates pending pilot validation."""
     frame = max(1, round(sample_rate * frame_ms / 1000))
     active = []
@@ -55,31 +56,58 @@ def speech_intervals(audio: np.ndarray, sample_rate: int, *, offset_ms: float = 
         elif first is not None:
             silence += 1
             if silence > max_gap:
-                intervals.append({
-                    "start_ms": offset_ms + first * frame_ms,
-                    "end_ms": offset_ms + (last + 1) * frame_ms,
-                    "detector": "rms",
-                })
+                start_ms = offset_ms + first * frame_ms
+                end_ms = offset_ms + (last + 1) * frame_ms
+                if end_ms - start_ms >= minimum_speech_ms:
+                    intervals.append({
+                        "start_ms": start_ms, "end_ms": end_ms,
+                        "detector": "rms",
+                    })
                 first = last = None
                 silence = 0
     if first is not None and last is not None:
-        intervals.append({
-            "start_ms": offset_ms + first * frame_ms,
-            "end_ms": offset_ms + (last + 1) * frame_ms,
-            "detector": "rms",
-        })
+        start_ms = offset_ms + first * frame_ms
+        end_ms = offset_ms + (last + 1) * frame_ms
+        if end_ms - start_ms >= minimum_speech_ms:
+            intervals.append({
+                "start_ms": start_ms, "end_ms": end_ms,
+                "detector": "rms",
+            })
     return intervals
 
 
-def assistant_intervals(playback: dict, gap_ms: float = 400.0) -> list[dict]:
+def assistant_intervals(playback: dict, *, model_audio: np.ndarray | None = None,
+                        model_sample_rate: int | None = None,
+                        threshold: float = 0.008,
+                        hangover_ms: float = 250.0) -> list[dict]:
+    """Detect audible assistant speech on the browser playback timeline.
+
+    New captures persist decoded-packet RMS on the AudioContext schedule. Older
+    captures fall back to RMS over model.wav, whose silence-preserving offsets
+    begin at the PersonaPlex handshake. Packet cadence alone is not speech: PP
+    sends Opus packets containing silence between turns.
+    """
     packets = sorted(playback.get("assistant_packets") or [],
                      key=lambda row: row.get("timeline_start_ms", 0))
     output_latency = float(playback.get("output_latency_ms") or 0.0)
+    packets_with_energy = [packet for packet in packets
+                           if isinstance(packet.get("rms"), (int, float))]
+    if not packets_with_energy and model_audio is not None and model_sample_rate:
+        intervals = speech_intervals(
+            model_audio, model_sample_rate, offset_ms=output_latency,
+            threshold=threshold, hangover_ms=round(hangover_ms),
+        )
+        for interval in intervals:
+            interval["detector"] = "model_wav_rms_playback_fallback"
+        return intervals
+
+    active_packets = [packet for packet in packets_with_energy
+                      if float(packet["rms"]) >= threshold]
     intervals = []
-    for packet in packets:
+    for packet in active_packets:
         start = float(packet.get("timeline_start_ms", 0)) + output_latency
         end = float(packet.get("timeline_end_ms", start)) + output_latency
-        if intervals and start - intervals[-1]["end_ms"] <= gap_ms:
+        if intervals and start - intervals[-1]["end_ms"] <= hangover_ms:
             intervals[-1]["end_ms"] = max(intervals[-1]["end_ms"], end)
             intervals[-1]["last_packet_sequence"] = packet.get("packet_sequence")
         else:
@@ -87,7 +115,7 @@ def assistant_intervals(playback: dict, gap_ms: float = 400.0) -> list[dict]:
                 "start_ms": start, "end_ms": end,
                 "first_packet_sequence": packet.get("packet_sequence"),
                 "last_packet_sequence": packet.get("packet_sequence"),
-                "detector": "scheduled_packet_gap",
+                "detector": "decoded_packet_rms_audio_context",
             })
     return intervals
 
@@ -200,7 +228,17 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
         raw, sample_rate, offset_ms=first_offset,
         threshold=float(os.environ.get("STUDY_VAD_RMS_THRESHOLD", "0.012")),
     )
-    assistant = assistant_intervals(playback)
+    model_path = data_root / files["model"] if files.get("model") else None
+    model_rate = None
+    model_audio = None
+    if model_path is not None and model_path.exists():
+        model_rate, model_audio = _mono_float(model_path)
+    assistant_threshold = float(os.environ.get(
+        "STUDY_ASSISTANT_VAD_RMS_THRESHOLD", "0.008"))
+    assistant = assistant_intervals(
+        playback, model_audio=model_audio, model_sample_rate=model_rate,
+        threshold=assistant_threshold,
+    )
     proxy_sequences = {int(row.get("browser_chunk_sequence")) for row in events
                        if row.get("event") == "input_chunk"
                        and row.get("browser_chunk_sequence") is not None}
@@ -221,7 +259,18 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
     assistant_missing_at_proxy = sorted(
         client_assistant_sequences - proxy_assistant_sequences)
     capture_crosswalk_complete = not missing_at_proxy and not missing_at_client
-    playback_crosswalk_complete = (not assistant_missing_at_client
+    # Decoder priming/trailing packets can legitimately produce zero samples and
+    # therefore have no browser playback row. Only gaps inside the browser's
+    # playable sequence range indicate a broken crosswalk.
+    if client_assistant_sequences:
+        first_playable = min(client_assistant_sequences)
+        last_playable = max(client_assistant_sequences)
+        internal_missing_at_client = sorted(
+            sequence for sequence in assistant_missing_at_client
+            if first_playable <= sequence <= last_playable)
+    else:
+        internal_missing_at_client = assistant_missing_at_client
+    playback_crosswalk_complete = (not internal_missing_at_client
                                    and not assistant_missing_at_proxy)
     overlaps = _overlaps(participant, assistant, 200.0)
     barge_ins = _barge_ins(participant, assistant)
@@ -246,18 +295,22 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
             "client_assistant_packets": len(client_assistant_sequences),
             "proxy_assistant_packets": len(proxy_assistant_sequences),
             "assistant_missing_at_client": assistant_missing_at_client,
+            "assistant_internal_missing_at_client": internal_missing_at_client,
             "assistant_missing_at_proxy": assistant_missing_at_proxy,
             "capture_crosswalk_complete": capture_crosswalk_complete,
             "playback_crosswalk_complete": playback_crosswalk_complete,
             "crosswalk_complete": (capture_crosswalk_complete
                                    and playback_crosswalk_complete),
             "estimated_dropped_samples": capture.get("estimated_dropped_samples"),
+            "assistant_vad_rms_threshold": assistant_threshold,
             "valid_for_timing": bool(participant and assistant
                                      and capture_crosswalk_complete
                                      and playback_crosswalk_complete),
         },
         "sources": {
             "participant_raw": file_record(raw_path, relative_to=data_root),
+            "model": (file_record(model_path, relative_to=data_root)
+                      if model_path is not None and model_path.exists() else None),
             "client_timeline": file_record(timeline_path, relative_to=data_root),
             "proxy_events": file_record(events_path, relative_to=data_root),
         },

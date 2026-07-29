@@ -45,6 +45,8 @@ interface AssistantPlaybackEntry {
   timeline_end_ms: number;
   decoded_samples: number;
   sample_rate_hz: number;
+  rms: number;
+  peak_abs: number;
 }
 
 declare global {
@@ -225,6 +227,12 @@ export function useWebSocket() {
       src.start(start);
       scheduledEnd.current = start + buffer.duration;
       const scheduledPerfMs = performance.now() + (start - now) * 1000;
+      let sumSquares = 0;
+      let peakAbs = 0;
+      for (const sample of channelData[0]) {
+        sumSquares += sample * sample;
+        peakAbs = Math.max(peakAbs, Math.abs(sample));
+      }
       assistantPlaybackRef.current.push({
         packet_sequence: packetSequence,
         timeline_start_ms: Math.max(0, scheduledPerfMs - conversationStartPerf.current),
@@ -234,6 +242,8 @@ export function useWebSocket() {
         ),
         decoded_samples: samplesDecoded,
         sample_rate_hz: ctx.sampleRate,
+        rms: Math.sqrt(sumSquares / samplesDecoded),
+        peak_abs: peakAbs,
       });
 
       // Also route to merged capture stream

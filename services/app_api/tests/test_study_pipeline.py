@@ -11,6 +11,7 @@ import numpy as np
 import yaml
 
 from study.artifacts import atomic_write_bytes, sha256_file
+from study.analysis import _participant_segments
 from study.counterbalance import (CounterbalanceError, allocate, balance_report,
                                   choose_balanced_target, resolve_target_assignment,
                                   validate_and_compile)
@@ -19,6 +20,7 @@ from study.questionnaires import missing_required_answers
 from study.storage import SqliteBackend
 from study.timing_analysis import (assistant_intervals, prepare_timing_analysis,
                                    speech_intervals, validate_intervals)
+from study.transcript_timing import whisper_timestamp_segments
 from study.transition_analysis import prepare_session_analysis, route_regions
 
 
@@ -437,9 +439,9 @@ class TimingAnalysisTests(unittest.TestCase):
             "output_latency_ms": 20,
             "assistant_packets": [
                 {"packet_sequence": 1, "timeline_start_ms": 200,
-                 "timeline_end_ms": 300},
+                 "timeline_end_ms": 300, "rms": 0.1},
                 {"packet_sequence": 2, "timeline_start_ms": 310,
-                 "timeline_end_ms": 400},
+                 "timeline_end_ms": 400, "rms": 0.1},
             ],
         })
         self.assertEqual(participant[0]["start_ms"], 240)
@@ -475,7 +477,7 @@ class TimingAnalysisTests(unittest.TestCase):
                     "output_latency_ms": 0,
                     "assistant_packets": [{
                         "packet_sequence": 1, "timeline_start_ms": 500,
-                        "timeline_end_ms": 1000,
+                        "timeline_end_ms": 1000, "rms": 0.1,
                     }],
                 },
             }
@@ -508,6 +510,100 @@ class TimingAnalysisTests(unittest.TestCase):
             self.assertEqual(result["status"], "estimated_pending_validation")
             self.assertTrue((session_dir / "analysis" / "timing" / "analysis-1"
                              / "timing.json").exists())
+
+    def test_assistant_silence_packets_do_not_become_speech(self):
+        intervals = assistant_intervals({
+            "output_latency_ms": 10,
+            "assistant_packets": [
+                {"packet_sequence": 1, "timeline_start_ms": 0,
+                 "timeline_end_ms": 100, "rms": 0.0},
+                {"packet_sequence": 2, "timeline_start_ms": 100,
+                 "timeline_end_ms": 200, "rms": 0.05},
+                {"packet_sequence": 3, "timeline_start_ms": 200,
+                 "timeline_end_ms": 300, "rms": 0.0},
+            ],
+        })
+        self.assertEqual(len(intervals), 1)
+        self.assertEqual(intervals[0]["start_ms"], 110)
+        self.assertEqual(intervals[0]["end_ms"], 210)
+        self.assertEqual(intervals[0]["detector"],
+                         "decoded_packet_rms_audio_context")
+
+    def test_short_participant_energy_spikes_are_not_barge_in_candidates(self):
+        audio = np.zeros(16000, dtype=np.float32)
+        audio[4000:4800] = 0.1
+        self.assertEqual(speech_intervals(audio, 16000, hangover_ms=0), [])
+
+    def test_existing_capture_uses_model_wav_energy_fallback(self):
+        model = np.zeros(16000, dtype=np.float32)
+        model[4000:8000] = 0.1
+        intervals = assistant_intervals(
+            {"output_latency_ms": 20, "assistant_packets": []},
+            model_audio=model, model_sample_rate=16000,
+        )
+        self.assertEqual(intervals[0]["start_ms"], 260)
+        self.assertEqual(intervals[0]["detector"],
+                         "model_wav_rms_playback_fallback")
+
+
+class TranscriptTimingTests(unittest.TestCase):
+    def test_whisper_timestamp_tokens_become_ordered_segments(self):
+        class Tokenizer:
+            all_special_ids = [1, 2, 999]
+
+            @staticmethod
+            def convert_tokens_to_ids(token):
+                return 999 if token == "<|notimestamps|>" else -1
+
+            @staticmethod
+            def decode(tokens, skip_special_tokens=True):
+                del skip_special_tokens
+                return " ".join({10: "hello", 11: "there", 12: "again"}[t]
+                                for t in tokens)
+
+        segments = whisper_timestamp_segments(
+            [1, 1000, 10, 11, 1050, 1050, 12, 1100, 2], Tokenizer(), 3.0)
+        self.assertEqual(segments, [
+            {"text": "hello there", "start": 0.0, "end": 1.0},
+            {"text": "again", "start": 1.0, "end": 2.0},
+        ])
+
+    def test_participant_segments_use_browser_clock_and_route_labels(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session_dir = Path(temp)
+            raw_path = session_dir / "participant_raw.wav"
+            write_wav(raw_path, seconds=2.0)
+            (session_dir / "client_timeline.json").write_text(json.dumps({
+                "capture": {"chunks": [{"timeline_start_ms": 100}]},
+            }))
+            events = [
+                {"event": "route_activated", "event_sequence": 1,
+                 "from_mode": None, "to_mode": "natural", "input_sample": 0},
+                {"event": "transmitted_window", "event_sequence": 2,
+                 "route_mode": "natural", "input_start_sample": 0,
+                 "input_end_sample": 16000, "transmitted_start_sample": 0,
+                 "transmitted_end_sample": 16000},
+                {"event": "route_activated", "event_sequence": 3,
+                 "from_mode": "natural", "to_mode": "vc", "input_sample": 16000},
+                {"event": "transmitted_window", "event_sequence": 4,
+                 "route_mode": "vc", "input_start_sample": 16000,
+                 "input_end_sample": 32000, "transmitted_start_sample": 16000,
+                 "transmitted_end_sample": 32000},
+                {"event": "stream_stop", "event_sequence": 5,
+                 "input_samples": 32000},
+            ]
+            with (session_dir / "events.jsonl").open("w") as stream:
+                for event in events:
+                    stream.write(json.dumps(event) + "\n")
+
+            result = _participant_segments([
+                {"text": "first", "start": 0.2, "end": 0.4},
+                {"text": "second", "start": 1.2, "end": 1.4},
+            ], str(raw_path))
+
+        self.assertEqual([item["voice_mode"] for item in result], ["natural", "vc"])
+        self.assertEqual(result[0]["start"], 0.3)
+        self.assertEqual(result[0]["timeline"], "browser_audio_clock")
 
 
 if __name__ == "__main__":
