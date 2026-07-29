@@ -7,6 +7,7 @@ import { api, type EnterResult, type RunState } from "@/api"
 import { QuestionnaireForm, type QItem } from "@/components/QuestionnaireForm"
 import { ScenarioCall } from "@/components/ScenarioCall"
 import { AudioCheck } from "@/components/AudioCheck"
+import { RichText } from "@/components/RichText"
 
 type Phase =
   | "code" | "welcome"
@@ -178,7 +179,7 @@ export function ParticipantFlow() {
         ) : (
           <>
             {data.welcome_text
-              ? <div className="max-h-[60vh] max-w-2xl overflow-auto whitespace-pre-wrap text-left text-base leading-7">{data.welcome_text}</div>
+              ? <RichText className="max-h-[60vh] max-w-2xl overflow-auto text-left">{data.welcome_text}</RichText>
               : <p className="max-w-md text-center text-base leading-7 text-muted-foreground">
                   You will complete {data.scenarios.length} conversation scenarios, each followed by a brief
                   questionnaire. You have one hour to finish.
@@ -441,9 +442,7 @@ function TransitionScreen({ title, text, onContinue }: {
   return (
     <main className="mx-auto max-w-xl py-10 sm:py-16">
       <h1 className="text-2xl font-semibold">{title}</h1>
-      <div className="mt-4 whitespace-pre-wrap text-base leading-7 text-muted-foreground">
-        {text}
-      </div>
+      <RichText className="mt-4">{text}</RichText>
       <Button className="mt-7 text-base" onClick={onContinue}>Continue</Button>
     </main>
   )

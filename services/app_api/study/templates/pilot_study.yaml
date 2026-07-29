@@ -144,9 +144,9 @@ questionnaires:
     - id: participant_information
       type: notice
       label: |
-        Consent to participate in the project
+        ### Consent to participate
 
-        Project: Voice-Conditioned Grounding and Repair Study
+        **Project:** Voice-Conditioned Grounding and Repair Study
 
         Please read the participant information before deciding whether to take part. By consenting,
         you confirm that:
@@ -160,22 +160,25 @@ questionnaires:
           change between natural and converted speech during an interaction. You will not hear the
           converted version live, but you will hear one study recording afterward.
 
-        Concerning your rights to your data
+        ### Your data rights
 
-        When the project is concluded, data collected and generated within the project will be stored
-        securely for archival purposes for at least 10 years. If the material is deemed to have lasting
-        historical value, it may be preserved permanently.
+        Study data that forms the basis of the research results, including audio recordings and
+        questionnaire responses, will be stored securely by KTH for at least 10 years after the project
+        ends, in accordance with KTH's archiving rules. Access will be restricted to authorised people.
 
-        Under EU data-protection rules and national supplementary legislation, you may have the right
-        to withdraw your consent without affecting processing that took place before withdrawal; request
-        access to or correction or deletion of your personal data; and request that processing be
-        restricted. These rights may be limited in some circumstances, including by confidentiality and
-        archiving requirements.
+        Under EU data-protection rules and national supplementary legislation, you may have the right to:
+
+        - withdraw your consent without affecting processing that took place before withdrawal
+        - request access to or correction or deletion of your personal data
+        - request that processing of your personal data be restricted
+
+        These rights may be limited in some circumstances, including by confidentiality and archiving
+        requirements.
 
         To exercise these rights, contact the researcher responsible for the project using the contact
         details in the participant information, or contact KTH's data protection officer at
-        dataskyddsombud@kth.se. You may also complain to the Swedish Authority for Privacy Protection
-        (IMY) at imy.se.
+        [dataskyddsombud@kth.se](mailto:dataskyddsombud@kth.se). You may also complain to the
+        [Swedish Authority for Privacy Protection (IMY)](https://www.imy.se/).
     - id: consent_decision
       type: radio
       required: true
@@ -230,7 +233,9 @@ questionnaires:
       extra_options: ["Prefer not to answer"]
     - id: prior_spoken_ai
       type: radio
-      label: "How often have you used spoken conversational AI or a voice mode in a generative-AI system?"
+      label: >
+        How often have you used spoken conversational AI or a voice mode in a generative AI system?
+        Examples include ChatGPT Voice, Gemini Live, Claude voice mode, and similar conversational AI assistants.
       options: ["Never", "Once or twice", "A few times", "Less than monthly", "Monthly", "Weekly", "Daily or almost daily"]
     - id: prior_voice_conversion
       type: radio
@@ -395,7 +400,9 @@ scenarios:
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because some details in my restaurant reservation are incorrect."
       additional_details: |
-        Ask the assistant to confirm:
+        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+
+        Make sure its answer covers:
 
         - the **number of people** now recorded
         - the **reservation time** now recorded
@@ -438,7 +445,9 @@ scenarios:
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling about a declined warranty request, and I would like the case reviewed."
       additional_details: |
-        Ask the assistant to confirm:
+        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+
+        Make sure its answer covers:
 
         - what information is now recorded
         - whether a review was opened
@@ -502,7 +511,9 @@ scenarios:
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because an order I did not receive is marked as successfully delivered."
       additional_details: |
-        Ask the assistant to confirm:
+        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+
+        Make sure its answer covers:
 
         - the delivery outcome now recorded
         - whether a support ticket was opened
@@ -561,7 +572,9 @@ scenarios:
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because I believe important parts of my assignment were not reflected in the assessment record."
       additional_details: |
-        Ask the assistant to confirm:
+        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+
+        Make sure its answer covers:
 
         - which grounds are now recorded
         - whether a reassessment referral was made
@@ -625,7 +638,9 @@ scenarios:
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because the incident description in my sports-injury claim is inaccurate."
       additional_details: |
-        Ask the assistant to confirm:
+        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+
+        Make sure its answer covers:
 
         - whether the original statement was replaced
         - the incident description now recorded

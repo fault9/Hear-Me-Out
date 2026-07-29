@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@shared/ui/button"
 import { cn } from "@shared/lib/utils"
+import { RichText } from "@/components/RichText"
 
 export interface QItem {
   id: string
@@ -154,7 +155,7 @@ function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
   const value = answers[item.id]
 
   if (item.type === "notice") {
-    return <div className="whitespace-pre-wrap text-base leading-7 text-muted-foreground">{item.label}</div>
+    return <RichText>{item.label}</RichText>
   }
 
   if (item.type === "audio_playback") {
@@ -178,16 +179,16 @@ function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
     const nums = Array.from({ length: Math.max(0, max - min + 1) }, (_, i) => min + i)
     return (
       <div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-7 gap-2 sm:gap-3">
           {nums.map(n => (
             <button key={n} type="button" onClick={() => set(item.id, n)}
-              className={cn("h-11 w-11 rounded-md border text-base font-medium transition-colors",
+              className={cn("h-11 w-full max-w-12 min-w-0 justify-self-center rounded-md border text-base font-medium transition-colors sm:h-12",
                 value === n ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}>{n}</button>
           ))}
         </div>
         {(item.min_label || item.max_label) && (
-          <div className="mt-2 flex justify-between gap-4 text-sm leading-5 text-muted-foreground">
-            <span>{item.min_label}</span><span>{item.max_label}</span>
+          <div className="mt-3 grid grid-cols-2 gap-6 text-sm leading-5 text-muted-foreground">
+            <span>{item.min_label}</span><span className="text-right">{item.max_label}</span>
           </div>
         )}
         {(item.extra_options || []).length > 0 && (
