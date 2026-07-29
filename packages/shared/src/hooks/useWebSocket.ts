@@ -73,6 +73,11 @@ interface OggOpusDecoder {
     samplesDecoded: number;
     sampleRate: number;
   }>;
+  decodeFile(data: Uint8Array): Promise<{
+    channelData: Float32Array[];
+    samplesDecoded: number;
+    sampleRate: number;
+  }>;
   free(): void;
 }
 
@@ -547,46 +552,29 @@ export function useWebSocket() {
     const shouldFreeDecoder = decoder !== decoderRef.current;
     if (shouldFreeDecoder) await decoder.ready;
 
-    const decoded: { pcm: Float32Array; offset: number }[] = [];
-    let sampleRate = 48000;
+    const encodedLength = packets.reduce((sum, row) => sum + row.packet.length, 0);
+    const encoded = new Uint8Array(encodedLength);
+    let encodedOffset = 0;
+    for (const { packet } of packets) {
+      encoded.set(packet, encodedOffset);
+      encodedOffset += packet.length;
+    }
     try {
-      const playbackBySequence = new Map(
-        assistantPlaybackRef.current.map((row) => [row.packet_sequence, row]),
+      const { channelData, samplesDecoded, sampleRate } = await decoder.decodeFile(encoded);
+      if (samplesDecoded === 0 || !channelData[0]?.length) return null;
+      const firstScheduledMs = assistantPlaybackRef.current[0]?.timeline_start_ms;
+      const firstArrivalOffsetMs = conversationStart.current > 0
+        ? Math.max(0, packets[0].time - conversationStart.current)
+        : 0;
+      const initialOffset = Math.round(
+        ((firstScheduledMs ?? firstArrivalOffsetMs) / 1000) * sampleRate,
       );
-      for (const { packet, time, sequence } of packets) {
-        try {
-          const { channelData, samplesDecoded, sampleRate: decodedSampleRate } = await decoder.decode(packet);
-          if (samplesDecoded > 0) {
-            const scheduled = playbackBySequence.get(sequence);
-            const offsetSeconds = scheduled
-              ? scheduled.timeline_start_ms / 1000
-              : conversationStart.current > 0
-                ? Math.max(0, (time - conversationStart.current) / 1000)
-                : 0;
-            sampleRate = decodedSampleRate || sampleRate;
-            decoded.push({
-              pcm: new Float32Array(channelData[0]),
-              offset: Math.round(offsetSeconds * sampleRate),
-            });
-          }
-        } catch {
-          continue;
-        }
-      }
+      const combined = new Float32Array(initialOffset + channelData[0].length);
+      combined.set(channelData[0], initialOffset);
+      return createWavFile(combined, sampleRate);
     } finally {
       if (shouldFreeDecoder) decoder.free();
     }
-
-    if (decoded.length === 0) return null;
-    const total = decoded.reduce((s, c) => Math.max(s, c.offset + c.pcm.length), 0);
-    const combined = new Float32Array(total);
-    for (const { pcm, offset } of decoded) {
-      for (let i = 0; i < pcm.length; i++) {
-        const idx = offset + i;
-        combined[idx] = Math.max(-1, Math.min(1, combined[idx] + pcm[i]));
-      }
-    }
-    return createWavFile(combined, sampleRate);
   }, []);
 
   // Assemble the converted user voice (0x03 frames) collected in proxy mode.

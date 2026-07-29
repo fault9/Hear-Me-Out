@@ -53,8 +53,11 @@ labelled `estimated_pending_validation`; use `validate_intervals` with manually
 annotated pilot intervals before treating these measures as validated outcomes.
 New captures store packet RMS on the browser AudioContext schedule. Existing
 captures fall back to RMS over the silence-preserving `model.wav` artifact.
-The saved `model.wav` is reconstructed at the actual scheduled browser-playback
-offsets, rather than at network packet-arrival offsets.
+The saved `model.wav` decodes the complete PersonaPlex Opus stream in one pass
+and prepends its first scheduled browser-playback offset. Per-packet network and
+decode gaps remain available in `client_timeline.json` but are not reintroduced
+as audible discontinuities in the listening artifact. `merged.wav` mixes both
+tracks with headroom and peak normalization instead of hard clipping overlaps.
 
 ## Post-hoc processing
 
