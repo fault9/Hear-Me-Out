@@ -241,6 +241,15 @@ class XVCStreamSession:
             self.i += 1
         return outs
 
+    def warm(self) -> None:
+        """Warm content-path CUDA kernels without consuming participant audio."""
+        segment_samples = (
+            self.history_ms + self.current_ms + self.smooth_ms + self.future_ms
+        ) * self.sr // 1000
+        self._forward(np.zeros(segment_samples, dtype=np.float32))
+        if self.tail_buffer is not None:
+            self.tail_buffer.zero_()
+
     @torch.inference_mode()
     def _forward(self, seg_np: np.ndarray) -> np.ndarray:
         win = torch.from_numpy(seg_np)[None, None].float().to(device)
@@ -443,6 +452,20 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         return schedule[-1]
 
     loop = asyncio.get_event_loop()
+    xvc_session_warmup_ms = 0.0
+    if vc_sessions:
+        warmup_started = time.perf_counter()
+        try:
+            for vc_session in vc_sessions.values():
+                await loop.run_in_executor(None, vc_session.warm)
+        except Exception as exc:
+            logger.exception("[xvc proxy] session warm-up failed")
+            await browser_ws.send_json({"error": f"XVC warm-up failed: {exc}"})
+            await browser_ws.close()
+            return browser_ws
+        xvc_session_warmup_ms = (time.perf_counter() - warmup_started) * 1000.0
+        logger.info("[xvc proxy] warmed %d session(s) in %.1f ms",
+                    len(vc_sessions), xvc_session_warmup_ms)
 
     # X-VC outputs 16 kHz; sphn's Opus encoder only accepts 24/48 kHz (PersonaPlex
     # uses 24 kHz = its mimi rate). Encode at 24 kHz and upsample before encoding.
@@ -506,7 +529,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     if events:
         events.add("stream_start", input_sample_rate_hz=SR,
                    transmitted_sample_rate_hz=SR, model_bound_sample_rate_hz=24000,
-                   schedule=schedule)
+                   schedule=schedule,
+                   xvc_session_warmup_ms=round(xvc_session_warmup_ms, 3))
         for segment in schedule[1:]:
             events.add("route_switch_requested", requested_start_s=segment.get("start_s"),
                        requested_input_sample=int(float(segment.get("start_s") or 0) * SR),
@@ -771,6 +795,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     "xvc_silence_bypassed_windows": vc_silence_bypassed_windows,
                     "xvc_silence_gate_rms": SILENCE_GATE_RMS,
                     "xvc_silence_hangover_ms": SILENCE_HANGOVER_MS,
+                    "xvc_session_warmup_ms": round(xvc_session_warmup_ms, 3),
                     "frame_header": "HMO1/<4sIIII>",
                 },
             )
