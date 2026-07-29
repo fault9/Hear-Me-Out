@@ -33,8 +33,10 @@ import io
 import json
 import logging
 import os
+import shutil
 import struct
 import sys
+import tempfile
 import time
 import uuid
 import wave
@@ -98,6 +100,7 @@ SILENCE_HANGOVER_MS = int(os.environ.get("XVC_SILENCE_HANGOVER_MS", "360"))
 
 PERSONAPLEX_HOST = os.environ.get("PERSONAPLEX_PROXY_HOST", "127.0.0.1")
 PERSONAPLEX_PORT = os.environ.get("PERSONAPLEX_PROXY_PORT", "8000")
+PERSONAPLEX_INPUT_SR = int(os.environ.get("PERSONAPLEX_INPUT_SR", "24000"))
 
 # Globals populated on startup.
 cfg: dict | None = None
@@ -132,6 +135,84 @@ def _wav_bytes(pcm: np.ndarray, sr: int) -> bytes:
         wav.setframerate(sr)
         wav.writeframes(ints.tobytes())
     return output.getvalue()
+
+
+def _target_conditions(target_path: str):
+    """Build target conditions using the same path as live X-VC."""
+    target_np = process_audio(target_path, cfg, int(cfg["latent_hop_length"]))
+    target_wav = torch.from_numpy(target_np)[None, None].float().to(device)
+    if MASK_TARGET_COND:
+        pad = torch.zeros((1, 1, int(CHUNK_MS * SR / 1000)), device=device)
+        target_wav_cond = torch.cat([target_wav, pad], dim=-1)
+    else:
+        target_wav_cond = target_wav
+    spk, frame = precompute_conditions(model, target_wav, target_wav_cond)
+    return target_np, spk, frame
+
+
+def _fit_length(pcm: np.ndarray, samples: int) -> np.ndarray:
+    pcm = np.asarray(pcm, dtype=np.float32).reshape(-1)
+    if len(pcm) >= samples:
+        return pcm[:samples]
+    return np.pad(pcm, (0, samples - len(pcm)), mode="constant")
+
+
+@torch.inference_mode()
+def _convert_soundboard_file(source_path: str, target_path: str, output_sr: int):
+    """Convert a complete take through the same session used for live X-VC.
+
+    Right padding supplies the live session's final look-ahead window and is
+    removed before the single 16 kHz -> PersonaPlex resample. The silence gate
+    outputs digital silence rather than deleting pauses, so the final WAV keeps
+    the exact source timeline and sample count.
+    """
+    source_wave, source_sr = torchaudio.load(source_path)
+    if source_wave.numel() == 0 or source_wave.shape[-1] == 0:
+        raise ValueError("source audio is empty")
+    source_samples = int(source_wave.shape[-1])
+    source_sr = int(source_sr)
+    exact_xvc_samples = round(source_samples * SR / source_sr)
+    exact_output_samples = round(source_samples * output_sr / source_sr)
+
+    source_mono = source_wave.mean(dim=0)
+    if source_sr != SR:
+        source_mono = torchaudio.functional.resample(source_mono, source_sr, SR)
+    source_16k = _fit_length(source_mono.numpy(), exact_xvc_samples)
+    _, spk, frame = _target_conditions(target_path)
+
+    session = XVCStreamSession(spk, frame)
+    current_samples = CURRENT_MS * SR // 1000
+    window_count = max(1, int(np.ceil(exact_xvc_samples / current_samples)))
+    required_samples = (
+        (window_count - 1) * CURRENT_MS
+        + CURRENT_MS
+        + SMOOTH_MS
+        + FUTURE_MS
+    ) * SR // 1000
+    padded_source = _fit_length(source_16k, required_samples)
+    chunks = session.feed(padded_source)
+    if not chunks:
+        raise RuntimeError("X-VC produced no output windows")
+    converted_16k = _fit_length(
+        np.concatenate(chunks), exact_xvc_samples
+    )
+    converted_out = torchaudio.functional.resample(
+        torch.from_numpy(converted_16k), SR, output_sr).numpy()
+    converted_out = _fit_length(converted_out, exact_output_samples)
+
+    metadata = {
+        "engine": "xvc",
+        "input_sample_rate": source_sr,
+        "input_samples": source_samples,
+        "xvc_sample_rate": SR,
+        "xvc_samples": exact_xvc_samples,
+        "output_sample_rate": output_sr,
+        "output_samples": exact_output_samples,
+        "output_windows": len(chunks),
+        "inference_windows": session.inference_windows,
+        "silence_bypassed_windows": session.silence_bypassed_windows,
+    }
+    return _wav_bytes(converted_out, output_sr), metadata
 
 
 def _parse_study_frame(data: bytes) -> tuple[bytes, dict]:
@@ -285,19 +366,7 @@ async def handle_load_target(request: web.Request) -> web.Response:
         f.write(field.file.read())
 
     try:
-        target_np = process_audio(tmp_path, cfg, int(cfg["latent_hop_length"]))
-        target_wav = torch.from_numpy(target_np)[None, None].float().to(device)
-        if MASK_TARGET_COND:
-            # Pad must match the streaming window (CHUNK_MS), not a hardcoded 2.4 s.
-            # If they differ, the precomputed condition frames and the per-window
-            # content frames disagree and run_stream_chunk_forward's torch.cat fails
-            # ("Sizes of tensors must match … Expected 92 but got 90"), killing every
-            # VC conversion. 2.4 s == 2400 ms, so this is a no-op at the stock window.
-            pad = torch.zeros((1, 1, int(CHUNK_MS * SR / 1000)), device=device)
-            target_wav_cond = torch.cat([target_wav, pad], dim=-1)
-        else:
-            target_wav_cond = target_wav
-        spk, frame = precompute_conditions(model, target_wav, target_wav_cond)
+        target_np, spk, frame = _target_conditions(tmp_path)
         if not CONTENT_PATH_WARMED:
             warmup_started = time.perf_counter()
             XVCStreamSession(spk, frame).warm()
@@ -316,6 +385,82 @@ async def handle_load_target(request: web.Request) -> web.Response:
             os.remove(tmp_path)
         except OSError:
             pass
+
+
+async def handle_file_conversion(request: web.Request) -> web.Response:
+    """POST /api/xvc/file-conversion - bake a complete clip with X-VC.
+
+    Accepts source_audio and target_audio WAV uploads. Unlike the legacy
+    app-api Seed-VC route, this does not run VAD or concatenate speech regions.
+    """
+    post = await request.post()
+    source = post.get("source_audio")
+    target = post.get("target_audio")
+    if (
+        source is None
+        or target is None
+        or not hasattr(source, "file")
+        or not hasattr(target, "file")
+    ):
+        return web.json_response(
+            {"error": "missing source_audio or target_audio file"}, status=400)
+    try:
+        output_sr = int(post.get("output_sr", PERSONAPLEX_INPUT_SR))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "output_sr must be an integer"}, status=400)
+    if output_sr != PERSONAPLEX_INPUT_SR:
+        return web.json_response(
+            {"error": f"output_sr must be {PERSONAPLEX_INPUT_SR} for PersonaPlex"},
+            status=400,
+        )
+
+    work_dir = tempfile.mkdtemp(prefix="xvc_file_")
+    source_path = os.path.join(work_dir, "source.wav")
+    target_path = os.path.join(work_dir, "target.wav")
+    try:
+        with open(source_path, "wb") as stream:
+            stream.write(source.file.read())
+        with open(target_path, "wb") as stream:
+            stream.write(target.file.read())
+
+        loop = asyncio.get_running_loop()
+        async with request.app["file_conversion_lock"]:
+            wav_data, metadata = await loop.run_in_executor(
+                None, _convert_soundboard_file, source_path, target_path, output_sr)
+        input_ms = metadata["input_samples"] * 1000.0 / metadata["input_sample_rate"]
+        output_ms = metadata["output_samples"] * 1000.0 / output_sr
+        logger.info(
+            "[xvc] file conversion %.1f ms -> %.1f ms in %d windows "
+            "(%d inferred, %d silence)",
+            input_ms,
+            output_ms,
+            metadata["output_windows"],
+            metadata["inference_windows"],
+            metadata["silence_bypassed_windows"],
+        )
+        return web.Response(
+            body=wav_data,
+            content_type="audio/wav",
+            headers={
+                "Content-Disposition": 'attachment; filename="xvc_baked.wav"',
+                "X-VC-Engine": "xvc",
+                "X-Input-Duration-Ms": f"{input_ms:.6f}",
+                "X-Output-Duration-Ms": f"{output_ms:.6f}",
+                "X-Input-Samples": str(metadata["input_samples"]),
+                "X-Output-Samples": str(metadata["output_samples"]),
+                "X-Sample-Rate": str(output_sr),
+                "X-XVC-Inference-Windows": str(metadata["inference_windows"]),
+                "X-XVC-Silence-Windows": str(metadata["silence_bypassed_windows"]),
+            },
+        )
+    except (ValueError, RuntimeError) as exc:
+        logger.exception("[xvc] file conversion failed")
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[xvc] file conversion failed")
+        return web.json_response({"error": str(exc)}, status=500)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _maybe_resampler(source_sr: int):
@@ -871,8 +1016,10 @@ def create_app() -> web.Application:
         mws.append(otel.aiohttp_middleware("xvc"))
         logger.info("OpenTelemetry tracing enabled (xvc)")
     app = web.Application(middlewares=mws, client_max_size=10 * 1024 * 1024)
+    app["file_conversion_lock"] = asyncio.Lock()
     app.router.add_get("/api/meanvc/info", handle_info)
     app.router.add_post("/api/meanvc/load-target", handle_load_target)
+    app.router.add_post("/api/xvc/file-conversion", handle_file_conversion)
     app.router.add_get("/api/meanvc/stream", handle_stream)
     app.router.add_get("/api/meanvc/chat-proxy", handle_chat_proxy)
     return app

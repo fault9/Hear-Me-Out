@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 
 APP_MODE = os.environ.get("APP_MODE", "hmo").lower()
@@ -303,6 +303,89 @@ def create_app():
             # doesn't pile up next to PersonaPlex on the shared GPU.
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+    @app.post("/api/xvc/file-conversion")
+    async def xvc_file_conversion(
+        source_audio: UploadFile = File(...),
+        target_audio: UploadFile = File(...),
+        output_sr: int = Form(24000),
+    ):
+        """Relay a soundboard bake to the X-VC service on :5002.
+
+        Keeping this same-origin avoids browser certificate/CORS problems while
+        the model and all inference remain in the dedicated X-VC process.
+        """
+        if not source_audio.filename or not target_audio.filename:
+            raise HTTPException(status_code=400, detail="Missing audio files")
+        if not (
+            allowed_file(source_audio.filename) and allowed_file(target_audio.filename)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file format. Supported: wav, mp3, flac, m4a, ogg",
+            )
+
+        import httpx
+
+        xvc_url = os.environ.get(
+            "XVC_FILE_CONVERSION_URL",
+            "https://127.0.0.1:5002/api/xvc/file-conversion",
+        )
+        files = {
+            "source_audio": (
+                source_audio.filename,
+                await source_audio.read(),
+                source_audio.content_type or "audio/wav",
+            ),
+            "target_audio": (
+                target_audio.filename,
+                await target_audio.read(),
+                target_audio.content_type or "audio/wav",
+            ),
+        }
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=600.0) as client:
+                upstream = await client.post(
+                    xvc_url,
+                    files=files,
+                    data={"output_sr": str(output_sr)},
+                )
+        except httpx.TimeoutException as exc:
+            raise HTTPException(
+                status_code=504, detail="X-VC file conversion timed out"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "X-VC is unavailable on port 5002. Start HMO with "
+                    f"VC_ENGINE=xvc. ({exc})"
+                ),
+            ) from exc
+
+        if upstream.status_code != 200:
+            if upstream.status_code == 404:
+                detail = (
+                    "The service on port 5002 is not X-VC. Restart HMO with "
+                    "VC_ENGINE=xvc before baking soundboard clips."
+                )
+            else:
+                try:
+                    detail = upstream.json().get("error") or upstream.text
+                except ValueError:
+                    detail = upstream.text
+            raise HTTPException(status_code=upstream.status_code, detail=detail)
+
+        audit_headers = {
+            name: value
+            for name, value in upstream.headers.items()
+            if name.lower().startswith("x-")
+        }
+        return Response(
+            content=upstream.content,
+            media_type="audio/wav",
+            headers=audit_headers,
+        )
 
     @app.post("/api/voice-conversion")
     async def voice_conversion(

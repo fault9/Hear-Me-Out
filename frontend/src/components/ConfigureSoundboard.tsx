@@ -324,7 +324,7 @@ function TargetLibrary({ sb }: { sb: ReturnType<typeof useSoundboard> }) {
           />
         </div>
         <p className="text-[10px] text-muted-foreground">
-          Targets are the voice IDENTITY seed-vc converts your recording INTO
+          Targets are the voice identity X-VC converts your recording into
           — e.g. upload a WAV of a female speaker to make your voice sound
           female to PP. The soundboard never touches PP's own response voice.
           Upload at least one WAV to enable VC-mode bakes.
@@ -584,9 +584,9 @@ function SlotCard({
                 </div>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                VC-mode bake sends your recording + this target through seed-vc
-                (GPU). Doesn't touch PP's response voice — the soundboard is
-                for USER input only.
+                VC-mode bake converts your recording with X-VC before the
+                conversation. The stored 24 kHz clip goes directly to
+                PersonaPlex, with live VC kept off.
               </p>
             </div>
           )}

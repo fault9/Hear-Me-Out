@@ -20,7 +20,6 @@ import {
 import {
   decodeAndConformToPp,
   encodeWavAtPpRate,
-  checkDuration,
 } from "@/lib/audioFormat"
 import {
   type Slot,
@@ -42,7 +41,7 @@ import {
   newId,
 } from "@/lib/soundboardDb"
 import {
-  convertVoice,
+  xvcFileBake,
   pitchFormantBake as apiPitchFormantBake,
   loudnessNormalize,
   transcribeWavBlob,
@@ -369,7 +368,7 @@ export function useSoundboard() {
     (slot: Slot, which: "raw" | "baked") => {
       const blob = which === "raw" ? slot.raw : slot.baked
       if (!blob) return
-      const safe = slot.label.replace(/[^\w\-]+/g, "_").slice(0, 40) || slot.id
+      const safe = slot.label.replace(/[^\w-]+/g, "_").slice(0, 40) || slot.id
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -381,8 +380,9 @@ export function useSoundboard() {
   )
 
   // ---------- bake ----------
-  // VC mode: send raw + target WAVs to /api/voice-conversion, conform the
-  // returned WAV to PP_SAMPLE_RATE, store as slot.baked.
+  // VC mode: send raw + target WAVs through X-VC's offline streaming bake.
+  // The endpoint returns an exact-length PP_SAMPLE_RATE WAV; store it directly
+  // so the converted signal crosses the 16 kHz -> 24 kHz boundary only once.
   // Pitch/formant: send raw to /api/pitch-formant; server preserves SR and
   // duration. The response is already at PP_SAMPLE_RATE.
   const bakeSlot = useCallback(
@@ -391,7 +391,6 @@ export function useSoundboard() {
       targetId?: string
       pitchSemitones?: number
       formantShift?: number
-      engine?: "meanvc" | "xvc"
       // P3 loudness normalization: EBU-R128 gain-match the FINAL clip to a
       // common target so conditions don't differ in playback level.
       normalize?: boolean
@@ -404,8 +403,8 @@ export function useSoundboard() {
       let baked: Blob | null = null
       const updates: Partial<Slot> = {
         manipulation: opts.mode,
-        targetId: opts.targetId,
-        engine: opts.engine,
+        targetId: opts.mode === "vc" ? opts.targetId : undefined,
+        engine: opts.mode === "vc" ? "xvc" : undefined,
         pitchSemitones: opts.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones,
         formantShift: opts.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift,
       }
@@ -419,28 +418,21 @@ export function useSoundboard() {
         if (!opts.targetId) throw new Error("VC bake requires a targetId.")
         const target = (await listTargets()).find((t) => t.id === opts.targetId)
         if (!target) throw new Error(`Target ${opts.targetId} not found.`)
-        // Built-in targets have no WAV blob here; the live convertVoice
-        // endpoint expects a File for both source and target. For the
-        // built-in default we synthesise a minimal silent stub File and rely
-        // on the server's default target (PP's voice_prompt). If you add
-        // server-side target-id resolution later, swap this in.
         if (!target.wav && target.builtin) {
           throw new Error(
             "Built-in target VC bake requires a target WAV. Upload a target " +
-              "for now (or extend /api/voice-conversion to accept a target_id).",
+              "voice before baking with X-VC.",
           )
         }
-        const rawFile = new File([slot.raw], "raw.wav", { type: "audio/wav" })
-        const targetFile = new File([target.wav!], "target.wav", { type: "audio/wav" })
-        const vcWav = await convertVoice(rawFile, targetFile)
-        // Seed-VC output SR is not guaranteed to match PP_SAMPLE_RATE — we
-        // conform here explicitly. This is allowed because it's at the bake
-        // *output* boundary and is the only resample the WAV undergoes.
-        const conformed = await decodeAndConformToPp(vcWav)
-        baked = encodeWavAtPpRate(conformed.pcm, PP_SAMPLE_RATE)
-        const drift = checkDuration(slot.rawDurationMs, conformed.durationMs)
-        updates.bakedDurationMs = conformed.durationMs
-        updates.driftMs = drift.driftMs
+        const result = await xvcFileBake(slot.raw, target.wav!, PP_SAMPLE_RATE)
+        if (result.sampleRate !== PP_SAMPLE_RATE) {
+          throw new Error(
+            `X-VC bake returned SR ${result.sampleRate}, expected ${PP_SAMPLE_RATE}.`,
+          )
+        }
+        baked = result.wav
+        updates.bakedDurationMs = result.outMs
+        updates.driftMs = result.driftMs
       } else if (opts.mode === "pitch_formant") {
         const result = await apiPitchFormantBake(
           slot.raw,

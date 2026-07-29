@@ -60,6 +60,64 @@ export async function convertVoice(sourceFile: File, targetFile: File): Promise<
   return resp.blob()
 }
 
+export interface XvcFileBake {
+  wav: Blob
+  engine: "xvc"
+  inMs: number
+  outMs: number
+  driftMs: number
+  inputSamples: number
+  outputSamples: number
+  sampleRate: number
+  inferenceWindows: number
+}
+
+// Offline X-VC conversion for pre-baked soundboard clips. The X-VC service
+// keeps the complete source timeline and returns a sample-exact 24 kHz WAV, so
+// the browser must store this blob directly rather than resampling it again.
+export async function xvcFileBake(
+  source: Blob,
+  target: Blob,
+  outputSr: number,
+): Promise<XvcFileBake> {
+  const fd = new FormData()
+  fd.append("source_audio", source, "source.wav")
+  fd.append("target_audio", target, "target.wav")
+  fd.append("output_sr", String(outputSr))
+  const resp = await fetch(`${API_BASE}/api/xvc/file-conversion`, {
+    method: "POST",
+    body: fd,
+  })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+
+  const engine = resp.headers.get("X-VC-Engine")
+  const inMs = Number(resp.headers.get("X-Input-Duration-Ms") || "0")
+  const outMs = Number(resp.headers.get("X-Output-Duration-Ms") || "0")
+  const sampleRate = Number(resp.headers.get("X-Sample-Rate") || "0")
+  const inputSamples = Number(resp.headers.get("X-Input-Samples") || "0")
+  const outputSamples = Number(resp.headers.get("X-Output-Samples") || "0")
+  const inferenceWindows = Number(
+    resp.headers.get("X-XVC-Inference-Windows") || "0",
+  )
+  if (engine !== "xvc") {
+    throw new Error(`X-VC bake returned unexpected engine ${engine || "unknown"}.`)
+  }
+  if (![inMs, outMs, sampleRate, inputSamples, outputSamples].every(Number.isFinite)) {
+    throw new Error("X-VC bake returned invalid audio audit headers.")
+  }
+  return {
+    wav: await resp.blob(),
+    engine,
+    inMs,
+    outMs,
+    driftMs: +(outMs - inMs).toFixed(2),
+    inputSamples,
+    outputSamples,
+    sampleRate,
+    inferenceWindows,
+  }
+}
+
 export async function compareMetrics(sourceFile: File, targetFile: File): Promise<Blob> {
   const fd = new FormData()
   fd.append("source_audio", sourceFile)
