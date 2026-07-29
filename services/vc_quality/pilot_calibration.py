@@ -37,14 +37,47 @@ from study.transition_analysis import (  # noqa: E402
 EVENT_SAMPLE_RATE = 16000
 DEFAULT_PROFILES = "observed,offline,stream120,stream200,stream320"
 DEFAULT_GATES = "0.006,0.008"
+DEFAULT_SMOOTH_FUTURE = "20:100"
+DEFAULT_INPUT_LEVELS = "raw"
+STREAM_LOOKAHEAD_BUDGET_MS = 120
 
 
-def parse_profiles(profile_text: str, gate_text: str) -> list[dict]:
+def parse_profiles(
+    profile_text: str,
+    gate_text: str,
+    smooth_future_text: str = DEFAULT_SMOOTH_FUTURE,
+    input_level_text: str = DEFAULT_INPUT_LEVELS,
+) -> list[dict]:
     """Expand concise CLI names into explicit, reproducible configurations."""
     names = [value.strip().lower() for value in profile_text.split(",") if value.strip()]
     gates = [float(value.strip()) for value in gate_text.split(",") if value.strip()]
     if any(gate < 0 for gate in gates):
         raise ValueError("silence gates must be >= 0")
+    smooth_future = []
+    for value in smooth_future_text.split(","):
+        if not value.strip():
+            continue
+        try:
+            smooth, future = (int(item) for item in value.split(":", 1))
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "smoothing/future values must use <smooth_ms>:<future_ms>"
+            ) from error
+        if smooth < 0 or future < 0:
+            raise ValueError("smoothing and future context must be >= 0")
+        if smooth + future != STREAM_LOOKAHEAD_BUDGET_MS:
+            raise ValueError(
+                "smoothing + future context must remain 120 ms for this "
+                "fixed-latency calibration"
+            )
+        smooth_future.append((smooth, future))
+    input_levels = [
+        value.strip().lower() for value in input_level_text.split(",") if value.strip()
+    ]
+    if not smooth_future:
+        raise ValueError("at least one smoothing/future pair is required")
+    if not input_levels or any(value not in {"raw", "normalized"} for value in input_levels):
+        raise ValueError("input levels must be raw and/or normalized")
     profiles: list[dict] = []
     seen: set[str] = set()
     for name in names:
@@ -60,17 +93,25 @@ def parse_profiles(profile_text: str, gate_text: str) -> list[dict]:
                 raise ValueError("streaming profiles require at least one silence gate")
             current_ms = int(match.group(1))
             for gate in gates:
-                gate_id = f"{gate:g}".replace(".", "p")
-                profiles.append({
-                    "id": f"stream{current_ms}_g{gate_id}",
-                    "mode": "streaming",
-                    "chunk_ms": 2400,
-                    "current_ms": current_ms,
-                    "smooth_ms": 20,
-                    "future_ms": 100,
-                    "silence_gate_rms": gate,
-                    "silence_hangover_ms": 360,
-                })
+                for smooth_ms, future_ms in smooth_future:
+                    for input_level in input_levels:
+                        gate_id = f"{gate:g}".replace(".", "p")
+                        profile_id = f"stream{current_ms}_g{gate_id}"
+                        if (smooth_ms, future_ms) != (20, 100):
+                            profile_id += f"_s{smooth_ms}_f{future_ms}"
+                        if input_level == "normalized":
+                            profile_id += "_norm"
+                        profiles.append({
+                            "id": profile_id,
+                            "mode": "streaming",
+                            "chunk_ms": 2400,
+                            "current_ms": current_ms,
+                            "smooth_ms": smooth_ms,
+                            "future_ms": future_ms,
+                            "silence_gate_rms": gate,
+                            "silence_hangover_ms": 360,
+                            "input_level": input_level,
+                        })
         else:
             raise ValueError(
                 f"unknown profile {name!r}; use observed, offline, or stream<ms>"
@@ -460,11 +501,15 @@ def _score_profiles(
 
 
 def _print_report(session_id: str, utterances: list[dict], result: dict) -> None:
+    profile_width = max(
+        23, max(len(row["profile_id"]) for row in result["summaries"])
+    )
+    table_width = profile_width + 68
     raw_utmos = _median([
         row.get("raw_utmos") for row in result["utterance_scores"]
         if row["profile_id"] == result["summaries"][0]["profile_id"]
     ])
-    print("\n" + "=" * 91)
+    print("\n" + "=" * table_width)
     print(f"X-VC PILOT CALIBRATION: {session_id}")
     print(
         f"Matched VC utterances: {len(utterances)} | "
@@ -472,15 +517,15 @@ def _print_report(session_id: str, utterances: list[dict], result: dict) -> None
     )
     print(f"Raw-microphone median UTMOS: {_metric(raw_utmos)}")
     print("WER: ASR(converted aggregate) vs ASR(raw-microphone aggregate); free-speech proxy")
-    print("-" * 91)
+    print("-" * table_width)
     print(
-        f"{'Profile':<23} {'N':>3} {'UTMOS':>8} {'Delta':>8} "
+        f"{'Profile':<{profile_width}} {'N':>3} {'UTMOS':>8} {'Delta':>8} "
         f"{'SIM-med':>8} {'WER':>8} {'SIM-all':>8} {'RTF-med':>9}"
     )
-    print("-" * 91)
+    print("-" * table_width)
     for row in result["summaries"]:
         print(
-            f"{row['profile_id']:<23} {row['utterances']:>3} "
+            f"{row['profile_id']:<{profile_width}} {row['utterances']:>3} "
             f"{_metric(row['utmos_median']):>8} "
             f"{_metric(row['utmos_delta_median']):>8} "
             f"{_metric(row['sim_median']):>8} "
@@ -488,7 +533,7 @@ def _print_report(session_id: str, utterances: list[dict], result: dict) -> None
             f"{_metric(row['aggregate_sim']):>8} "
             f"{_metric(row['render_rtf_median'], 2):>9}"
         )
-    print("=" * 91)
+    print("=" * table_width)
     print("Interpretation: UTMOS/SIM higher is better; WER/RTF lower is better.")
     print("RTF <= 1 is a live-feasibility check, not an end-to-end latency measurement.")
     if result["source_asr"].get("status") != "complete":
@@ -556,7 +601,9 @@ def _run(args: argparse.Namespace, work_dir: Path) -> dict:
         )
         route_sources[region_index] = route_path
 
-    profiles = parse_profiles(args.profiles, args.gates)
+    profiles = parse_profiles(
+        args.profiles, args.gates, args.smooth_future, args.input_levels
+    )
     render_rows = _render_profiles(
         profiles, utterances, route_sources, target, work_dir, args
     )
@@ -587,6 +634,16 @@ def main() -> None:
     parser.add_argument("--session-dir", help="explicit attempt directory override")
     parser.add_argument("--profiles", default=DEFAULT_PROFILES)
     parser.add_argument("--gates", default=DEFAULT_GATES)
+    parser.add_argument(
+        "--smooth-future",
+        default=DEFAULT_SMOOTH_FUTURE,
+        help="comma-separated smooth_ms:future_ms pairs; each must sum to 120",
+    )
+    parser.add_argument(
+        "--input-levels",
+        default=DEFAULT_INPUT_LEVELS,
+        help="raw, normalized, or raw,normalized",
+    )
     parser.add_argument("--guard-s", type=float, default=0.5)
     parser.add_argument("--padding-s", type=float, default=0.2)
     parser.add_argument("--min-utterance-s", type=float, default=0.8)

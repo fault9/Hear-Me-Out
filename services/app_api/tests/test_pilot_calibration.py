@@ -16,7 +16,6 @@ class PilotCalibrationTests(unittest.TestCase):
             "observed,offline,stream120,stream200,stream320",
             "0.006,0.008",
         )
-
         self.assertEqual(
             [profile["id"] for profile in profiles],
             [
@@ -30,6 +29,33 @@ class PilotCalibrationTests(unittest.TestCase):
                 "stream320_g0p008",
             ],
         )
+
+    def test_fixed_latency_profiles_cross_smoothing_and_input_level(self):
+        profiles = parse_profiles(
+            "observed,stream120",
+            "0.008",
+            "20:100,40:80,60:60",
+            "raw,normalized",
+        )
+
+        self.assertEqual(
+            [profile["id"] for profile in profiles],
+            [
+                "observed",
+                "stream120_g0p008",
+                "stream120_g0p008_norm",
+                "stream120_g0p008_s40_f80",
+                "stream120_g0p008_s40_f80_norm",
+                "stream120_g0p008_s60_f60",
+                "stream120_g0p008_s60_f60_norm",
+            ],
+        )
+        for profile in profiles[1:]:
+            self.assertEqual(profile["smooth_ms"] + profile["future_ms"], 120)
+
+    def test_fixed_latency_profiles_reject_larger_lookahead(self):
+        with self.assertRaisesRegex(ValueError, "must remain 120 ms"):
+            parse_profiles("stream120", "0.008", "40:100", "raw")
 
     def test_vc_utterances_use_guard_padding_and_route_mapping(self):
         events = [

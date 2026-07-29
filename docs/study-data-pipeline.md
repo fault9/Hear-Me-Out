@@ -130,6 +130,26 @@ Browser processing choices such as echo cancellation cannot be reconstructed
 from one saved raw track. Compare those settings using separate technical-pilot
 captures under otherwise matched conditions.
 
+To test zero-additional-latency naturalness changes at the production 120 ms
+current window, hold `smooth_ms + future_ms` at 120 ms and compare raw input
+with X-VC's fixed whole-route normalization rule:
+
+```bash
+uv run --project services/vc_quality python \
+  services/vc_quality/pilot_calibration.py \
+  --session P01001_R01_S05_A01 \
+  --data-root /workspace/data/media \
+  --profiles observed,offline,stream120 \
+  --gates 0.008 \
+  --smooth-future 20:100,40:80,60:60 \
+  --input-levels raw,normalized
+```
+
+The normalized profiles estimate the benefit of one fixed calibration-derived
+gain; they do not model dynamic AGC. Before deployment, derive that gain from
+the participant's audio check, freeze it for the run, apply it consistently to
+both natural and converted model-bound audio, and retain unmodified raw audio.
+
 ## Gender-conditional target assignment and counterbalancing
 
 When the protocol requires an opposite-gender-presenting target, participant
