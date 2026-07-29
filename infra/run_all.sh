@@ -241,6 +241,7 @@ if [ "$SPEECH_LM_ENGINE" = "minicpm_o" ]; then
     _add_ld() { [ -n "$1" ] && [ -d "$1" ] && MINICPM_O_LD="${MINICPM_O_LD:+$MINICPM_O_LD:}$1"; }
     _add_ld "${CUDA_HOME:+$CUDA_HOME/lib64}"
     for _d in "$WORKSPACE"/cuda-*/lib64; do _add_ld "$_d"; done   # runfile toolkit(s)
+    for _d in /usr/local/cuda-*/lib64; do _add_ld "$_d"; done      # external versioned toolkits
     _add_ld /usr/local/cuda/lib64
     _add_ld /usr/local/cuda/targets/x86_64-linux/lib
     pkill -f "llama-server" 2>/dev/null || true   # clear a stale C++ engine
