@@ -34,6 +34,9 @@ def main() -> None:
     os.environ["XVC_CONFIG"] = xvc["config"]
     os.environ["XVC_CKPT"] = xvc["checkpoint"]
     os.environ["XVC_DEVICE"] = str(xvc.get("device", 0))
+    # X-VC config entries such as ``pretrained/...`` are intentionally
+    # repository-relative. Match the live launcher before Hydra resolves them.
+    os.chdir(xvc["directory"])
 
     # Imports must follow XVC_DIR setup because server.py resolves X-VC modules
     # while it is imported.
