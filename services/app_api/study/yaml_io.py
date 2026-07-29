@@ -51,6 +51,18 @@ def dump_yaml(data: dict) -> str:
 def _target_problems(backend, study_id: int, data: dict) -> list[str]:
     tmap = {t["ref"]: t for t in backend.list_targets(study_id)}
     problems = []
+    for expected in data.get("targets", []) or []:
+        ref = expected.get("ref")
+        if not ref:
+            continue
+        target = tmap.get(ref)
+        if not target:
+            problems.append(f"missing target voice '{ref}' (upload it with Speaker ID '{ref}')")
+            continue
+        expected_engine = expected.get("engine")
+        if expected_engine and target.get("engine") != expected_engine:
+            problems.append(
+                f"target '{ref}' is {target.get('engine')} but the study expects {expected_engine}")
     for sc in data.get("scenarios", []) or []:
         for seg in sc.get("voice_schedule", []) or []:
             if seg.get("mode") == "vc" and seg.get("target_ref"):

@@ -387,12 +387,21 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
 
     # One X-VC session per distinct VC target in the schedule; natural = pass-through.
     vc_sessions = {}
+    unavailable_targets = []
     for seg in schedule:
         if seg.get("mode") == "vc":
             tid = seg.get("engine_target_id")
-            if tid and tid in targets and tid not in vc_sessions:
+            if not tid or tid not in targets:
+                unavailable_targets.append(tid or "missing")
+            elif tid not in vc_sessions:
                 spk, frame = targets[tid]
                 vc_sessions[tid] = XVCStreamSession(spk, frame)
+    if unavailable_targets:
+        logger.error("[xvc proxy] VC schedule has unavailable target(s) for %s: %s",
+                     session_id or "legacy session", unavailable_targets)
+        await browser_ws.send_json({"error": "VC target is unavailable for this session"})
+        await browser_ws.close()
+        return browser_ws
 
     def active_segment(elapsed_s):
         for seg in schedule:

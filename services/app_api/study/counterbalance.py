@@ -88,12 +88,30 @@ def _render_schedule(schedule: list[dict], target_ref: str | None) -> list[dict]
     return rendered
 
 
+def _validate_target_engines(schedule: list[dict], target_refs: list[str],
+                             targets_by_ref: dict[str, dict], context: str) -> None:
+    expected_engines = {
+        str(segment.get("engine"))
+        for segment in schedule
+        if segment.get("mode") == "vc" and segment.get("engine")
+    }
+    for target_ref in target_refs:
+        target = targets_by_ref.get(target_ref) or {}
+        actual_engine = target.get("engine")
+        for expected_engine in expected_engines:
+            if actual_engine and actual_engine != expected_engine:
+                raise CounterbalanceError(
+                    f"{context}: target {target_ref!r} uses {actual_engine}, "
+                    f"but the voice schedule requires {expected_engine}")
+
+
 def validate_and_compile(settings: dict | None, scenarios: list[dict],
                          targets: list[dict]) -> list[dict]:
     config = _configuration(settings)
     variants = config.get("variants") or []
     by_position = _scenario_by_position(scenarios)
     target_refs = {target.get("ref") for target in targets}
+    targets_by_ref = {str(target.get("ref")): target for target in targets}
     target_assignment = target_assignment_configuration(settings)
     if target_assignment:
         answer_id = str(target_assignment.get("answer_id") or "").strip()
@@ -159,6 +177,13 @@ def validate_and_compile(settings: dict | None, scenarios: list[dict],
                 raise CounterbalanceError(
                     f"condition {condition_id!r} must define a non-empty voice_schedule")
             scenario = by_position[position]
+            candidate_targets = ([str(target_ref)] if target_ref is not None else sorted(
+                {str(ref) for ref in (target_assignment.get("target_by_answer") or {}).values()} |
+                {str(ref) for ref in (target_assignment.get("fallback_targets") or [])}
+            ))
+            _validate_target_engines(
+                schedule, candidate_targets, targets_by_ref,
+                f"variant {variant_id}, condition {condition_id!r}")
             assignment[str(scenario["id"])] = {
                 "condition": str(condition_id),
                 "voice_schedule": _render_schedule(schedule, target_ref),

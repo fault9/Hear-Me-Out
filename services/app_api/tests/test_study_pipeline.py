@@ -223,6 +223,26 @@ class CounterbalanceTests(unittest.TestCase):
                 self.assertTrue(all(segment["target_ref"] == allocation["target_ref"]
                                     for segment in vc))
 
+    def test_target_engine_must_match_counterbalanced_schedule(self):
+        settings = {"counterbalancing": {
+            "target_assignment": {
+                "answer_id": "gender_identity",
+                "target_by_answer": {"Woman": "masculine_presenting"},
+            },
+            "conditions": {
+                "converted": {"voice_schedule": [{
+                    "mode": "vc", "engine": "xvc", "start_s": 0, "end_s": None,
+                }]},
+            },
+            "variants": [{
+                "id": "v1", "scenario_order": [1, 2],
+                "condition_assignment": {1: "converted", 2: "converted"},
+            }],
+        }}
+        targets = [{"ref": "masculine_presenting", "engine": "meanvc"}]
+        with self.assertRaisesRegex(CounterbalanceError, "requires xvc"):
+            validate_and_compile(settings, self.scenarios, targets)
+
 
 class PilotTemplateTests(unittest.TestCase):
     def test_protocol_template_balances_scenarios_conditions_and_positions(self):

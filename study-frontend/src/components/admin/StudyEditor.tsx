@@ -177,28 +177,29 @@ function YamlPanel({ token, studyId, onChange }: any) {
 
 function TargetsPanel({ token, studyId, targets, engines, onChange }: any) {
   const [speakerId, setSpeakerId] = useState("")
-  const [engine, setEngine] = useState(engines[0] || "meanvc")
+  const [engine, setEngine] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const selectedEngine = engines.includes(engine) ? engine : (engines[0] || "")
 
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-end gap-2 rounded-lg border p-3">
         <Labeled label="Speaker ID"><Input value={speakerId} onChange={e => setSpeakerId(e.target.value)} placeholder="e.g. p225" className="w-36" /></Labeled>
         <Labeled label="Engine">
-          <select className="rounded-md border bg-background px-2 py-2 text-sm" value={engine} onChange={e => setEngine(e.target.value)}>
+          <select className="rounded-md border bg-background px-2 py-2 text-sm" value={selectedEngine} onChange={e => setEngine(e.target.value)}>
             {engines.map((en: string) => <option key={en} value={en}>{en}</option>)}
           </select>
         </Labeled>
         <input type="file" accept="audio/*" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm" />
-        <Button size="sm" disabled={busy || !speakerId.trim() || !file} onClick={async () => {
+        <Button size="sm" disabled={busy || !speakerId.trim() || !file || !selectedEngine} onClick={async () => {
           if (!file) return
           const id = speakerId.trim()
           setBusy(true); setErr(null)
           // One identifier names the voice: used as the link key, the display name,
           // and the target_speaker_id saved with each session.
-          try { await adminApi.uploadTarget(token, studyId, id, id, id, engine, file); setSpeakerId(""); setFile(null); onChange() }
+          try { await adminApi.uploadTarget(token, studyId, id, id, id, selectedEngine, file); setSpeakerId(""); setFile(null); onChange() }
           catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(false) }
         }}>Upload voice</Button>
         {err && <span className="text-xs text-destructive">{err}</span>}

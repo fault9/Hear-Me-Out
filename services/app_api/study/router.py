@@ -265,6 +265,10 @@ def _list_engines() -> list[str]:
     engines = ["meanvc"]
     if (WORKSPACE / "X-VC").exists():
         engines.append("xvc")
+    preferred = os.environ.get("VC_ENGINE", "").strip().lower()
+    if preferred in engines:
+        engines.remove(preferred)
+        engines.insert(0, preferred)
     return engines
 
 
@@ -612,6 +616,29 @@ def build_study_router() -> APIRouter:
         scenario = _resolve_scenario(backend, p, body.scenario_order)
         engine = _scenario_engine(scenario) or (
             ((study or {}).get("settings") or {}).get("study_engine"))
+        targets = backend.list_targets(p["study_id"])
+        targets_by_ref = {target["ref"]: target for target in targets}
+        vc_segments = [segment for segment in (scenario.get("voice_schedule") or [])
+                       if segment.get("mode") == "vc"]
+        segment_engines = {segment.get("engine") or engine for segment in vc_segments}
+        segment_engines.discard(None)
+        if len(segment_engines) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="A scenario cannot switch between different VC engines mid-conversation")
+        for segment in vc_segments:
+            ref = segment.get("target_ref")
+            target_for_segment = targets_by_ref.get(ref)
+            expected_engine = segment.get("engine") or engine
+            if not ref or not target_for_segment:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"VC target {ref or '(missing)'} is not configured for this study")
+            if expected_engine and target_for_segment.get("engine") != expected_engine:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"VC target {ref!r} uses {target_for_segment.get('engine')}, "
+                            f"but this scenario requires {expected_engine}"))
         # Prepare the engine this scenario needs (may restart :5002); the client
         # watches the prepare SSE and connects only when ready.
         manager.start_prepare_async(backend, p["study_id"], engine)
@@ -624,7 +651,6 @@ def build_study_router() -> APIRouter:
                        study_id=p["study_id"], scenario_order=body.scenario_order, engine=engine)
         # target speaker id from the first vc segment (for metadata)
         target_speaker = ""
-        targets = backend.list_targets(p["study_id"])
         target = _target_for_schedule(targets, scenario.get("voice_schedule") or [])
         if target:
             target_speaker = target.get("speaker_id") or ""
