@@ -156,3 +156,53 @@ def ensure_transition_playback(session: dict, data_root: Path,
     }
     atomic_write_json(manifest_path, manifest, exclusive=True)
     return output, manifest
+
+
+def ensure_stable_converted_playback(session: dict, data_root: Path,
+                                     max_duration_s: int = 30) -> tuple[Path, dict]:
+    """Create a participant-speech excerpt from an all-VC study condition."""
+    files = session.get("files") or {}
+    relative_source = files.get("participant")
+    if not relative_source:
+        raise FileNotFoundError("the transmitted participant recording is missing")
+    source = data_root / relative_source
+    events_path = source.parent / "events.jsonl"
+    if not source.exists() or not events_path.exists():
+        raise FileNotFoundError("playback source audio or route events are missing")
+
+    duration_limit = max(1, min(int(max_duration_s or 30), 30))
+    output_dir = source.parent / "derived" / "playback"
+    output = output_dir / f"stable_converted_{duration_limit}s.wav"
+    manifest_path = output.with_suffix(".json")
+    if output.exists() and manifest_path.exists():
+        return output, json.loads(manifest_path.read_text())
+
+    regions = route_regions(read_events(events_path))
+    if not regions or any(region.get("mode") != "vc" for region in regions):
+        raise ValueError("the selected session is not a stable-converted condition")
+
+    rate, samples = _read_pcm16(source)
+    threshold = float(os.environ.get(
+        "STUDY_PLAYBACK_RMS_THRESHOLD",
+        os.environ.get("STUDY_VAD_RMS_THRESHOLD", "0.012"),
+    ))
+    speech = _condense_speech(samples, 0, len(samples), rate, threshold)
+    if not len(speech):
+        raise ValueError("eligible converted participant speech was not found")
+    clip = speech[:round(duration_limit * rate)]
+
+    if not output.exists():
+        atomic_write_bytes(output, _wav_bytes(clip, rate), exclusive=True)
+    manifest = {
+        "schema": "hmo.playback-clip.v1",
+        "session_id": session.get("session_id"),
+        "selection": "rms_speech_from_stable_converted",
+        "max_duration_s": duration_limit,
+        "rms_threshold": threshold,
+        "source_audio": file_record(source, relative_to=data_root),
+        "source_events": file_record(events_path, relative_to=data_root),
+        "converted_speech_s": len(clip) / rate,
+        "output": file_record(output, relative_to=data_root),
+    }
+    atomic_write_json(manifest_path, manifest, exclusive=True)
+    return output, manifest

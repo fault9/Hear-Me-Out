@@ -279,19 +279,17 @@ questionnaires:
     - { id: update_evidence, type: textarea, label: "What evidence did you use to decide whether the assistant had actually updated, accepted, or retained the information you provided?" }
     - { id: differential_treatment, type: textarea, label: "Did you feel that the assistant treated or responded to you differently across the interactions? Please explain." }
 
-  # Follows Appendix B.7: the platform derives up to 30 seconds of participant
-  # speech around the VC-deactivation boundary, converted first and natural second.
+  # The platform derives up to 30 seconds of participant speech from whichever
+  # scenario counterbalancing assigned to the stable-converted condition.
   playback:
     - id: playback_audio
       type: audio_playback
-      condition: vc_deactivation
+      condition: stable_converted
       track: participant
       max_duration_s: 30
       label: |
-        You will now hear a recording of one of your conversations from the study. In this recording,
-        your transmitted voice is converted during the earlier part and returns to your natural voice
-        during the later part. Please listen to both parts before answering. You may replay the
-        recording as needed.
+        You will now hear a recording of your converted voice from one of your conversations in the
+        study. Please listen to the recording before answering. You may replay it as needed.
     - { id: converted_understandable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice was easy to understand." }
     - { id: converted_natural, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded natural." }
     - { id: converted_acceptable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice felt like an acceptable representation of me in this interaction." }

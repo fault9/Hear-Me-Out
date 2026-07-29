@@ -15,7 +15,8 @@ from study.analysis import _participant_segments
 from study.counterbalance import (CounterbalanceError, allocate, balance_report,
                                   choose_balanced_target, resolve_target_assignment,
                                   validate_and_compile)
-from study.playback import ensure_transition_playback
+from study.playback import (ensure_stable_converted_playback,
+                            ensure_transition_playback)
 from study.questionnaires import missing_required_answers
 from study.storage import SqliteBackend
 from study.timing_analysis import (assistant_intervals, prepare_timing_analysis,
@@ -428,6 +429,36 @@ class TransitionTests(unittest.TestCase):
             repeated, repeated_manifest = ensure_transition_playback(session, root, 2)
             self.assertEqual(repeated, output)
             self.assertEqual(repeated_manifest["output"]["sha256"], manifest["output"]["sha256"])
+
+    def test_stable_converted_playback_is_speech_only_and_duration_limited(self):
+        events = [
+            {"event": "route_activated", "event_sequence": 1,
+             "from_mode": None, "to_mode": "vc", "input_sample": 0,
+             "transmitted_sample": 0},
+            {"event": "transmitted_window", "event_sequence": 2,
+             "route_mode": "vc", "input_start_sample": 0,
+             "input_end_sample": 48000, "transmitted_start_sample": 0,
+             "transmitted_end_sample": 48000},
+            {"event": "stream_stop", "event_sequence": 3,
+             "input_samples": 48000},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session_dir = root / "sessions" / "attempt"
+            session_dir.mkdir(parents=True)
+            write_wav(session_dir / "participant.wav", seconds=3.0)
+            with (session_dir / "events.jsonl").open("w") as stream:
+                for row in events:
+                    stream.write(json.dumps(row) + "\n")
+            session = {"session_id": "s1", "files": {
+                "participant": "sessions/attempt/participant.wav",
+            }}
+            output, manifest = ensure_stable_converted_playback(
+                session, root, max_duration_s=2)
+            self.assertEqual(manifest["selection"],
+                             "rms_speech_from_stable_converted")
+            with wave.open(str(output), "rb") as wav:
+                self.assertLessEqual(wav.getnframes(), 2 * wav.getframerate())
 
 
 class TimingAnalysisTests(unittest.TestCase):
