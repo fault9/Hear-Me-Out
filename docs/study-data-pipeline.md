@@ -131,16 +131,18 @@ whose conversion direction matches that category:
 ```bash
 uv run --project services/vc_quality python \
   services/vc_quality/target_screening.py \
-  --session P01001_R01_S05_A01 \
+  --session P01001_R01_S02_A01 \
   --data-root /workspace/data/media \
   --candidates /workspace/data/target-screening/candidates/masculine
 ```
 
-The target screener loads X-VC once, renders every candidate over each complete
-VC route, and ranks converted UTMOS with WER and target SIM as guardrails. Run
-the feminine directory separately with an appropriate source pilot. Confirm
-finalists by blinded listening; do not select on the ranking alone. Temporary
-renders are deleted and neither candidate WAVs nor study data are modified.
+The target screener uses the unconverted `participant.wav` track from a
+stable-natural session, loads X-VC once, renders every candidate over each
+complete natural route, and ranks converted UTMOS with WER and target SIM as
+guardrails. The same source session may be used for both target directories so
+candidate comparisons share one source signal. Confirm finalists by blinded
+listening; do not select on the ranking alone. Temporary renders are deleted
+and neither candidate WAVs nor study data are modified.
 
 Browser processing choices such as echo cancellation cannot be reconstructed
 from one saved raw track. Compare those settings using separate technical-pilot

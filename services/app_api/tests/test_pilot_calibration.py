@@ -9,7 +9,7 @@ if str(VC_QUALITY_DIR) not in sys.path:
     sys.path.insert(0, str(VC_QUALITY_DIR))
 
 from pilot_calibration import diagnostic_profiles, select_vc_utterances  # noqa: E402
-from target_screening import _candidate_wavs  # noqa: E402
+from target_screening import _candidate_wavs, select_natural_utterances  # noqa: E402
 
 
 class PilotCalibrationTests(unittest.TestCase):
@@ -96,6 +96,33 @@ class PilotCalibrationTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_target_screening_maps_natural_speech_to_participant_track(self):
+        events = [
+            {"event": "route_activated", "event_sequence": 1,
+             "to_mode": "natural", "input_sample": 0},
+            {"event": "transmitted_window", "event_sequence": 2,
+             "route_mode": "natural", "input_start_sample": 0,
+             "input_end_sample": 32000, "transmitted_start_sample": 1600,
+             "transmitted_end_sample": 33600},
+            {"event": "participant_speech_start", "event_sequence": 3,
+             "input_sample": 8000},
+            {"event": "participant_speech_end", "event_sequence": 4,
+             "input_sample": 24000},
+            {"event": "stream_stop", "event_sequence": 5,
+             "input_samples": 32000},
+        ]
+
+        utterances = select_natural_utterances(
+            events, guard_s=0.5, padding_s=0.2, min_utterance_s=0.4,
+        )
+
+        self.assertEqual(len(utterances), 1)
+        row = utterances[0]
+        self.assertEqual(row["route_input_start_sample"], 1600)
+        self.assertEqual(row["route_input_end_sample"], 33600)
+        self.assertEqual(row["source_start_sample"], 6400)
+        self.assertEqual(row["source_end_sample"], 28800)
 
 
 if __name__ == "__main__":

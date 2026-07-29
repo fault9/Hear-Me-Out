@@ -11,14 +11,18 @@ import tempfile
 from pathlib import Path
 
 from pilot_calibration import (
+    EVENT_SAMPLE_RATE,
     REPO_ROOT,
     _concatenate,
     _default_xvc_dir,
+    _find_session,
     _metric,
     _read_mono_wav,
     _write_event_slice,
-    prepare_session_inputs,
+    participant_speech_intervals,
     production_stream_profile,
+    read_events,
+    route_regions,
 )
 
 
@@ -32,6 +36,121 @@ def _candidate_wavs(directory: Path) -> list[Path]:
         path.resolve() for path in directory.rglob("*")
         if path.is_file() and path.suffix.lower() == ".wav"
     )
+
+
+def select_natural_utterances(
+    events: list[dict],
+    *,
+    guard_s: float,
+    padding_s: float,
+    min_utterance_s: float,
+) -> list[dict]:
+    """Map input speech intervals onto the transmitted natural-route timeline."""
+    regions = route_regions(events)
+    speech = participant_speech_intervals(events)
+    selected: list[dict] = []
+    padding = round(padding_s * EVENT_SAMPLE_RATE)
+    guard = round(guard_s * EVENT_SAMPLE_RATE) if len(regions) > 1 else 0
+
+    for region_index, region in enumerate(regions, start=1):
+        if region["mode"] != "natural":
+            continue
+        input_start = int(region["input_start_sample"]) + guard
+        input_end = int(region["input_end_sample"]) - guard
+        transmitted_start = int(region["transmitted_start_sample"]) + guard
+        transmitted_end = int(region["transmitted_end_sample"]) - guard
+        if input_end <= input_start or transmitted_end <= transmitted_start:
+            continue
+        input_span = input_end - input_start
+        transmitted_span = transmitted_end - transmitted_start
+        for speech_start, speech_end in speech:
+            start = max(input_start, speech_start)
+            end = min(input_end, speech_end)
+            if end <= start or (end - start) / EVENT_SAMPLE_RATE < min_utterance_s:
+                continue
+            padded_start = max(input_start, start - padding)
+            padded_end = min(input_end, end + padding)
+            mapped_start = transmitted_start + round(
+                (padded_start - input_start) * transmitted_span / input_span
+            )
+            mapped_end = transmitted_start + round(
+                (padded_end - input_start) * transmitted_span / input_span
+            )
+            selected.append({
+                "region_index": region_index,
+                "route_input_start_sample": int(region["transmitted_start_sample"]),
+                "route_input_end_sample": int(region["transmitted_end_sample"]),
+                "speech_start_sample": start,
+                "speech_end_sample": end,
+                "source_start_sample": mapped_start,
+                "source_end_sample": mapped_end,
+            })
+
+    for index, row in enumerate(selected, start=1):
+        row["utterance_id"] = f"u{index:03d}"
+        row["duration_s"] = (
+            row["source_end_sample"] - row["source_start_sample"]
+        ) / EVENT_SAMPLE_RATE
+    return selected
+
+
+def prepare_natural_source(args: argparse.Namespace, work_dir: Path) -> dict:
+    """Extract stable-natural participant.wav clips for target screening."""
+    data_root = Path(args.data_root).expanduser().resolve()
+    session_dir = _find_session(data_root, args.session, args.session_dir)
+    source = session_dir / "participant.wav"
+    events_path = session_dir / "events.jsonl"
+    for required in (source, events_path):
+        if not required.exists():
+            raise FileNotFoundError(f"required session artifact missing: {required}")
+
+    utterances = select_natural_utterances(
+        read_events(events_path),
+        guard_s=args.guard_s,
+        padding_s=args.padding_s,
+        min_utterance_s=args.min_utterance_s,
+    )
+    if args.max_utterances is not None:
+        utterances = utterances[:args.max_utterances]
+    if not utterances:
+        raise ValueError(
+            "no eligible participant speech intervals were found in a natural route"
+        )
+
+    source_rate, source_audio = _read_mono_wav(source)
+    for utterance in utterances:
+        utterance_id = utterance["utterance_id"]
+        source_path = work_dir / "source" / f"{utterance_id}.wav"
+        _write_event_slice(
+            source_path,
+            source_rate,
+            source_audio,
+            utterance["source_start_sample"],
+            utterance["source_end_sample"],
+        )
+        utterance["source_path"] = source_path
+
+    route_sources: dict[int, Path] = {}
+    for utterance in utterances:
+        region_index = utterance["region_index"]
+        if region_index in route_sources:
+            continue
+        route_path = work_dir / "source_routes" / f"region_{region_index:02d}.wav"
+        _write_event_slice(
+            route_path,
+            source_rate,
+            source_audio,
+            utterance["route_input_start_sample"],
+            utterance["route_input_end_sample"],
+        )
+        route_sources[region_index] = route_path
+
+    return {
+        "session_dir": session_dir,
+        "source_track": source,
+        "utterances": utterances,
+        "route_sources": route_sources,
+    }
 
 
 def _render_candidates(
@@ -225,6 +344,7 @@ def _print_report(session_id: str, result: dict) -> None:
     width = candidate_width + 78
     print("\n" + "=" * width)
     print(f"X-VC TARGET SCREENING: {session_id}")
+    print("Source: participant.wav from a natural route")
     print("Production stream only: current=120, smooth=20, future=100, gate=0.008")
     print("-" * width)
     print(
@@ -246,7 +366,7 @@ def _print_report(session_id: str, result: dict) -> None:
 
 
 def _run(args: argparse.Namespace, work_dir: Path) -> dict:
-    prepared = prepare_session_inputs(args, work_dir / "source")
+    prepared = prepare_natural_source(args, work_dir / "source")
     candidate_root = Path(args.candidates).expanduser().resolve()
     if not candidate_root.is_dir():
         raise FileNotFoundError(f"candidate directory not found: {candidate_root}")
@@ -274,6 +394,7 @@ def _run(args: argparse.Namespace, work_dir: Path) -> dict:
     result.update({
         "schema": "hmo.xvc-target-screening.v1",
         "session_id": args.session,
+        "source_track": str(prepared["source_track"]),
         "candidate_root": str(candidate_root),
     })
     _print_report(args.session, result)
@@ -282,7 +403,10 @@ def _run(args: argparse.Namespace, work_dir: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Rank target WAVs using the frozen production X-VC stream."
+        description=(
+            "Rank target WAVs by converting participant.wav from a natural-route "
+            "session with the frozen production X-VC stream."
+        )
     )
     parser.add_argument("--session", required=True)
     parser.add_argument("--candidates", required=True)
