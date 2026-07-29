@@ -102,6 +102,13 @@ def _needs_timing(session: dict) -> bool:
     return result.get("schema") != TIMING_SCHEMA
 
 
+def _needs_preprocessing(session: dict) -> bool:
+    transcript = session.get("transcript") or {}
+    return (session.get("metrics") is None
+            or not isinstance(transcript, dict)
+            or "participant_segments" not in transcript)
+
+
 def main() -> None:
     study_id = int(sys.argv[1])
     force = "--force" in sys.argv[2:]
@@ -110,7 +117,7 @@ def main() -> None:
     sessions = backend.list_sessions(study_id)
     pending = [s for s in sessions
                if (s.get("files") or {}).get("participant")
-               and (force or s.get("metrics") is None or _needs_timing(s))]
+               and (force or _needs_preprocessing(s) or _needs_timing(s))]
     total = len(pending)
     done = 0
     _write(running=True, phase="preprocessing", done=0, total=total,
@@ -128,7 +135,7 @@ def main() -> None:
                    if otel else contextlib.nullcontext())
         try:
             with span_cm:
-                if force or s.get("metrics") is None:
+                if force or _needs_preprocessing(s):
                     run_session_analysis(s["session_id"], conv, raw, mt)
                 if force or _needs_timing(s):
                     analysis_id = (
