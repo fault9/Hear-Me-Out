@@ -71,6 +71,8 @@ export interface EnterResult {
   questionnaires?: Record<string, any[]>;
   welcome_text?: string;
   estimated_duration?: string;
+  practice_intro_text?: string;
+  main_intro_text?: string;
   run: RunState;
 }
 export interface PrepareState {

@@ -312,7 +312,10 @@ function DataPanel({ token, studyId }: any) {
   const runAnalysis = async (force: boolean) => {
     setStatus(await adminApi.analyze(token, studyId, force))
   }
-  const pending = sessions.filter(s => !s.metrics || s.vc_quality_status !== "complete").length
+  const analyticalSessions = sessions.filter(s => s.analysis_eligible !== false)
+  const pending = analyticalSessions.filter(
+    s => !s.metrics || s.vc_quality_status !== "complete"
+      || ["pending", "incomplete"].includes(s.technical_validity?.status || "pending")).length
   const running = status?.running
   const vcRunning = vcStatus?.running
   const phaseLabel = status?.phase === "vc_quality" ? "VC quality" : "Transcription and timing"
@@ -322,7 +325,8 @@ function DataPanel({ token, studyId }: any) {
     if (vcScope.startsWith("session:")) body.session_id = vcScope.slice("session:".length)
     setVcStatus(await adminApi.vcQuality(token, studyId, body))
   }
-  const participants = Array.from(new Set(sessions.map(s => s.participant_id)))
+  const participants = Array.from(new Set(
+    analyticalSessions.map(s => s.participant_id)))
 
   return (
     <div>
@@ -335,7 +339,8 @@ function DataPanel({ token, studyId }: any) {
       <div className="mb-4 rounded-lg border p-3">
         <div className="mb-1 text-sm font-semibold">Analysis pipeline</div>
         <p className="mb-2 text-xs text-muted-foreground">
-          Runs transcription and interaction timing first, then VC-quality scoring. Run after data collection.
+          Processes every analytical capture, creates a technical-validity report, then runs VC-quality scoring.
+          Dataset inclusion separately selects the latest valid attempt from the latest submitted run.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" disabled={running || vcRunning} onClick={() => runAnalysis(false)}>
@@ -356,9 +361,9 @@ function DataPanel({ token, studyId }: any) {
         <div className="flex flex-wrap items-center gap-2">
           <select className="rounded-md border bg-background px-2 py-1.5 text-sm" value={vcScope}
             onChange={e => setVcScope(e.target.value)} disabled={running || vcRunning}>
-            <option value="all">All study sessions</option>
+            <option value="all">All analytical sessions</option>
             {participants.map(pid => <option key={pid} value={`participant:${pid}`}>Participant {pid}</option>)}
-            {sessions.map(s => <option key={s.session_id} value={`session:${s.session_id}`}>Session {s.session_id}</option>)}
+            {analyticalSessions.map(s => <option key={s.session_id} value={`session:${s.session_id}`}>Session {s.session_id}</option>)}
           </select>
           <Button size="sm" disabled={running || vcRunning} onClick={() => runVCQuality(false)}>
             {vcRunning ? `Scoring ${vcStatus.done}/${vcStatus.total}…` : "Run VC quality"}
@@ -372,8 +377,19 @@ function DataPanel({ token, studyId }: any) {
       <div className="grid gap-4 md:grid-cols-2">
         <Table title="Runs" head={["Participant", "Status", "Left"]}
           rows={runs.map(r => [r.participant_id, r.status, r.remaining_seconds ? `${Math.floor(r.remaining_seconds / 60)}m` : "—"])} />
-        <Table title="Sessions" head={["Session", "Condition", "Preprocess", "VC quality"]}
-          rows={sessions.map(s => [s.session_id, s.voice_condition, s.metrics ? "analyzed" : "pending", s.vc_quality_status || "pending"])} />
+        <Table title="Sessions" head={["Session", "Condition", "Preprocess", "VC quality", "Technical", "Dataset"]}
+          rows={sessions.map(s => {
+            const excluded = s.analysis_eligible === false
+            const validity = s.technical_validity?.status || "pending"
+            const dataset = s.analysis_included
+              ? "included"
+              : (s.analysis_exclusion_reasons || []).join(", ") || "pending"
+            return [s.session_id, s.voice_condition,
+              excluded ? "excluded" : (s.metrics ? "analyzed" : "pending"),
+              excluded ? "excluded" : (s.vc_quality_status || "pending"),
+              excluded ? "excluded" : validity,
+              dataset]
+          })} />
       </div>
     </div>
   )

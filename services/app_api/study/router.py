@@ -47,6 +47,8 @@ from .playback import (ensure_stable_converted_interaction_playback,
                        ensure_stable_converted_playback,
                        ensure_transition_playback)
 from .questionnaires import missing_required_answers
+from .session_scope import (analysis_eligible, annotate_analysis_scopes,
+                            session_study_role)
 from .storage import get_backend
 from .vc_quality_analysis import get_vc_quality_runner
 
@@ -448,7 +450,8 @@ def build_study_router() -> APIRouter:
 
     @router.get("/studies/{study_id}/sessions", dependencies=[Depends(require_admin)])
     async def list_sessions(study_id: int):
-        return {"sessions": backend.list_sessions(study_id)}
+        return {"sessions": annotate_analysis_scopes(
+            backend.list_sessions(study_id), backend.list_runs(study_id))}
 
     @router.post("/studies/{study_id}/analyze", dependencies=[Depends(require_admin)])
     async def analyze(study_id: int, force: bool = False):
@@ -496,13 +499,15 @@ def build_study_router() -> APIRouter:
     @router.get("/studies/{study_id}/export", dependencies=[Depends(require_admin)])
     async def export(study_id: int, format: str = "json"):
         study = backend.get_study(study_id)
+        sessions = annotate_analysis_scopes(
+            backend.list_sessions(study_id), backend.list_runs(study_id))
         data = {
             "study": study,
             "scenarios": backend.list_scenarios(study_id),
             "targets": backend.list_targets(study_id),
             "participants": backend.list_participants(study_id),
             "runs": backend.list_runs(study_id),
-            "sessions": backend.list_sessions(study_id),
+            "sessions": sessions,
             "answers": backend.list_answers(study_id),
         }
         if format == "json":
@@ -545,6 +550,8 @@ def build_study_router() -> APIRouter:
                 "scenarios": scenarios, "questionnaires": study.get("questionnaires") or {},
                 "welcome_text": settings.get("welcome_text", ""),
                 "estimated_duration": settings.get("estimated_duration", ""),
+                "practice_intro_text": settings.get("practice_intro_text", ""),
+                "main_intro_text": settings.get("main_intro_text", ""),
                 "run": _run_public(run)}
 
     @router.post("/run/start")
@@ -827,6 +834,8 @@ def build_study_router() -> APIRouter:
             "scenario_attempt": session.get("scenario_attempt"),
             "scenario_id": session["scenario_id"], "scenario_order": session["scenario_order"],
             "voice_condition": session["voice_condition"], "target_speaker_id": session["target_speaker_id"],
+            "study_role": session_study_role(session),
+            "analysis_eligible": analysis_eligible(session),
             "files": files,
         }
         atomic_write_json(out_dir / "metadata.json", metadata, exclusive=True)

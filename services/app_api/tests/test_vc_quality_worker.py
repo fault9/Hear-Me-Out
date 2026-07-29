@@ -71,6 +71,32 @@ class VCQualityWorkerTests(unittest.TestCase):
             "vc_quality": {"metric_profile": vc_quality_worker.METRIC_PROFILE},
         }))
 
+    def test_natural_only_sessions_do_not_require_vc_quality(self):
+        self.assertFalse(vc_quality_worker._session_has_vc_route({
+            "voice_condition": "stable_natural",
+            "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
+        }))
+        self.assertTrue(vc_quality_worker._session_has_vc_route({
+            "voice_condition": "vc_activation",
+            "schedule": [
+                {"mode": "natural", "start_s": 0, "end_s": 45},
+                {"mode": "vc", "start_s": 45, "end_s": None},
+            ],
+        }))
+
+    def test_practice_is_excluded_even_from_forced_scoring(self):
+        files = {"participant": "participant.wav", "participant_raw": "raw.wav"}
+        practice = {"session_id": "practice", "voice_condition": "practice", "ended_at": 1,
+                    "files": files}
+        analytical = {"session_id": "analytical", "voice_condition": "stable_natural", "ended_at": 1,
+                      "files": files}
+
+        selected = vc_quality_worker._scoring_candidates(
+            [practice, analytical], force=True)
+
+        self.assertEqual([session["session_id"] for session in selected],
+                         ["analytical"])
+
 
 if __name__ == "__main__":
     unittest.main()

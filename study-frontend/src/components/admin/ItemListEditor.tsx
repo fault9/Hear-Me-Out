@@ -65,6 +65,12 @@ export function ItemListEditor({ items, onChange, scenarios = [] }: {
                 onChange={e => update(i, {
                   max_duration_s: e.target.value ? Number(e.target.value) : undefined,
                 })} />
+              <Input className="w-28" type="number" min={1} max={10}
+                placeholder="Max plays"
+                value={it.max_plays ?? ""}
+                onChange={e => update(i, {
+                  max_plays: e.target.value ? Number(e.target.value) : undefined,
+                })} />
             </div>
           )}
 

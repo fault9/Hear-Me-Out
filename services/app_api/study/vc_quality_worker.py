@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from study.artifacts import atomic_write_json, file_record  # noqa: E402
+from study.session_scope import analysis_eligible  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 from study.transition_analysis import prepare_session_analysis  # noqa: E402
 from study.vc_quality_analysis import STUDY_DATA_DIR, status_path  # noqa: E402
@@ -116,6 +117,35 @@ def _needs_scoring(session: dict) -> bool:
             or result.get("metric_profile") != METRIC_PROFILE)
 
 
+def _scoring_candidates(sessions: list[dict], force: bool) -> list[dict]:
+    return [session for session in sessions
+            if analysis_eligible(session)
+            and session.get("ended_at") is not None
+            and (session.get("files") or {}).get("participant")
+            and (session.get("files") or {}).get("participant_raw")
+            and (force or _needs_scoring(session))]
+
+
+def _session_has_vc_route(session: dict) -> bool:
+    """Return whether this recording contains any converted participant audio."""
+    schedule = session.get("schedule") or []
+    if schedule:
+        return any(segment.get("mode") == "vc" for segment in schedule)
+    return session.get("voice_condition") not in {"practice", "natural", "stable_natural"}
+
+
+def _store_result(backend, session: dict, analysis_id: str,
+                  storage_status: str, result: dict) -> None:
+    out_dir = ((STUDY_DATA_DIR / (session.get("files") or {})["participant"]).parent /
+               "analysis" / "vc_quality" / analysis_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result_path = out_dir / "results.json"
+    atomic_write_json(result_path, result, exclusive=True)
+    result["result_artifact"] = file_record(result_path, relative_to=STUDY_DATA_DIR)
+    backend.update_session_vc_quality(
+        session["session_id"], storage_status, result)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("study_id", type=int)
@@ -130,9 +160,7 @@ def main() -> None:
         sessions = [s for s in sessions if s["participant_id"] == args.participant]
     if args.session:
         sessions = [s for s in sessions if s["session_id"] == args.session]
-    sessions = [s for s in sessions if (s.get("files") or {}).get("participant")
-                and (s.get("files") or {}).get("participant_raw")
-                and (args.force or _needs_scoring(s))]
+    sessions = _scoring_candidates(sessions, args.force)
     total = len(sessions)
     done = 0
     analysis_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -147,6 +175,17 @@ def main() -> None:
         _write(running=True, done=done, total=total, current=sid, **common)
         backend.update_session_vc_quality(sid, "running", {"analysis_id": analysis_id})
         try:
+            if not _session_has_vc_route(session):
+                _store_result(backend, session, analysis_id, "complete", {
+                    "status": "not_applicable",
+                    "analysis_id": analysis_id,
+                    "metric_profile": METRIC_PROFILE,
+                    "reason": "session_has_no_vc_route",
+                    "scores": [],
+                })
+                done += 1
+                _write(running=True, done=done, total=total, current=None, **common)
+                continue
             inputs = prepare_session_analysis(session, STUDY_DATA_DIR, analysis_id)
             start = len(jobs)
             jobs.extend(inputs["score_jobs"])
@@ -196,12 +235,7 @@ def main() -> None:
                       "inputs": item["inputs"], "scores": scores,
                       "unavailable_metrics": unavailable,
                       "scorer_log": scorer_log}
-            out_dir = ((STUDY_DATA_DIR / (session.get("files") or {})["participant"]).parent /
-                       "analysis" / "vc_quality" / analysis_id)
-            atomic_write_json(out_dir / "results.json", result, exclusive=True)
-            result["result_artifact"] = file_record(
-                out_dir / "results.json", relative_to=STUDY_DATA_DIR)
-            backend.update_session_vc_quality(sid, storage_status, result)
+            _store_result(backend, session, analysis_id, storage_status, result)
         except Exception as exc:
             backend.update_session_vc_quality(sid, "failed", {
                 "status": "failed", "analysis_id": analysis_id,

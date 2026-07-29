@@ -40,6 +40,7 @@ class QuestionnaireItem(BaseModel):
     min_label: Optional[str] = None           # scale endpoints
     max_label: Optional[str] = None
     placeholder: Optional[str] = None
+    max_plays: Optional[int] = None             # audio_playback: permitted playback starts
 
     class Config:
         extra = "allow"

@@ -249,9 +249,13 @@ class CounterbalanceTests(unittest.TestCase):
 
 
 class PilotTemplateTests(unittest.TestCase):
-    def test_protocol_template_balances_scenarios_conditions_and_positions(self):
+    @staticmethod
+    def _protocol():
         path = Path(__file__).resolve().parents[1] / "study" / "templates" / "pilot_study.yaml"
-        protocol = yaml.safe_load(path.read_text())
+        return yaml.safe_load(path.read_text())
+
+    def test_protocol_template_balances_scenarios_conditions_and_positions(self):
+        protocol = self._protocol()
         scenarios = [{**scenario, "id": index + 1, "order_idx": index}
                      for index, scenario in enumerate(protocol["scenarios"])]
         targets = [{"ref": target["ref"]} for target in protocol["targets"]]
@@ -283,6 +287,44 @@ class PilotTemplateTests(unittest.TestCase):
             self.assertEqual(variant["scenario_order"][0], 1)
             self.assertEqual(variant["assignment"]["1"]["condition"], "practice")
 
+    def test_analytical_scenarios_define_four_helpfulness_levels(self):
+        protocol = self._protocol()
+        for scenario in protocol["scenarios"][1:]:
+            spec = scenario["scenario_card"]["analysis_spec"]
+            levels = spec["outcome_levels"]
+            self.assertEqual(
+                [level["score"] for level in levels],
+                [1, 2, 3, 4],
+                scenario["title"],
+            )
+            self.assertEqual(len({level["label"] for level in levels}), 4)
+            self.assertTrue(spec["critical_units"])
+            self.assertTrue(spec["bounded_action"])
+            self.assertTrue(spec["required_final_account"])
+
+    def test_playback_is_limited_to_three_plays(self):
+        protocol = self._protocol()
+        self.assertIn("practice recording",
+                      protocol["settings"]["practice_intro_text"].lower())
+        self.assertIn("four main study conversations",
+                      protocol["settings"]["main_intro_text"].lower())
+        playback = next(
+            item for item in protocol["questionnaires"]["playback"]
+            if item["type"] == "audio_playback"
+        )
+        self.assertEqual(playback["condition"], "stable_converted")
+        self.assertEqual(playback["max_plays"], 3)
+        self.assertTrue(playback["required"])
+
+        consent_text = "\n".join(
+            str(item.get("label", ""))
+            for item in protocol["questionnaires"]["consent"]
+        )
+        self.assertNotIn("[Insert", consent_text)
+        self.assertNotIn("biobank", consent_text.lower())
+        self.assertIn("dataskyddsombud@kth.se", consent_text)
+        self.assertIn("at least 10 years", consent_text)
+
         for condition in ("vc_activation", "vc_deactivation"):
             schedule = protocol["counterbalancing"]["conditions"][condition]["voice_schedule"]
             self.assertEqual(schedule[0]["end_s"], 45)
@@ -299,6 +341,18 @@ class PilotTemplateTests(unittest.TestCase):
 
 
 class QuestionnaireTests(unittest.TestCase):
+    def test_required_playback_requires_at_least_one_play(self):
+        items = [{"id": "playback", "type": "audio_playback", "required": True}]
+        self.assertEqual(missing_required_answers(items, {}), ["playback"])
+        self.assertEqual(
+            missing_required_answers(items, {"playback": {"play_count": 0}}),
+            ["playback"],
+        )
+        self.assertEqual(
+            missing_required_answers(items, {"playback": {"play_count": 1}}),
+            [],
+        )
+
     def test_hidden_required_branch_is_not_required(self):
         items = [
             {"id": "ended", "type": "radio", "required": True},

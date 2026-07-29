@@ -28,6 +28,11 @@ def missing_required_answers(items: list[dict], answers: dict) -> list[str]:
             answered = value is True
         elif item.get("type") == "checkbox":
             answered = isinstance(value, list) and bool(value)
+        elif item.get("type") == "audio_playback":
+            play_count = value.get("play_count") if isinstance(value, dict) else None
+            answered = (isinstance(play_count, (int, float))
+                        and not isinstance(play_count, bool)
+                        and play_count >= 1)
         if not answered:
             missing.append(str(item.get("id")))
     return missing

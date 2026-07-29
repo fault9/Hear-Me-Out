@@ -11,7 +11,8 @@ import { AudioCheck } from "@/components/AudioCheck"
 type Phase =
   | "code" | "welcome"
   | "eligibility" | "ineligible" | "consent" | "declined" | "background" | "audio_check"
-  | "scenario" | "post" | "pre_playback" | "playback" | "debrief" | "final" | "completion"
+  | "practice_intro" | "main_intro" | "scenario" | "post"
+  | "pre_playback" | "playback" | "debrief" | "final" | "completion"
 
 function mergePostItems(shared: QItem[], scenarioItems: QItem[]): QItem[] {
   const merged = [...shared]
@@ -22,6 +23,13 @@ function mergePostItems(shared: QItem[], scenarioItems: QItem[]): QItem[] {
     else merged.splice(index + 1, 0, item)
   }
   return merged
+}
+
+function clearPlaybackCounts() {
+  for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+    const key = sessionStorage.key(index)
+    if (key?.startsWith("hmo:playback-count:")) sessionStorage.removeItem(key)
+  }
 }
 
 export function ParticipantFlow() {
@@ -87,6 +95,12 @@ export function ParticipantFlow() {
     const p = step.phase as Phase | undefined
     if (p === "background") { setPhase("background"); return }
     if (p === "audio_check") { setPhase("audio_check"); return }
+    if (p === "practice_intro") { setScenarioIdx(0); setPhase("practice_intro"); return }
+    if (p === "main_intro") {
+      setScenarioIdx(Math.max(1, (step.scenario_order ?? 2) - 1))
+      setPhase("main_intro")
+      return
+    }
     if (p === "consent") { setPhase("consent"); return }
     if (p === "eligibility") { setPhase("eligibility"); return }
     if (p === "scenario" || p === "post") {
@@ -113,6 +127,7 @@ export function ParticipantFlow() {
       const secs = res?.run?.remaining_seconds ?? 3600
       setDeadline(Date.now() + secs * 1000)
       if (mode === "restart") {
+        clearPlaybackCounts()
         const first = q("eligibility").length ? "eligibility" : "consent"
         setScenarioIdx(0); setPostSessionId(null); setStep({ phase: first }); setPhase(first)
       } else {
@@ -128,13 +143,13 @@ export function ParticipantFlow() {
     return (
       <Centered>
         <h1 className="text-2xl font-bold">Welcome</h1>
-        <p className="text-sm text-muted-foreground">Enter your participant code to begin.</p>
+        <p className="text-base text-muted-foreground">Enter your participant code to begin.</p>
         <div className="flex w-full max-w-xs gap-2">
           <Input value={code} onChange={e => setCode(e.target.value.toUpperCase())}
-                 placeholder="e.g. A7X9K2" onKeyDown={e => e.key === "Enter" && doEnter(code)} />
-          <Button onClick={() => doEnter(code)} disabled={busy || !code}>{busy ? "…" : "Start"}</Button>
+                 className="text-base" placeholder="e.g. A7X9K2" onKeyDown={e => e.key === "Enter" && doEnter(code)} />
+          <Button className="text-base" onClick={() => doEnter(code)} disabled={busy || !code}>{busy ? "…" : "Start"}</Button>
         </div>
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="text-base text-destructive">{error}</p>}
       </Centered>
     )
   }
@@ -146,11 +161,11 @@ export function ParticipantFlow() {
         <h1 className="text-2xl font-bold">{data.study_name}</h1>
         {st === "submitted" ? (
           <>
-            <p className="text-sm">You have already completed this study. Thank you!</p>
+            <p className="text-base">You have already completed this study. Thank you!</p>
           </>
         ) : st === "in_progress" || st === "expired" ? (
           <>
-            <p className="max-w-md text-center text-sm text-muted-foreground">
+            <p className="max-w-md text-center text-base leading-7 text-muted-foreground">
               {st === "expired"
                 ? "Your previous session expired. You can continue where you left off (your completed scenarios are kept) or restart."
                 : "You have a session in progress. Continue where you left off, or restart."}
@@ -163,16 +178,16 @@ export function ParticipantFlow() {
         ) : (
           <>
             {data.welcome_text
-              ? <div className="max-h-[60vh] max-w-2xl overflow-auto whitespace-pre-wrap text-left text-sm">{data.welcome_text}</div>
-              : <p className="max-w-md text-center text-sm text-muted-foreground">
+              ? <div className="max-h-[60vh] max-w-2xl overflow-auto whitespace-pre-wrap text-left text-base leading-7">{data.welcome_text}</div>
+              : <p className="max-w-md text-center text-base leading-7 text-muted-foreground">
                   You will complete {data.scenarios.length} conversation scenarios, each followed by a brief
                   questionnaire. You have one hour to finish.
                 </p>}
-            {data.estimated_duration && <p className="text-xs text-muted-foreground">Estimated duration: {data.estimated_duration}</p>}
-            <Button onClick={() => startRun("restart")} disabled={busy}>Begin</Button>
+            {data.estimated_duration && <p className="text-sm text-muted-foreground">Estimated duration: {data.estimated_duration}</p>}
+            <Button className="text-base" onClick={() => startRun("restart")} disabled={busy}>Begin</Button>
           </>
         )}
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="text-base text-destructive">{error}</p>}
       </Centered>
     )
   }
@@ -200,11 +215,11 @@ export function ParticipantFlow() {
   }
 
   if (phase === "ineligible") {
-    return <Centered><h1 className="text-2xl font-bold">Thank you for your interest</h1><p className="text-sm text-muted-foreground">This study is limited to participants aged 18 or older.</p></Centered>
+    return <Centered><h1 className="text-2xl font-bold">Thank you for your interest</h1><p className="text-base text-muted-foreground">This study is limited to participants aged 18 or older.</p></Centered>
   }
 
   if (phase === "declined") {
-    return <Centered><h1 className="text-2xl font-bold">Thank you</h1><p className="text-sm text-muted-foreground">You have chosen not to participate. No study interaction will begin.</p></Centered>
+    return <Centered><h1 className="text-2xl font-bold">Thank you</h1><p className="text-base text-muted-foreground">You have chosen not to participate. No study interaction will begin.</p></Centered>
   }
 
   if (phase === "background" && data) {
@@ -245,10 +260,40 @@ export function ParticipantFlow() {
           try {
             await api.questionnaire(null, code, "audio_check", ans)
             setScenarioIdx(0)
-            setStep({ phase: "scenario", scenario_order: 1 })
-            setPhase("scenario")
+            setStep({ phase: "practice_intro" })
+            setPhase("practice_intro")
           } catch (e) { handleErr(e) } finally { setBusy(false) }
         }} />
+    )
+  }
+
+  if (phase === "practice_intro" && data) {
+    return Frame(
+      <TransitionScreen
+        title="Practice interaction"
+        text={data.practice_intro_text ||
+          "You will now complete a short practice conversation to become familiar with the study tasks and controls. The practice recording is retained for technical checks but is not included in the main analysis. Read the scenario carefully, then continue when you are ready."}
+        onContinue={() => {
+          setScenarioIdx(0)
+          setStep({ phase: "scenario", scenario_order: data.scenarios[0].scenario_order })
+          setPhase("scenario")
+        }}
+      />
+    )
+  }
+
+  if (phase === "main_intro" && data) {
+    const scenario = data.scenarios[scenarioIdx]
+    return Frame(
+      <TransitionScreen
+        title="Main study"
+        text={data.main_intro_text ||
+          "The practice interaction is complete. You will now begin the main study conversations. Each conversation presents a different situation and aim. Read each scenario carefully and speak naturally using your own words. Continue when you are ready to begin."}
+        onContinue={() => {
+          setStep({ phase: "scenario", scenario_order: scenario.scenario_order })
+          setPhase("scenario")
+        }}
+      />
     )
   }
 
@@ -282,8 +327,9 @@ export function ParticipantFlow() {
               const next = scenarioIdx + 1
               setScenarioIdx(next)
               setPostSessionId(null)
-              setStep({ phase: "scenario", scenario_order: data.scenarios[next].scenario_order })
-              setPhase("scenario")
+              const nextPhase = isPractice ? "main_intro" : "scenario"
+              setStep({ phase: nextPhase, scenario_order: data.scenarios[next].scenario_order })
+              setPhase(nextPhase)
             } else {
               const nextPhase = q("pre_playback").length ? "pre_playback" : "final"
               setStep({ phase: nextPhase })
@@ -366,7 +412,7 @@ export function ParticipantFlow() {
       <Centered>
         <CheckCircle2 className="size-12 text-primary" />
         <h1 className="text-2xl font-bold">Thank you!</h1>
-        <p className="text-sm text-muted-foreground">Your responses have been saved. You may close this window.</p>
+        <p className="text-base text-muted-foreground">Your responses have been saved. You may close this window.</p>
       </Centered>
     )
   }
@@ -384,6 +430,22 @@ function Header({ remaining }: { remaining: number | null }) {
         </div>
       )}
     </header>
+  )
+}
+
+function TransitionScreen({ title, text, onContinue }: {
+  title: string
+  text: string
+  onContinue: () => void
+}) {
+  return (
+    <main className="mx-auto max-w-xl py-10 sm:py-16">
+      <h1 className="text-2xl font-semibold">{title}</h1>
+      <div className="mt-4 whitespace-pre-wrap text-base leading-7 text-muted-foreground">
+        {text}
+      </div>
+      <Button className="mt-7 text-base" onClick={onContinue}>Continue</Button>
+    </main>
   )
 }
 

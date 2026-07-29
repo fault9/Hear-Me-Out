@@ -61,28 +61,28 @@ export function AudioCheck({ code, items, onDone }: {
 
   return (
     <div className="mx-auto w-full max-w-2xl">
-      <h2 className="mb-4 text-xl font-semibold tracking-tight">Audio check</h2>
+      <h2 className="mb-4 text-2xl font-semibold tracking-tight">Audio check</h2>
 
       <div className="rounded-xl border bg-card p-5">
         {phase === "idle" && (
           <div className="flex flex-col items-start gap-3">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-base leading-7 text-muted-foreground">
               We'll quickly check your microphone and that you can hear the assistant. When you start,
               say <b>"Hello, can you hear me?"</b> — the level meter should move and you should hear a short reply.
             </p>
-            <Button className="gap-2" onClick={start}><Mic className="size-4" /> Start audio check</Button>
+            <Button className="gap-2 text-base" onClick={start}><Mic className="size-4" /> Start audio check</Button>
           </div>
         )}
 
         {phase === "preparing" && (
-          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Spinner /> Preparing…</div>
+          <div className="flex items-center gap-2 py-4 text-base text-muted-foreground"><Spinner /> Preparing…</div>
         )}
 
         {(phase === "testing" || phase === "passed") && (
           <div className="flex flex-col gap-4">
-            <p className="text-sm text-muted-foreground">Say "Hello, can you hear me?" and wait for a reply.</p>
+            <p className="text-base text-muted-foreground">Say "Hello, can you hear me?" and wait for a reply.</p>
             <div>
-              <div className="mb-1 flex items-center gap-2 text-sm">
+              <div className="mb-1 flex items-center gap-2 text-base">
                 <Mic className="size-4" /> Microphone {micOk && <CheckCircle2 className="size-4 text-primary" />}
               </div>
               <div className="h-3 w-full overflow-hidden rounded-full bg-muted">
@@ -90,10 +90,10 @@ export function AudioCheck({ code, items, onDone }: {
               </div>
             </div>
             <div className="flex flex-col gap-2">
-              <div className="text-sm">
+              <div className="text-base">
                 {conv.modelAudioReceived ? "The assistant is responding — did you hear it?" : "Waiting for the assistant to reply…"}
               </div>
-              <Button variant={heardOk ? "default" : "secondary"} className="w-fit gap-2" disabled={!conv.modelAudioReceived}
+              <Button variant={heardOk ? "default" : "secondary"} className="w-fit gap-2 text-base" disabled={!conv.modelAudioReceived}
                 onClick={() => setHeardOk(true)}>
                 {heardOk && <CheckCircle2 className="size-4" />} Yes, I heard the assistant clearly
               </Button>
@@ -103,11 +103,11 @@ export function AudioCheck({ code, items, onDone }: {
 
         {phase === "error" && (
           <div className="flex flex-col items-start gap-3">
-            <p className="text-sm text-destructive">{err || "The audio check could not complete."}</p>
+            <p className="text-base text-destructive">{err || "The audio check could not complete."}</p>
             <div className="flex items-center gap-2">
-              <Button variant="secondary" onClick={start}>Retry</Button>
+              <Button variant="secondary" className="text-base" onClick={start}>Retry</Button>
             </div>
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 text-base">
               <input type="checkbox" checked={overridden} onChange={e => { setOverridden(e.target.checked); if (e.target.checked) conv.teardown() }} />
               I confirm my microphone and audio are working (skip the automated check).
             </label>
@@ -115,7 +115,7 @@ export function AudioCheck({ code, items, onDone }: {
         )}
 
         {phase === "passed" && (
-          <p className="mt-3 flex items-center gap-2 text-sm text-primary"><CheckCircle2 className="size-4" /> Audio check passed.</p>
+          <p className="mt-3 flex items-center gap-2 text-base text-primary"><CheckCircle2 className="size-4" /> Audio check passed.</p>
         )}
       </div>
 
