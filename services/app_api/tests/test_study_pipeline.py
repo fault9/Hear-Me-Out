@@ -335,9 +335,44 @@ class PilotTemplateTests(unittest.TestCase):
                          "pre_playback", "playback", "debrief"}.issubset(
                             protocol["questionnaires"]))
         self.assertTrue(all(
-            scenario["post_items"][0].get("insert_after") == "outcome_confidence"
+            scenario["post_items"][0].get("insert_after") == "correct_interrupt"
             for scenario in protocol["scenarios"][1:]
         ))
+
+    def test_repeated_questionnaire_is_short_and_branches_cleanly(self):
+        protocol = self._protocol()
+        shared = protocol["questionnaires"]["post"]
+        by_id = {item["id"]: item for item in shared}
+
+        self.assertNotIn("understood_information", by_id)
+        self.assertNotIn("actions_reflected_information", by_id)
+        self.assertEqual(
+            by_id["correct_interrupt"]["extra_options"],
+            ["Not applicable - I did not need to interrupt or correct the assistant."],
+        )
+        self.assertEqual(
+            by_id["misunderstanding_resolved"]["show_if"],
+            {"field": "misunderstood", "in": ["Yes", "Not sure"]},
+        )
+        self.assertTrue(by_id["optional_comment"]["collapsed"])
+
+        scenario_item = protocol["scenarios"][1]["post_items"][0]
+        items = [*shared]
+        anchor = next(i for i, item in enumerate(items)
+                      if item["id"] == scenario_item["insert_after"])
+        items.insert(anchor + 1, scenario_item)
+        answers = {
+            item["id"]: (
+                "No" if item["id"] == "misunderstood"
+                else "No" if item["id"] == "wanted_to_end"
+                else "answered"
+            )
+            for item in items
+            if item.get("required")
+            and item["id"] not in {"misunderstanding_resolved", "why_ended"}
+        }
+        self.assertEqual(len(answers), 12)
+        self.assertEqual(missing_required_answers(items, answers), [])
 
 
 class QuestionnaireTests(unittest.TestCase):

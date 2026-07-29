@@ -262,17 +262,15 @@ questionnaires:
   # Shared analytical post-scenario instrument. The practice uses only its own
   # post_items and is explicitly excluded from this shared list by the study UI.
   post:
-    - { id: effort, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "Reaching my goal in this interaction required a lot of effort." }
-    - { id: frustration, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I felt frustrated while trying to reach my goal." }
-    - { id: finish_communicating, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I was able to finish communicating the information that was important." }
-    - { id: correct_interrupt, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "When I needed to interrupt or correct the assistant, I was able to do so." }
-    - { id: understood_information, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant understood the important information I provided." }
-    - { id: actions_reflected_information, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant's actions reflected the important information I provided." }
-    - { id: final_response_accurate, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant's final response accurately reflected the information I provided." }
-    - { id: trust, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "I trusted the assistant to use the information I provided correctly." }
-    - { id: outcome_confidence, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "At the end of the interaction, I was confident about what had been recorded, decided, or would happen next." }
+    - { id: effort, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "Reaching my goal in this interaction required a lot of effort." }
+    - { id: frustration, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "I felt frustrated while trying to reach my goal." }
+    - { id: finish_communicating, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "I was able to finish communicating the information that was important." }
+    - { id: correct_interrupt, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", extra_options: ["Not applicable - I did not need to interrupt or correct the assistant."], label: "When I needed to interrupt or correct the assistant, I was able to do so." }
+    - { id: final_response_accurate, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant's final response accurately reflected the information I provided." }
+    - { id: trust, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "I trusted the assistant to use the information I provided correctly." }
+    - { id: outcome_confidence, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "At the end of the interaction, I was confident about what had been recorded, decided, or would happen next." }
     - { id: misunderstood, type: radio, required: true, label: "Did the assistant misunderstand or incorrectly represent anything you said?", options: ["Yes", "No", "Not sure"] }
-    - { id: misunderstanding_resolved, type: radio, required: true, label: "Was the misunderstanding resolved?", options: ["Yes, completely", "Yes, partly", "No", "Not sure", "No misunderstanding occurred"] }
+    - { id: misunderstanding_resolved, type: radio, required: true, show_if: { field: misunderstood, in: ["Yes", "Not sure"] }, label: "Was the misunderstanding resolved?", options: ["Yes, completely", "Yes, partly", "No", "Not sure"] }
     - { id: false_update_confirmation, type: radio, required: true, label: "Did the assistant say that it had updated, recorded, accepted, or corrected something, but later act or speak as though it had not?", options: ["Yes", "No", "Not sure", "The assistant did not make such a claim"] }
     - { id: self_reported_outcome, type: radio, required: true, label: "Which option best describes the outcome of this interaction?", options: ["I fully achieved the goal on the scenario card.", "I partly achieved the goal.", "I did not achieve the goal.", "I am not sure what the final outcome was."] }
     - { id: wanted_to_end, type: radio, required: true, label: "At any point, did you want to end the interaction before reaching your goal?", options: ["No", "Yes, briefly", "Yes, strongly", "I ended the interaction before reaching my goal"] }
@@ -284,7 +282,7 @@ questionnaires:
       allow_other: true
       other_label: "Other"
       show_if: { field: wanted_to_end, in: ["I ended the interaction before reaching my goal"] }
-    - { id: optional_comment, type: textarea, label: "If the assistant misunderstood, failed to act on important information, or claimed an update that did not persist, briefly describe what happened." }
+    - { id: optional_comment, type: textarea, collapsed: true, label: "Add an optional comment", placeholder: "Briefly describe any misunderstanding, missed information, or update that did not persist." }
 
   pre_playback:
     - { id: processing_change_awareness, type: radio, required: true, label: "Did you notice or suspect that the way your speech was processed changed during any interaction?", options: ["Yes", "No", "Not sure"] }
@@ -477,7 +475,7 @@ scenarios:
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
-      - { id: decisive_information, type: scale, required: true, insert_after: outcome_confidence, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that I had a card transaction showing the purchase and that the item stopped working after two uses." }
+      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that I had a card transaction showing the purchase and that the item stopped working after two uses." }
 
   - title: Challenge a wrong-address delivery
     time_limit_s: 300
@@ -544,7 +542,7 @@ scenarios:
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
-      - { id: decisive_information, type: scale, required: true, insert_after: outcome_confidence, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that the delivery evidence showed the order was left at the wrong address." }
+      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that the delivery evidence showed the order was left at the wrong address." }
 
   - title: Challenge an incorrect assessment record
     time_limit_s: 300
@@ -604,7 +602,7 @@ scenarios:
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
-      - { id: decisive_information, type: scale, required: true, insert_after: outcome_confidence, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that I compared student interviews with university attendance records and identified the small interview group as a limitation." }
+      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that I compared student interviews with university attendance records and identified the small interview group as a limitation." }
 
   - title: Correct an inaccurate injury statement
     time_limit_s: 300
@@ -670,4 +668,4 @@ scenarios:
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
-      - { id: decisive_information, type: scale, required: true, insert_after: outcome_confidence, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The assistant took into account that another player made contact with my left side before I fell." }
+      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that another player made contact with my left side before I fell." }

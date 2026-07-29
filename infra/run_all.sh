@@ -250,6 +250,10 @@ export VC_CHECKPOINT_PATH="$WORKSPACE/models/seed-vc/DiT_uvit_tat_xlsr_ema.pth"
 export VC_MODEL_CONFIG="${VC_MODEL_CONFIG:-configs/presets/config_dit_mel_seed_uvit_xlsr_tiny.yml}"
 export PERSONAPLEX_PROXY_HOST="${PERSONAPLEX_PROXY_HOST:-127.0.0.1}"
 export PERSONAPLEX_PROXY_PORT="${PERSONAPLEX_PROXY_PORT:-8000}"
+# The app API launches post-hoc VC-quality workers, so these resources must be
+# in its environment before uvicorn starts.
+export MEANVC_SV_CKPT="${MEANVC_SV_CKPT:-$WORKSPACE/models/meanvc-sv/wavlm_large_finetune.pth}"
+export SPEAKER_VERIFICATION_ROOT="${SPEAKER_VERIFICATION_ROOT:-$WORKSPACE}"
 
 echo -e "${DIM}────────────────────────────────────────────────────${NC}"
 
@@ -279,10 +283,6 @@ PID2=$!
 # Set the engine env in all modes (so the study prepare step's launcher inherits
 # it); the engine PROCESS is started here only in hmo mode. In study mode it is
 # started on demand by infra/vc_engine.sh when a participant begins a run.
-# These evaluation resources are shared by MeanVC and the post-hoc X-VC quality
-# worker. Export them regardless of the live conversion engine.
-export MEANVC_SV_CKPT="$WORKSPACE/models/meanvc-sv/wavlm_large_finetune.pth"
-export SPEAKER_VERIFICATION_ROOT="$WORKSPACE"
 if [ "$VC_ENGINE" = "xvc" ]; then
     export XVC_DIR="$WORKSPACE/X-VC"
     export XVC_CONFIG="$XVC_DIR/configs/xvc.yaml"

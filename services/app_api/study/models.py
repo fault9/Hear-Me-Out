@@ -35,9 +35,11 @@ class QuestionnaireItem(BaseModel):
     other_label: Optional[str] = None
     extra_options: Optional[list[str]] = None  # scale: non-numeric choices (e.g. "Not applicable")
     show_if: Optional[dict] = None            # {field, in:[...]} conditional display
+    collapsed: bool = False                   # optional field: reveal on participant request
     min: Optional[float] = None               # number / scale
     max: Optional[float] = None
     min_label: Optional[str] = None           # scale endpoints
+    mid_label: Optional[str] = None            # scale midpoint
     max_label: Optional[str] = None
     placeholder: Optional[str] = None
     max_plays: Optional[int] = None             # audio_playback: permitted playback starts

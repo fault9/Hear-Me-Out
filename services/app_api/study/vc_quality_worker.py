@@ -60,8 +60,16 @@ def _score_batch(jobs: list[dict], heartbeat: Callable[[], None] | None = None
         stdout_path = Path(temp_dir) / "stdout.log"
         stderr_path = Path(temp_dir) / "stderr.log"
         timeout_s = max(3600, 900 * len(jobs))
+        scorer_env = os.environ.copy()
+        workspace = REPO_ROOT.parent
+        scorer_env.setdefault(
+            "MEANVC_SV_CKPT",
+            str(workspace / "models" / "meanvc-sv" / "wavlm_large_finetune.pth"),
+        )
+        scorer_env.setdefault("SPEAKER_VERIFICATION_ROOT", str(workspace))
         with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
-            proc = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, text=True)
+            proc = subprocess.Popen(
+                cmd, stdout=stdout, stderr=stderr, text=True, env=scorer_env)
             deadline = time.monotonic() + timeout_s
             while proc.poll() is None:
                 if heartbeat:

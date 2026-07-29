@@ -10,9 +10,9 @@ dependencies = [
     # Torch (CPU is fine for eval; the deployed server's GPU stays free for PersonaPlex).
     "torch==2.4.0",
     "torchaudio==2.4.0",
-    # ASR for WER: faster-whisper-small via the HF transformers pipeline.
-    # (Same model size as app-api's /api/transcribe path.)
-    "transformers>=4.40",
+    # ASR for WER via the HF Whisper pipeline. Keep this aligned with app-api:
+    # newer Transformers imports DTensor from a location unavailable in torch 2.4.
+    "transformers==4.44.1",
     # WER scoring
     "jiwer>=3.0",
     # WavLM-large SV uses src.runtime.speaker_verification (imported via

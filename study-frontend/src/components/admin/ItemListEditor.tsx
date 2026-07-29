@@ -100,6 +100,7 @@ export function ItemListEditor({ items, onChange, scenarios = [] }: {
                 onChange={e => update(i, { max: e.target.value === "" ? undefined : Number(e.target.value) })} />
               {it.type === "scale" && <>
                 <Input className="flex-1" placeholder="min label" value={it.min_label || ""} onChange={e => update(i, { min_label: e.target.value })} />
+                <Input className="flex-1" placeholder="midpoint label" value={it.mid_label || ""} onChange={e => update(i, { mid_label: e.target.value })} />
                 <Input className="flex-1" placeholder="max label" value={it.max_label || ""} onChange={e => update(i, { max_label: e.target.value })} />
               </>}
             </div>
@@ -108,6 +109,13 @@ export function ItemListEditor({ items, onChange, scenarios = [] }: {
           {it.type === "scale" && (
             <Input className="mt-2" placeholder="Extra options (comma separated: Not applicable, Not sure, …)"
               value={(it.extra_options || []).join(", ")} onChange={e => update(i, { extra_options: csv(e.target.value) })} />
+          )}
+
+          {it.type === "textarea" && !it.required && (
+            <label className="mt-2 flex items-center gap-1 text-xs">
+              <input type="checkbox" checked={!!it.collapsed}
+                onChange={e => update(i, { collapsed: e.target.checked })} /> collapsed until opened
+            </label>
           )}
 
           {it.type !== "audio_playback" && it.type !== "notice" && (

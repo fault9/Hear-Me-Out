@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@shared/ui/button"
 import { cn } from "@shared/lib/utils"
+import { MessageSquarePlus } from "lucide-react"
 import { RichText } from "@/components/RichText"
 
 export interface QItem {
@@ -14,9 +15,11 @@ export interface QItem {
   other_label?: string
   extra_options?: string[]
   show_if?: { field: string; in: any[] }
+  collapsed?: boolean
   min?: number
   max?: number
   min_label?: string
+  mid_label?: string
   max_label?: string
   placeholder?: string
   scenario_order?: number   // audio_playback: which scenario's recording
@@ -84,6 +87,7 @@ export function QuestionnaireForm({
 }) {
   const [answers, setAnswers] = useState<Answers>({})
   const [showErrors, setShowErrors] = useState(false)
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set())
   const set = (id: string, v: unknown) => setAnswers(a => ({ ...a, [id]: v }))
   const hasErrors = items.some(item => fieldError(item, answers))
 
@@ -118,6 +122,21 @@ export function QuestionnaireForm({
       <div className="flex flex-col gap-6">
         {items.filter(it => visible(it, answers)).map(item => {
           const err = showErrors ? fieldError(item, answers) : null
+          if (item.collapsed && !expandedItems.has(item.id) && !isAnswered(item, answers)) {
+            return (
+              <div key={item.id} className="rounded-lg border p-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full justify-start gap-2 text-base font-medium"
+                  onClick={() => setExpandedItems(current => new Set(current).add(item.id))}
+                >
+                  <MessageSquarePlus className="h-4 w-4" aria-hidden="true" />
+                  {item.label}
+                </Button>
+              </div>
+            )
+          }
           return (
             <div key={item.id} className={cn(item.type === "notice" ? "py-1" : "rounded-lg border p-4", err && "border-destructive")}>
               {item.type !== "audio_playback" && item.type !== "notice" && (
@@ -186,10 +205,16 @@ function QuestionInput({ item, answers, set, scenarioOptions, playbackUrl }: {
                 value === n ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}>{n}</button>
           ))}
         </div>
-        {(item.min_label || item.max_label) && (
-          <div className="mt-3 grid grid-cols-2 gap-6 text-sm leading-5 text-muted-foreground">
-            <span>{item.min_label}</span><span className="text-right">{item.max_label}</span>
-          </div>
+        {(item.min_label || item.mid_label || item.max_label) && (
+          item.mid_label
+            ? <div className="mt-3 grid grid-cols-3 gap-3 text-sm leading-5 text-muted-foreground">
+                <span>{item.min_label}</span>
+                <span className="text-center">{item.mid_label}</span>
+                <span className="text-right">{item.max_label}</span>
+              </div>
+            : <div className="mt-3 grid grid-cols-2 gap-6 text-sm leading-5 text-muted-foreground">
+                <span>{item.min_label}</span><span className="text-right">{item.max_label}</span>
+              </div>
         )}
         {(item.extra_options || []).length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">

@@ -45,6 +45,35 @@ class VCQualityWorkerTests(unittest.TestCase):
         self.assertEqual(results[1]["target_path"], "a/target.wav")
         self.assertEqual(diagnostics, {"stdout": "", "stderr": ""})
 
+    def test_score_batch_supplies_default_speaker_verification_paths(self):
+        captured_env = {}
+
+        def fake_popen(command, **kwargs):
+            captured_env.update(kwargs["env"])
+            manifest = Path(command[command.index("--manifest") + 1])
+            output = Path(command[command.index("--out") + 1])
+            row = json.loads(manifest.read_text())
+            output.write_text(json.dumps({
+                **row, "wer": 0.1, "sim": 0.8, "utmos": 3.5,
+            }) + "\n")
+            return _CompletedProcess()
+
+        job = {"converted": "converted.wav", "target": "target.wav",
+               "source": "source.wav"}
+        with tempfile.TemporaryDirectory() as data_root, \
+                patch.dict(vc_quality_worker.os.environ, {}, clear=True), \
+                patch.object(vc_quality_worker, "STUDY_DATA_DIR", Path(data_root)), \
+                patch.object(vc_quality_worker.subprocess, "Popen", fake_popen):
+            vc_quality_worker._score_batch([job])
+
+        workspace = vc_quality_worker.REPO_ROOT.parent
+        self.assertEqual(
+            captured_env["MEANVC_SV_CKPT"],
+            str(workspace / "models" / "meanvc-sv" / "wavlm_large_finetune.pth"),
+        )
+        self.assertEqual(
+            captured_env["SPEAKER_VERIFICATION_ROOT"], str(workspace))
+
     def test_missing_required_metrics_make_result_partial(self):
         status, unavailable = vc_quality_worker._completion([{
             "_region": 1,
