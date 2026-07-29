@@ -232,6 +232,11 @@ def _transcribe(path):
     return _asr_run(path).get("text", "")
 
 
+def transcribe_for_evaluation(path):
+    """Return the ASR text and diagnostics used by objective evaluation."""
+    return _asr_run(path)
+
+
 def _slice_wav(wav, start_s, end_s):
     s = max(0, int(start_s * SAMPLE_RATE))
     e = min(len(wav), int(end_s * SAMPLE_RATE))
@@ -799,7 +804,7 @@ def _merge_segment_scores(
 
 
 def evaluate_conversion(converted_path, target_path,
-                        source_transcript=None, source_path=None,
+                        source_transcript=None, source_path=None, source_asr=None,
                         compute_intelligibility=True,
                         compute_speaker_similarity=True,
                         compute_utmos=True,
@@ -835,7 +840,8 @@ def evaluate_conversion(converted_path, target_path,
 
     conv = _ClipData(path=converted_path)
     tgt = _ClipData(path=target_path)
-    src = _ClipData(path=source_path) if source_path else None
+    src = (_ClipData(path=source_path, _asr=source_asr)
+           if source_path else None)
 
     segments = _choose_segments(segment_mode, conv, segment_win, segment_hop)
 

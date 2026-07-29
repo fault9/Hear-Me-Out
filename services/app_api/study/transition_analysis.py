@@ -105,7 +105,7 @@ def _write_slice(source: Path, destination: Path, start_s: float, end_s: float,
     return file_record(destination, relative_to=relative_to)
 
 
-def _participant_speech_intervals(events: list[dict]) -> list[tuple[int, int]]:
+def participant_speech_intervals(events: list[dict]) -> list[tuple[int, int]]:
     """Return ordered raw-input speech intervals from the recorded RMS events."""
     intervals: list[tuple[int, int]] = []
     start: int | None = None
@@ -210,7 +210,7 @@ def prepare_session_analysis(session: dict, data_root: Path, analysis_id: str,
 
     events = read_events(event_path)
     regions = route_regions(events)
-    speech_intervals = _participant_speech_intervals(events)
+    speech_intervals = participant_speech_intervals(events)
     out_dir = transmitted.parent / "analysis" / "vc_quality" / analysis_id
     out_dir.mkdir(parents=True, exist_ok=False)
     tx_rate, tx_audio = _mono_float(transmitted)

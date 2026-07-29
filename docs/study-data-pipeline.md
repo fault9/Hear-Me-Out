@@ -90,6 +90,46 @@ versions, and rules for failed/incomplete captures. Validate participant and
 assistant RMS speech estimates against a manually annotated subset; neither
 should be described as diarization ground truth.
 
+## X-VC technical-pilot calibration
+
+Before freezing the live X-VC profile, compare the observed pilot recording
+against matched offline and streaming rerenders of the same raw-microphone
+utterances. Run this only on technical-pilot sessions that are excluded from
+the study dataset, while the live services are stopped so the renderer can use
+the GPU:
+
+```bash
+uv run --project services/vc_quality python \
+  services/vc_quality/pilot_calibration.py \
+  --session P01001_R01_S05_A01 \
+  --data-root /workspace/data/media
+```
+
+The default matrix contains the observed live output, official offline X-VC,
+and 120/200/320 ms streaming-current windows crossed with RMS silence gates
+0.006 and 0.008. Participant RMS speech events define contiguous utterances;
+route events map each utterance to the corresponding observed transmitted
+interval. The terminal report gives per-profile median utterance UTMOS, change
+from raw-microphone UTMOS, median target-speaker SIM, aggregate SIM, aggregate
+free-speech pseudo-WER, and median rendering RTF. WER compares Whisper ASR of
+the concatenated converted utterances with one cached Whisper transcription of
+the concatenated raw utterances. It is not ground-truth WER.
+
+Streaming variants render each complete VC route before utterance slicing so
+X-VC history, real pauses, and silence-gate hangover are not reset at speech
+boundaries. The offline best-case baseline is rendered per utterance to bound
+GPU memory. Derived clips are temporary and deleted after the report. Add
+`--verbose` to print every utterance score or `--max-utterances 3` to shorten
+offline rendering and metric scoring; streaming route renders remain complete.
+Use `--out /workspace/data/pilot-calibration/<run-name>` only when the exact
+pilot renders need to be retained; the directory must not already exist.
+Neither mode updates `study.db`, session artifacts, or canonical analysis
+results.
+
+Browser processing choices such as echo cancellation cannot be reconstructed
+from one saved raw track. Compare those settings using separate technical-pilot
+captures under otherwise matched conditions.
+
 ## Gender-conditional target assignment and counterbalancing
 
 When the protocol requires an opposite-gender-presenting target, participant

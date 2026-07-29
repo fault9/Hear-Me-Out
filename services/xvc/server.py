@@ -252,17 +252,37 @@ class XVCStreamSession:
     is stateless except the overlap cross-fade tail_buffer.
     """
 
-    def __init__(self, speaker_condition, frame_condition):
+    def __init__(
+        self,
+        speaker_condition,
+        frame_condition,
+        *,
+        chunk_ms: int = CHUNK_MS,
+        current_ms: int = CURRENT_MS,
+        smooth_ms: int = SMOOTH_MS,
+        future_ms: int = FUTURE_MS,
+        silence_gate_rms: float = SILENCE_GATE_RMS,
+        silence_hangover_ms: int = SILENCE_HANGOVER_MS,
+    ):
         self.spk = speaker_condition
         self.frame = frame_condition
         self.sr = SR
-        self.current_ms = CURRENT_MS
-        self.smooth_ms = SMOOTH_MS
-        self.future_ms = FUTURE_MS
-        self.history_ms = CHUNK_MS - CURRENT_MS - SMOOTH_MS - FUTURE_MS
+        self.chunk_ms = chunk_ms
+        self.current_ms = current_ms
+        self.smooth_ms = smooth_ms
+        self.future_ms = future_ms
+        self.silence_gate_rms = silence_gate_rms
+        self.silence_hangover_ms = silence_hangover_ms
+        if self.current_ms <= 0:
+            raise ValueError("current_ms must be > 0")
+        self.history_ms = (
+            self.chunk_ms - self.current_ms - self.smooth_ms - self.future_ms
+        )
         if self.history_ms < 0:
-            raise ValueError("CHUNK_MS - CURRENT_MS - SMOOTH_MS - FUTURE_MS must be >= 0")
-        self.overlap_len = SMOOTH_MS * SR // 1000
+            raise ValueError(
+                "chunk_ms - current_ms - smooth_ms - future_ms must be >= 0"
+            )
+        self.overlap_len = self.smooth_ms * self.sr // 1000
         if self.overlap_len > 0:
             self.fade_in = 0.5 * (
                 1 - torch.cos(torch.pi * torch.linspace(0, 1, self.overlap_len, device=device))
@@ -276,7 +296,7 @@ class XVCStreamSession:
         self.inference_windows = 0
         self.silence_bypassed_windows = 0
         self.silence_hangover_windows = max(
-            0, int(np.ceil(SILENCE_HANGOVER_MS / self.current_ms)))
+            0, int(np.ceil(self.silence_hangover_ms / self.current_ms)))
         self.silence_hangover_remaining = 0
 
     @torch.inference_mode()
@@ -303,7 +323,7 @@ class XVCStreamSession:
             ) * self.sr // 1000
             activity = seg[cur_start:activity_end]
             rms = float(np.sqrt(np.mean(activity * activity))) if len(activity) else 0.0
-            active = SILENCE_GATE_RMS <= 0 or rms >= SILENCE_GATE_RMS
+            active = self.silence_gate_rms <= 0 or rms >= self.silence_gate_rms
             if active:
                 self.silence_hangover_remaining = self.silence_hangover_windows
             elif self.silence_hangover_remaining > 0:
