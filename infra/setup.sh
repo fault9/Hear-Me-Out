@@ -29,11 +29,17 @@ NONINTERACTIVE="${NONINTERACTIVE:-0}"
 INSTALL_SYSTEM=true
 INSTALL_XVC="${INSTALL_XVC:-false}"
 INSTALL_OBSERVABILITY="${INSTALL_OBSERVABILITY:-false}"
+# MiniCPM-o (llama.cpp-omni) is the ALTERNATIVE :8000 speech LM. Built by default;
+# needs a CUDA toolkit (nvcc) — an existing/external one is used if found, else the
+# runfile is downloaded. Disable with --no-omni / INSTALL_OMNI=false.
+INSTALL_OMNI="${INSTALL_OMNI:-true}"
 for a in "$@"; do
   case "$a" in
     --models-only)            MODELS_ONLY=true ;;
     --xvc)                    INSTALL_XVC=true ;;
     --observability)          INSTALL_OBSERVABILITY=true ;;
+    --omni|--minicpm-o)       INSTALL_OMNI=true ;;
+    --no-omni|--no-minicpm-o) INSTALL_OMNI=false ;;
     -y|--yes|--non-interactive) NONINTERACTIVE=1 ;;
     -h|--help) echo "Usage: setup.sh [--models-only] [--xvc] [--observability] [-y|--yes]"; exit 0 ;;
     *) warn "Unknown arg: $a" ;;
@@ -93,6 +99,9 @@ fi
 if ! $MODELS_ONLY; then
   ask_yn   INSTALL_OBSERVABILITY "Also install observability? (OpenObserve: OTel traces+logs UI at /logs)" "N"
 fi
+if ! $MODELS_ONLY; then
+  ask_yn   INSTALL_OMNI "Build MiniCPM-o (llama.cpp-omni)? (alternative speech LM; uses external nvcc if present)" "Y"
+fi
 
 # Fixed upstreams (not prompted)
 MEANVC_URL="https://github.com/ASLP-lab/MeanVC.git"   # cloned for its speaker_verification source
@@ -132,6 +141,7 @@ echo -e "  ${BOLD}Models-only${NC}  : $MODELS_ONLY"
 $MODELS_ONLY || echo -e "  ${BOLD}System pkgs${NC}  : $INSTALL_SYSTEM"
 $MODELS_ONLY || echo -e "  ${BOLD}X-VC engine${NC}  : $INSTALL_XVC"
 $MODELS_ONLY || echo -e "  ${BOLD}Observability${NC}: $INSTALL_OBSERVABILITY"
+$MODELS_ONLY || echo -e "  ${BOLD}MiniCPM-o${NC}    : $INSTALL_OMNI"
 hr
 if [ "$NONINTERACTIVE" != "1" ]; then
   read -r -p "$(printf "${CYAN}?${NC} ${BOLD}Proceed?${NC} ${DIM}[Y/n]${NC} ")" __go
@@ -202,23 +212,43 @@ phase_build_omni() {
   local CUDA_TK="$WORKSPACE/cuda-$cver"
   local runfile_url="${CUDA_RUNFILE_URL:-https://developer.download.nvidia.com/compute/cuda/12.2.2/local_installers/cuda_12.2.2_535.104.05_linux.run}"
 
+  # Prefer a COMPLETE existing toolkit (no 4GB download), in trust order: a prior install,
+  # CUDA_HOME, the /usr/local/cuda symlink, a versioned /usr/local/cuda-*, then nvcc on PATH
+  # — but only accept a toolkit root that also ships libcudart (conda's nvcc ships none, so
+  # it's rejected here). Download the runfile only as a last resort.
+  local ext_nvcc="" cand=""
+  _has_cudart() { ls "$1"/lib*/libcudart.so* >/dev/null 2>&1 || ls "$1"/lib*/*/libcudart.so* >/dev/null 2>&1; }
   if [ -x "$CUDA_TK/bin/nvcc" ]; then
     echo "CUDA $cver toolkit present at $CUDA_TK"
   elif [ -n "$CUDA_HOME" ] && [ -x "$CUDA_HOME/bin/nvcc" ]; then
     CUDA_TK="$CUDA_HOME"; echo "Using CUDA toolkit from CUDA_HOME=$CUDA_HOME"
+  elif [ -x /usr/local/cuda/bin/nvcc ] && _has_cudart "$(readlink -f /usr/local/cuda)"; then
+    CUDA_TK="$(readlink -f /usr/local/cuda)"; echo "Using system CUDA toolkit at $CUDA_TK"
+  elif cand="$(ls -d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V | tail -1)" && [ -n "$cand" ] \
+       && _has_cudart "$(dirname "$(dirname "$cand")")"; then
+    CUDA_TK="$(dirname "$(dirname "$cand")")"; echo "Using system CUDA toolkit at $CUDA_TK"
+  elif ext_nvcc="$(command -v nvcc 2>/dev/null)" && [ -n "$ext_nvcc" ] \
+       && _has_cudart "$(dirname "$(dirname "$(readlink -f "$ext_nvcc")")")"; then
+    CUDA_TK="$(dirname "$(dirname "$(readlink -f "$ext_nvcc")")")"
+    echo "Using external nvcc from PATH: $ext_nvcc (toolkit root $CUDA_TK)"
   else
+    echo "No external nvcc found (checked CUDA_HOME, PATH, /usr/local/cuda*)."
     echo "Installing CUDA $cver toolkit (runfile, rootless -> $CUDA_TK; one-time, ~4GB)..."
     mkdir -p "$WORKSPACE/tmp"
     local rf="$WORKSPACE/cuda_runfile.run"
-    wget -q "$runfile_url" -O "$rf" || { echo "ERROR: CUDA runfile download failed ($runfile_url)"; return 1; }
-    sh "$rf" --silent --toolkit --toolkitpath="$CUDA_TK" \
-        --tmpdir="$WORKSPACE/tmp" --override --no-man-page || true
-    rm -f "$rf"
+    if wget -q "$runfile_url" -O "$rf"; then
+      sh "$rf" --silent --toolkit --toolkitpath="$CUDA_TK" \
+          --tmpdir="$WORKSPACE/tmp" --override --no-man-page || true
+      rm -f "$rf"
+    else
+      echo "WARN: CUDA runfile download failed ($runfile_url)"; rm -f "$rf"
+    fi
   fi
   if [ ! -x "$CUDA_TK/bin/nvcc" ]; then
-    echo "ERROR: CUDA toolkit not available at $CUDA_TK/bin/nvcc."
-    echo "       Set CUDA_RUNFILE_URL to a CUDA <= driver runfile, or CUDA_HOME to a toolkit, and re-run."
-    return 1
+    echo "WARN: no CUDA toolkit (nvcc) available — SKIPPING the MiniCPM-o build."
+    echo "      The study runs on PersonaPlex and does not need it. To build MiniCPM-o later,"
+    echo "      set CUDA_HOME=/path/to/toolkit (or put nvcc on PATH), or CUDA_RUNFILE_URL, and re-run."
+    return 0
   fi
   local root="$CUDA_TK"
   local lcc; lcc="$(find "$root" -name 'libcudart.so*' 2>/dev/null | head -1 || true)"
@@ -339,7 +369,7 @@ if ! $MODELS_ONLY; then
   add_step phase_workspace "Create workspace"
   add_step phase_clone     "Clone repos + submodules"
   add_step phase_sync      "Resolve per-service deps (uv sync)"
-  add_step phase_build_omni "Build llama.cpp-omni (MiniCPM-o GGUF engine)"
+  $INSTALL_OMNI && add_step phase_build_omni "Build llama.cpp-omni (MiniCPM-o GGUF engine)"
 fi
 add_step phase_models  "Download models"
 add_step phase_runtime "Runtime setup (SSL, speaker-verification)"
