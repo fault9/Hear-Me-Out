@@ -212,19 +212,25 @@ phase_build_omni() {
   local CUDA_TK="$WORKSPACE/cuda-$cver"
   local runfile_url="${CUDA_RUNFILE_URL:-https://developer.download.nvidia.com/compute/cuda/12.2.2/local_installers/cuda_12.2.2_535.104.05_linux.run}"
 
-  # Prefer an existing/external toolkit (no 4GB download): a prior install, CUDA_HOME,
-  # nvcc on PATH, or a standard /usr/local/cuda* location. Only download as a last resort.
-  local ext_nvcc=""
+  # Prefer a COMPLETE existing toolkit (no 4GB download), in trust order: a prior install,
+  # CUDA_HOME, the /usr/local/cuda symlink, a versioned /usr/local/cuda-*, then nvcc on PATH
+  # — but only accept a toolkit root that also ships libcudart (conda's nvcc ships none, so
+  # it's rejected here). Download the runfile only as a last resort.
+  local ext_nvcc="" cand=""
+  _has_cudart() { ls "$1"/lib*/libcudart.so* >/dev/null 2>&1 || ls "$1"/lib*/*/libcudart.so* >/dev/null 2>&1; }
   if [ -x "$CUDA_TK/bin/nvcc" ]; then
     echo "CUDA $cver toolkit present at $CUDA_TK"
   elif [ -n "$CUDA_HOME" ] && [ -x "$CUDA_HOME/bin/nvcc" ]; then
     CUDA_TK="$CUDA_HOME"; echo "Using CUDA toolkit from CUDA_HOME=$CUDA_HOME"
-  elif ext_nvcc="$(command -v nvcc 2>/dev/null)" && [ -n "$ext_nvcc" ]; then
+  elif [ -x /usr/local/cuda/bin/nvcc ] && _has_cudart "$(readlink -f /usr/local/cuda)"; then
+    CUDA_TK="$(readlink -f /usr/local/cuda)"; echo "Using system CUDA toolkit at $CUDA_TK"
+  elif cand="$(ls -d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V | tail -1)" && [ -n "$cand" ] \
+       && _has_cudart "$(dirname "$(dirname "$cand")")"; then
+    CUDA_TK="$(dirname "$(dirname "$cand")")"; echo "Using system CUDA toolkit at $CUDA_TK"
+  elif ext_nvcc="$(command -v nvcc 2>/dev/null)" && [ -n "$ext_nvcc" ] \
+       && _has_cudart "$(dirname "$(dirname "$(readlink -f "$ext_nvcc")")")"; then
     CUDA_TK="$(dirname "$(dirname "$(readlink -f "$ext_nvcc")")")"
     echo "Using external nvcc from PATH: $ext_nvcc (toolkit root $CUDA_TK)"
-  elif ext_nvcc="$(ls -d /usr/local/cuda*/bin/nvcc 2>/dev/null | sort -V | tail -1)" && [ -n "$ext_nvcc" ]; then
-    CUDA_TK="$(dirname "$(dirname "$ext_nvcc")")"
-    echo "Using external CUDA toolkit at $CUDA_TK"
   else
     echo "No external nvcc found (checked CUDA_HOME, PATH, /usr/local/cuda*)."
     echo "Installing CUDA $cver toolkit (runfile, rootless -> $CUDA_TK; one-time, ~4GB)..."
