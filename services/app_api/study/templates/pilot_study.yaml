@@ -279,17 +279,18 @@ questionnaires:
     - { id: update_evidence, type: textarea, label: "What evidence did you use to decide whether the assistant had actually updated, accepted, or retained the information you provided?" }
     - { id: differential_treatment, type: textarea, label: "Did you feel that the assistant treated or responded to you differently across the interactions? Please explain." }
 
-  # The platform derives up to 30 seconds of participant speech from whichever
-  # scenario counterbalancing assigned to the stable-converted condition.
+  # The platform derives a contiguous 30-second user-and-assistant excerpt from
+  # whichever scenario counterbalancing assigned to stable-converted.
   playback:
     - id: playback_audio
       type: audio_playback
       condition: stable_converted
-      track: participant
+      track: merged
       max_duration_s: 30
       label: |
-        You will now hear a recording of your converted voice from one of your conversations in the
-        study. Please listen to the recording before answering. You may replay it as needed.
+        You will now hear an excerpt from one of your conversations in the study. Your voice is
+        converted throughout this recording. Please listen before answering. You may replay it as
+        needed.
     - { id: converted_understandable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice was easy to understand." }
     - { id: converted_natural, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded natural." }
     - { id: converted_acceptable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice felt like an acceptable representation of me in this interaction." }

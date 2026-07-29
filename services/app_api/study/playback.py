@@ -206,3 +206,66 @@ def ensure_stable_converted_playback(session: dict, data_root: Path,
     }
     atomic_write_json(manifest_path, manifest, exclusive=True)
     return output, manifest
+
+
+def ensure_stable_converted_interaction_playback(
+        session: dict, data_root: Path, max_duration_s: int = 30) -> tuple[Path, dict]:
+    """Create a contiguous user-and-assistant excerpt from an all-VC condition."""
+    files = session.get("files") or {}
+    relative_source = files.get("merged")
+    if not relative_source:
+        raise FileNotFoundError("the merged interaction recording is missing")
+    source = data_root / relative_source
+    events_path = source.parent / "events.jsonl"
+    if not source.exists() or not events_path.exists():
+        raise FileNotFoundError("playback source audio or route events are missing")
+
+    duration_limit = max(1, min(int(max_duration_s or 30), 30))
+    output_dir = source.parent / "derived" / "playback"
+    output = output_dir / f"stable_converted_interaction_{duration_limit}s.wav"
+    manifest_path = output.with_suffix(".json")
+    if output.exists() and manifest_path.exists():
+        return output, json.loads(manifest_path.read_text())
+
+    regions = route_regions(read_events(events_path))
+    if not regions or any(region.get("mode") != "vc" for region in regions):
+        raise ValueError("the selected session is not a stable-converted condition")
+
+    rate, samples = _read_pcm16(source)
+    threshold = float(os.environ.get(
+        "STUDY_PLAYBACK_RMS_THRESHOLD",
+        os.environ.get("STUDY_VAD_RMS_THRESHOLD", "0.012"),
+    ))
+    frame = max(1, round(rate * 0.02))
+    first_active = None
+    for offset in range(0, len(samples), frame):
+        chunk = samples[offset:offset + frame].astype(np.float64) / 32768.0
+        rms = math.sqrt(float(np.mean(chunk * chunk))) if len(chunk) else 0.0
+        if rms >= threshold:
+            first_active = offset
+            break
+    if first_active is None:
+        raise ValueError("eligible interaction audio was not found")
+
+    start = max(0, first_active - round(0.5 * rate))
+    end = min(len(samples), start + round(duration_limit * rate))
+    clip = samples[start:end]
+    if not len(clip):
+        raise ValueError("the selected interaction excerpt is empty")
+
+    if not output.exists():
+        atomic_write_bytes(output, _wav_bytes(clip, rate), exclusive=True)
+    manifest = {
+        "schema": "hmo.playback-clip.v1",
+        "session_id": session.get("session_id"),
+        "selection": "contiguous_stable_converted_interaction",
+        "max_duration_s": duration_limit,
+        "rms_threshold": threshold,
+        "source_start_s": start / rate,
+        "source_end_s": end / rate,
+        "source_audio": file_record(source, relative_to=data_root),
+        "source_events": file_record(events_path, relative_to=data_root),
+        "output": file_record(output, relative_to=data_root),
+    }
+    atomic_write_json(manifest_path, manifest, exclusive=True)
+    return output, manifest

@@ -15,7 +15,8 @@ from study.analysis import _participant_segments
 from study.counterbalance import (CounterbalanceError, allocate, balance_report,
                                   choose_balanced_target, resolve_target_assignment,
                                   validate_and_compile)
-from study.playback import (ensure_stable_converted_playback,
+from study.playback import (ensure_stable_converted_interaction_playback,
+                            ensure_stable_converted_playback,
                             ensure_transition_playback)
 from study.questionnaires import missing_required_answers
 from study.storage import SqliteBackend
@@ -467,6 +468,36 @@ class TransitionTests(unittest.TestCase):
                              "rms_speech_from_stable_converted")
             with wave.open(str(output), "rb") as wav:
                 self.assertLessEqual(wav.getnframes(), 2 * wav.getframerate())
+
+    def test_stable_converted_interaction_is_contiguous_and_duration_limited(self):
+        events = [
+            {"event": "route_activated", "event_sequence": 1,
+             "from_mode": None, "to_mode": "vc", "input_sample": 0,
+             "transmitted_sample": 0},
+            {"event": "transmitted_window", "event_sequence": 2,
+             "route_mode": "vc", "input_start_sample": 0,
+             "input_end_sample": 64000, "transmitted_start_sample": 0,
+             "transmitted_end_sample": 64000},
+            {"event": "stream_stop", "event_sequence": 3,
+             "input_samples": 64000},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session_dir = root / "sessions" / "attempt"
+            session_dir.mkdir(parents=True)
+            write_wav(session_dir / "merged.wav", seconds=4.0)
+            with (session_dir / "events.jsonl").open("w") as stream:
+                for row in events:
+                    stream.write(json.dumps(row) + "\n")
+            session = {"session_id": "s1", "files": {
+                "merged": "sessions/attempt/merged.wav",
+            }}
+            output, manifest = ensure_stable_converted_interaction_playback(
+                session, root, max_duration_s=2)
+            self.assertEqual(manifest["selection"],
+                             "contiguous_stable_converted_interaction")
+            with wave.open(str(output), "rb") as wav:
+                self.assertEqual(wav.getnframes(), 2 * wav.getframerate())
 
 
 class TimingAnalysisTests(unittest.TestCase):

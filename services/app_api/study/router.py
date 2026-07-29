@@ -43,7 +43,9 @@ from .models import (REQUIRED_CARD_FIELDS, CreateStudyRequest, EnterRequest,
                      GenerateRequest, ProgressRequest, QuestionnaireRequest,
                      RunStartRequest, Scenario, SessionStartRequest,
                      SubmitRequest, UpdateStudyRequest, default_questionnaires)
-from .playback import ensure_stable_converted_playback, ensure_transition_playback
+from .playback import (ensure_stable_converted_interaction_playback,
+                       ensure_stable_converted_playback,
+                       ensure_transition_playback)
 from .questionnaires import missing_required_answers
 from .storage import get_backend
 from .vc_quality_analysis import get_vc_quality_runner
@@ -1130,6 +1132,15 @@ def build_study_router() -> APIRouter:
                           and max_duration_s):
                         try:
                             path, _manifest = ensure_stable_converted_playback(
+                                session, STUDY_DATA_DIR, max_duration_s)
+                        except (FileNotFoundError, ValueError, OSError) as exc:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=f"Could not prepare the playback excerpt: {exc}") from exc
+                    elif (track_key == "merged" and condition == "stable_converted"
+                          and max_duration_s):
+                        try:
+                            path, _manifest = ensure_stable_converted_interaction_playback(
                                 session, STUDY_DATA_DIR, max_duration_s)
                         except (FileNotFoundError, ValueError, OSError) as exc:
                             raise HTTPException(
