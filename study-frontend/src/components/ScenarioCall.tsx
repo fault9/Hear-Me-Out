@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Button } from "@shared/ui/button"
+import { AlertDialog } from "@base-ui/react/alert-dialog"
+import { Button, buttonVariants } from "@shared/ui/button"
 import { Badge } from "@shared/ui/badge"
 import { Spinner } from "@shared/ui/spinner"
 import { Phone, AlertTriangle, CheckCircle2, XCircle, Target, MessageCircle, Info } from "lucide-react"
@@ -23,7 +24,7 @@ export function ScenarioCall({ code, scenario, onDone }: {
   const [remaining, setRemaining] = useState(scenario.time_limit_s)
   const [errMsg, setErrMsg] = useState<string | null>(null)
   const [readyConfirmed, setReadyConfirmed] = useState(false)
-  const [finalAccountConfirmed, setFinalAccountConfirmed] = useState(false)
+  const [finalCheckOpen, setFinalCheckOpen] = useState(false)
   const sessionIdRef = useRef<string | null>(null)
   const started = useRef(false)
   const finalAccountPrompt = scenario.final_account_prompt?.trim() || ""
@@ -75,6 +76,7 @@ export function ScenarioCall({ code, scenario, onDone }: {
   }, [conv])
 
   const endCall = useCallback(async (reason: string) => {
+    setFinalCheckOpen(false)
     setPhase("processing")
     const sid = sessionIdRef.current
     try {
@@ -106,8 +108,17 @@ export function ScenarioCall({ code, scenario, onDone }: {
     return <Badge variant="secondary">Not connected</Badge>
   }
 
+  const requestGoalEnd = () => {
+    if (finalAccountPrompt) {
+      setFinalCheckOpen(true)
+      return
+    }
+    void endCall("goal_reached")
+  }
+
   return (
-    <div className="grid items-start gap-5 md:grid-cols-[minmax(0,1fr)_320px]">
+    <>
+      <div className="grid items-start gap-5 md:grid-cols-[minmax(0,1fr)_320px]">
       <section className="overflow-hidden rounded-lg border bg-card">
         <header className="border-b px-5 py-4 sm:px-6">
           <p className="text-sm font-semibold uppercase text-muted-foreground">{scenarioLabel}</p>
@@ -226,25 +237,15 @@ export function ScenarioCall({ code, scenario, onDone }: {
         {phase === "active" && (
           <div className="flex flex-col gap-2">
             {finalAccountPrompt && (
-              <div className="mb-1 border-y border-primary/40 bg-primary/5 py-3">
-                <p className="text-sm font-semibold uppercase text-primary">Before ending, ask</p>
-                <p className="mt-1 text-base font-medium leading-6">“{finalAccountPrompt}”</p>
-                <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm leading-5">
-                  <input
-                    type="checkbox"
-                    checked={finalAccountConfirmed}
-                    onChange={event => setFinalAccountConfirmed(event.target.checked)}
-                    className="mt-0.5 size-4 shrink-0 accent-primary"
-                  />
-                  <span>I asked this question and heard the assistant’s answer.</span>
-                </label>
+              <div className="mb-1 flex items-start gap-2 border-y border-primary/40 py-2.5 text-sm leading-5">
+                <Info className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                <span>Final summary required before ending.</span>
               </div>
             )}
             <p className="text-center text-base text-muted-foreground">Speak with the assistant. End the call when you are done.</p>
             <Button
               className="w-full gap-2 text-base"
-              onClick={() => endCall("goal_reached")}
-              disabled={Boolean(finalAccountPrompt) && !finalAccountConfirmed}
+              onClick={requestGoalEnd}
             >
               <CheckCircle2 className="size-4" /> End Call — goal reached
             </Button>
@@ -269,8 +270,55 @@ export function ScenarioCall({ code, scenario, onDone }: {
             <AlertTriangle className="size-4" /> Technical problem
           </Button>
         )}
+        </div>
       </div>
-    </div>
+
+      {finalAccountPrompt && (
+        <FinalAccountDialog
+          open={finalCheckOpen}
+          prompt={finalAccountPrompt}
+          onOpenChange={setFinalCheckOpen}
+          onConfirm={() => {
+            setFinalCheckOpen(false)
+            void endCall("goal_reached")
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+function FinalAccountDialog({ open, prompt, onOpenChange, onConfirm }: {
+  open: boolean
+  prompt: string
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
+}) {
+  return (
+    <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
+      <AlertDialog.Portal>
+        <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-black/65" />
+        <AlertDialog.Viewport className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <AlertDialog.Popup className="w-full max-w-lg rounded-lg border bg-background p-5 shadow-2xl outline-none sm:p-6">
+            <AlertDialog.Title className="text-xl font-semibold">Before you end</AlertDialog.Title>
+            <AlertDialog.Description className="mt-2 text-base leading-6 text-muted-foreground">
+              Have you asked this question and heard the assistant’s answer?
+            </AlertDialog.Description>
+            <blockquote className="mt-4 border-l-2 border-primary pl-4 text-lg font-medium leading-7">
+              “{prompt}”
+            </blockquote>
+            <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+              <AlertDialog.Close className={buttonVariants({ className: "h-10 flex-1 text-base" })}>
+                Return to conversation
+              </AlertDialog.Close>
+              <Button variant="secondary" className="h-10 flex-1 whitespace-normal text-base" onClick={onConfirm}>
+                Yes — End call
+              </Button>
+            </div>
+          </AlertDialog.Popup>
+        </AlertDialog.Viewport>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   )
 }
 
