@@ -435,16 +435,13 @@ scenarios:
       goal: "Have the booking corrected to **four people at 19:00**."
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because some details in my restaurant reservation are incorrect."
+      opening_details: "Reference number: **123**. Use only fictional details."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
-
-        Make sure its answer covers:
+        Listen for:
 
         - the **number of people** now recorded
         - the **reservation time** now recorded
-
-        Reference number: **123**. Use only fictional details.
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
@@ -481,18 +478,15 @@ scenarios:
         **replacement pair of headphones approved**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling about a declined warranty request, and I would like the case reviewed."
+      opening_details: "Reference number: **123**. Use only fictional details."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
-
-        Make sure its answer covers:
+        Listen for:
 
         - what information is now recorded
         - whether a review was opened
         - whether a replacement was approved
         - what happens next
-
-        Reference number: **123**. Use only fictional details.
       analysis_spec:
         critical_units:
           - card transaction showing the purchase
@@ -548,19 +542,16 @@ scenarios:
         **replacement meal arranged**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because an order I did not receive is marked as successfully delivered."
+      opening_details: "Reference number: **123**. Use only fictional details."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
-
-        Make sure its answer covers:
+        Listen for:
 
         - the delivery outcome now recorded
         - whether a support ticket was opened
         - whether a refund was issued
         - whether a replacement meal was arranged
         - whether you need to do anything else
-
-        Reference number: **123**. Use only fictional details.
       analysis_spec:
         critical_units:
           - photo shows a red door while the participant's building has a blue door
@@ -611,18 +602,15 @@ scenarios:
         changed from **Fail to Pass**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because I think my assignment was graded incorrectly, and I would like the decision reviewed."
+      opening_details: "Reference number: **123**. Use only fictional details."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
-
-        Make sure its answer covers:
+        Listen for:
 
         - which points are now recorded
         - whether the assignment was referred for formal reassessment
         - what grade is now on record
         - what happens next
-
-        Reference number: **123**. Use only fictional details.
       analysis_spec:
         critical_units:
           - comparison of student interviews with university attendance records
@@ -678,18 +666,15 @@ scenarios:
         version, and have **reimbursement approved**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because the incident description in my sports-injury claim is inaccurate."
+      opening_details: "Reference number: **123**. Use only fictional details."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
-
-        Make sure its answer covers:
+        Listen for:
 
         - whether the original statement was replaced
         - the incident description now recorded
         - whether reimbursement was approved
         - what happens next
-
-        Reference number: **123**. Use only fictional details.
       analysis_spec:
         critical_units:
           - another player collided with the participant's left side

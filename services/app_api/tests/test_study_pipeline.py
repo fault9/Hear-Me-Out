@@ -299,6 +299,14 @@ class PilotTemplateTests(unittest.TestCase):
         }
         self.assertEqual(len(final_prompts), 1)
         self.assertIn("what information is now recorded", next(iter(final_prompts)).lower())
+        self.assertTrue(all(
+            "reference number" in scenario["scenario_card"].get("opening_details", "").lower()
+            for scenario in protocol["scenarios"]
+        ))
+        self.assertTrue(all(
+            "listen for:" in scenario["scenario_card"].get("additional_details", "").lower()
+            for scenario in protocol["scenarios"]
+        ))
         for scenario in protocol["scenarios"][1:]:
             spec = scenario["scenario_card"]["analysis_spec"]
             levels = spec["outcome_levels"]

@@ -77,6 +77,7 @@ class ScenarioCard(BaseModel):
     goal: str = ""
     how_to_interact: str = ""
     suggested_first_line: str = ""
+    opening_details: str = ""
     additional_details: str = ""
     # Optional protocol safeguard shown beside the live call controls. When set,
     # participants confirm that they asked it before ending with "goal reached".

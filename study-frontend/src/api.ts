@@ -51,6 +51,7 @@ export interface ScenarioInfo {
   goal: string;
   how_to_interact: string;
   suggested_first_line: string;
+  opening_details?: string;
   additional_details: string;
   final_account_prompt?: string;
   extra_fields?: { label: string; value: string }[];

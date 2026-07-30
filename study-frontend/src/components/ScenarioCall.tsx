@@ -136,25 +136,35 @@ export function ScenarioCall({ code, scenario, onDone }: {
             </div>
           </section>
 
-          <div className="grid lg:grid-cols-2 lg:divide-x">
-            <section className="py-5 lg:pr-5" aria-labelledby="scenario-opening">
+          <div className="divide-y">
+            <section className="py-5" aria-labelledby="scenario-opening">
               <div className="flex gap-3">
                 <MessageCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <div>
+                <div className="min-w-0">
                   <SectionLabel id="scenario-opening">Start here</SectionLabel>
                   <p className="whitespace-pre-wrap text-base italic leading-7">“{scenario.suggested_first_line}”</p>
+                  {scenario.opening_details && (
+                    <ScenarioText
+                      value={scenario.opening_details}
+                      className="mt-2 text-sm leading-6 text-muted-foreground"
+                    />
+                  )}
                 </div>
               </div>
             </section>
 
-            <section className="border-t py-5 lg:border-t-0 lg:pl-5" aria-labelledby="scenario-details">
+            <section className="py-5" aria-labelledby="scenario-details">
               <div className="flex gap-3">
                 <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <div>
-                  <SectionLabel id="scenario-details">Before you finish</SectionLabel>
+                <div className="min-w-0 flex-1">
+                  <SectionLabel id="scenario-details">Before ending</SectionLabel>
+                  {finalAccountPrompt && (
+                    <p className="text-base font-medium leading-7">Ask the assistant for a final summary.</p>
+                  )}
                   <ScenarioText
                     value={scenario.additional_details}
-                    className="text-base leading-7 text-muted-foreground"
+                    components={checklistMarkdownComponents}
+                    className={`${finalAccountPrompt ? "mt-2 " : ""}text-base leading-7 text-muted-foreground`}
                   />
                 </div>
               </div>
@@ -216,7 +226,7 @@ export function ScenarioCall({ code, scenario, onDone }: {
         {phase === "active" && (
           <div className="flex flex-col gap-2">
             {finalAccountPrompt && (
-              <div className="mb-1 rounded-md border border-primary/40 bg-primary/5 p-3">
+              <div className="mb-1 border-y border-primary/40 bg-primary/5 py-3">
                 <p className="text-sm font-semibold uppercase text-primary">Before ending, ask</p>
                 <p className="mt-1 text-base font-medium leading-6">“{finalAccountPrompt}”</p>
                 <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm leading-5">
@@ -296,11 +306,22 @@ const markdownComponents: Components = {
   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
 }
 
-function ScenarioText({ value, className = "" }: { value: string; className?: string }) {
+const checklistMarkdownComponents: Components = {
+  ...markdownComponents,
+  ul: ({ children }) => (
+    <ul className="my-2 grid list-disc gap-x-8 gap-y-1 pl-5 first:mt-0 last:mb-0 sm:grid-cols-2">
+      {children}
+    </ul>
+  ),
+}
+
+function ScenarioText({ value, className = "", components = markdownComponents }: {
+  value: string; className?: string; components?: Components
+}) {
   if (!value) return null
   return (
     <div className={className}>
-      <ReactMarkdown components={markdownComponents}>{value}</ReactMarkdown>
+      <ReactMarkdown components={components}>{value}</ReactMarkdown>
     </div>
   )
 }

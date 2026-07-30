@@ -70,6 +70,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
   const [goal, setGoal] = useState(card.goal || "")
   const [howTo, setHowTo] = useState(card.how_to_interact || "")
   const [firstLine, setFirstLine] = useState(card.suggested_first_line || "")
+  const [openingDetails, setOpeningDetails] = useState(card.opening_details || "")
   const [additional, setAdditional] = useState(card.additional_details || "")
   const [finalAccountPrompt, setFinalAccountPrompt] = useState(card.final_account_prompt || "")
   const [prompt, setPrompt] = useState(scenario.system_prompt || "")
@@ -103,7 +104,8 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
         order_idx: scenario.order_idx ?? index, title,
         scenario_card: {
           role, current_situation: situation, goal, how_to_interact: howTo,
-          suggested_first_line: firstLine, additional_details: additional,
+          suggested_first_line: firstLine, opening_details: openingDetails,
+          additional_details: additional,
           final_account_prompt: finalAccountPrompt,
           extra_fields: extraFields.filter(f => f.label.trim()),
         },
@@ -136,6 +138,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
           <Field label="Your goal *"><Textarea value={goal} onChange={setGoal} /></Field>
           <Field label="How to interact *"><Textarea value={howTo} onChange={setHowTo} /></Field>
           <Field label="Suggested first line *"><Textarea value={firstLine} onChange={setFirstLine} /></Field>
+          <Field label="Opening details (optional)"><Textarea value={openingDetails} onChange={setOpeningDetails} /></Field>
           <Field label="Additional details *"><Textarea value={additional} onChange={setAdditional} /></Field>
           <Field label="Required final question (optional)">
             <Textarea value={finalAccountPrompt} onChange={setFinalAccountPrompt} />
