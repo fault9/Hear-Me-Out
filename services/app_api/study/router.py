@@ -227,6 +227,7 @@ def _scenario_card(scenario: dict, scenario_order: int) -> dict:
         "post_items": scenario.get("post_items") or [],   # scenario-specific post questions
         "time_limit_s": scenario.get("time_limit_s", 300),
         "study_role": card.get("study_role", "analytical"),
+        "final_account_prompt": card.get("final_account_prompt", ""),
     }
     for key, _label in REQUIRED_CARD_FIELDS:
         out[key] = card.get(key, "")

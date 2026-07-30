@@ -52,6 +52,7 @@ export interface ScenarioInfo {
   how_to_interact: string;
   suggested_first_line: string;
   additional_details: string;
+  final_account_prompt?: string;
   extra_fields?: { label: string; value: string }[];
   post_items?: any[];
   time_limit_s: number;

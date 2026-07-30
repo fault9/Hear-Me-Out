@@ -435,8 +435,9 @@ scenarios:
       goal: "Have the booking corrected to **four people at 19:00**."
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because some details in my restaurant reservation are incorrect."
+      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
 
         Make sure its answer covers:
 
@@ -480,8 +481,9 @@ scenarios:
         **replacement pair of headphones approved**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling about a declined warranty request, and I would like the case reviewed."
+      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
 
         Make sure its answer covers:
 
@@ -546,8 +548,9 @@ scenarios:
         **replacement meal arranged**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because an order I did not receive is marked as successfully delivered."
+      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
 
         Make sure its answer covers:
 
@@ -608,8 +611,9 @@ scenarios:
         changed from **Fail to Pass**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because I think my assignment was graded incorrectly, and I would like the decision reviewed."
+      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
 
         Make sure its answer covers:
 
@@ -674,8 +678,9 @@ scenarios:
         version, and have **reimbursement approved**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because the incident description in my sports-injury claim is inaccurate."
+      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
-        Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
+        Before ending, ask the assistant: **"Please tell me what information is now recorded, what decision or action you have taken, and what happens next."**
 
         Make sure its answer covers:
 

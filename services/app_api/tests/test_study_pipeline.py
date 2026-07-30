@@ -293,6 +293,12 @@ class PilotTemplateTests(unittest.TestCase):
 
     def test_analytical_scenarios_define_four_helpfulness_levels(self):
         protocol = self._protocol()
+        final_prompts = {
+            scenario["scenario_card"].get("final_account_prompt", "")
+            for scenario in protocol["scenarios"]
+        }
+        self.assertEqual(len(final_prompts), 1)
+        self.assertIn("what information is now recorded", next(iter(final_prompts)).lower())
         for scenario in protocol["scenarios"][1:]:
             spec = scenario["scenario_card"]["analysis_spec"]
             levels = spec["outcome_levels"]

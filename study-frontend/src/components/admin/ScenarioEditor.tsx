@@ -71,6 +71,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
   const [howTo, setHowTo] = useState(card.how_to_interact || "")
   const [firstLine, setFirstLine] = useState(card.suggested_first_line || "")
   const [additional, setAdditional] = useState(card.additional_details || "")
+  const [finalAccountPrompt, setFinalAccountPrompt] = useState(card.final_account_prompt || "")
   const [prompt, setPrompt] = useState(scenario.system_prompt || "")
   const [extraFields, setExtraFields] = useState<{ label: string; value: string }[]>(card.extra_fields || [])
   const [postItems, setPostItems] = useState<any[]>(scenario.post_items || [])
@@ -103,6 +104,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
         scenario_card: {
           role, current_situation: situation, goal, how_to_interact: howTo,
           suggested_first_line: firstLine, additional_details: additional,
+          final_account_prompt: finalAccountPrompt,
           extra_fields: extraFields.filter(f => f.label.trim()),
         },
         system_prompt: prompt, voice_prompt: voicePrompt, time_limit_s: Number(timeLimit),
@@ -135,6 +137,9 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
           <Field label="How to interact *"><Textarea value={howTo} onChange={setHowTo} /></Field>
           <Field label="Suggested first line *"><Textarea value={firstLine} onChange={setFirstLine} /></Field>
           <Field label="Additional details *"><Textarea value={additional} onChange={setAdditional} /></Field>
+          <Field label="Required final question (optional)">
+            <Textarea value={finalAccountPrompt} onChange={setFinalAccountPrompt} />
+          </Field>
           <Field label="System prompt (hidden from participant) *"><Textarea value={prompt} onChange={setPrompt} /></Field>
 
           <div className="rounded-md border p-3">

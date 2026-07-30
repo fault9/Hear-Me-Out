@@ -23,8 +23,10 @@ export function ScenarioCall({ code, scenario, onDone }: {
   const [remaining, setRemaining] = useState(scenario.time_limit_s)
   const [errMsg, setErrMsg] = useState<string | null>(null)
   const [readyConfirmed, setReadyConfirmed] = useState(false)
+  const [finalAccountConfirmed, setFinalAccountConfirmed] = useState(false)
   const sessionIdRef = useRef<string | null>(null)
   const started = useRef(false)
+  const finalAccountPrompt = scenario.final_account_prompt?.trim() || ""
   const scenarioLabel = scenario.study_role === "practice"
     ? "Practice interaction"
     : `Scenario ${Math.max(1, scenario.scenario_order - 1)}`
@@ -213,8 +215,29 @@ export function ScenarioCall({ code, scenario, onDone }: {
 
         {phase === "active" && (
           <div className="flex flex-col gap-2">
+            {finalAccountPrompt && (
+              <div className="mb-1 rounded-md border border-primary/40 bg-primary/5 p-3">
+                <p className="text-sm font-semibold uppercase text-primary">Before ending, ask</p>
+                <p className="mt-1 text-base font-medium leading-6">“{finalAccountPrompt}”</p>
+                <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm leading-5">
+                  <input
+                    type="checkbox"
+                    checked={finalAccountConfirmed}
+                    onChange={event => setFinalAccountConfirmed(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 accent-primary"
+                  />
+                  <span>I asked this question and heard the assistant’s answer.</span>
+                </label>
+              </div>
+            )}
             <p className="text-center text-base text-muted-foreground">Speak with the assistant. End the call when you are done.</p>
-            <Button className="w-full gap-2 text-base" onClick={() => endCall("goal_reached")}><CheckCircle2 className="size-4" /> End Call — goal reached</Button>
+            <Button
+              className="w-full gap-2 text-base"
+              onClick={() => endCall("goal_reached")}
+              disabled={Boolean(finalAccountPrompt) && !finalAccountConfirmed}
+            >
+              <CheckCircle2 className="size-4" /> End Call — goal reached
+            </Button>
             <Button variant="secondary" className="w-full gap-2 text-base" onClick={() => endCall("give_up")}><XCircle className="size-4" /> End Call — give up</Button>
           </div>
         )}
