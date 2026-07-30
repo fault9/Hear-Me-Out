@@ -115,6 +115,29 @@ def _validate_required_answers(items: list[dict], payload: dict) -> None:
             detail=f"Required questionnaire item {missing[0]!r} is missing")
 
 
+def _playback_sessions_for_condition(backend, participant: dict,
+                                     condition: str) -> list[dict]:
+    """Return newest-first sessions whose persisted condition matches exactly."""
+    run = backend.get_latest_run(participant["participant_id"])
+    if not run:
+        return []
+    sessions = [
+        session for session in backend.list_sessions(participant["study_id"])
+        if session.get("participant_id") == participant["participant_id"]
+        and session.get("run_id") == run.get("id")
+        and session.get("voice_condition") == condition
+    ]
+    return sorted(
+        sessions,
+        key=lambda session: (
+            int(session.get("run_attempt") or 0),
+            int(session.get("scenario_attempt") or 0),
+            float(session.get("started_at") or 0),
+        ),
+        reverse=True,
+    )
+
+
 def _schedule_label(scenario: dict) -> str:
     segs = scenario.get("voice_schedule") or []
     if not segs:
@@ -1158,10 +1181,7 @@ def build_study_router() -> APIRouter:
         track_key = "participant" if track == "participant" else "merged"
         order = p.get("scenario_order") or []
 
-        def serve(order_idx: int):
-            run = backend.get_latest_run(p["participant_id"])
-            session = backend.get_latest_session(p["participant_id"], order_idx,
-                                                 run.get("id") if run else None)
+        def serve_session(session: dict | None):
             files = (session or {}).get("files") or {}
             rel = files.get(track_key) or files.get("merged")
             if rel:
@@ -1197,11 +1217,26 @@ def build_study_router() -> APIRouter:
                     return FileResponse(str(path), media_type="audio/wav")
             return None
 
+        def serve(order_idx: int):
+            run = backend.get_latest_run(p["participant_id"])
+            session = backend.get_latest_session(p["participant_id"], order_idx,
+                                                 run.get("id") if run else None)
+            return serve_session(session)
+
         if scenario and 1 <= scenario <= len(order):
             r = serve(scenario)
             if r:
                 return r
         elif condition:
+            # The session row is authoritative. Counterbalancing can move a
+            # condition to any ordinal position, while old/imported allocation
+            # maps may be absent or stale by playback time.
+            for session in _playback_sessions_for_condition(backend, p, condition):
+                r = serve_session(session)
+                if r:
+                    return r
+            # Compatibility fallback for studies recorded before named
+            # conditions were persisted on session rows.
             assignment = p.get("assignment") or {}
             for i, sid in enumerate(order):
                 if (assignment.get(str(sid)) or {}).get("condition") == condition:

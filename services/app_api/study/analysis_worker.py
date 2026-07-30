@@ -38,6 +38,8 @@ except Exception:  # noqa: BLE001
 
 from study.analysis import (STUDY_DATA_DIR, TRANSCRIPT_SCHEMA, _session_paths,
                             run_session_analysis, status_path)  # noqa: E402
+from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA,
+                                       prepare_dialogue_transcript)  # noqa: E402
 from study.session_scope import analysis_eligible  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 from study.technical_validity import (TECHNICAL_VALIDITY_SCHEMA,
@@ -99,7 +101,10 @@ def _latest_analysis_result(session: dict, key: str) -> dict | None:
     if not relative_path:
         return None
     try:
-        return json.loads((STUDY_DATA_DIR / relative_path).read_text())
+        result = json.loads((STUDY_DATA_DIR / relative_path).read_text())
+        if isinstance(result, dict):
+            result.setdefault("result_artifact", copy.deepcopy(latest))
+        return result
     except (OSError, ValueError, TypeError):
         return None
 
@@ -115,6 +120,11 @@ def _needs_validity(session: dict) -> bool:
             or result.get("status") == "incomplete")
 
 
+def _needs_dialogue_transcript(session: dict) -> bool:
+    result = _latest_analysis_result(session, "dialogue_transcript_latest")
+    return not result or result.get("schema") != DIALOGUE_TRANSCRIPT_SCHEMA
+
+
 def _needs_preprocessing(session: dict) -> bool:
     transcript = session.get("transcript") or {}
     return (session.get("metrics") is None
@@ -128,7 +138,7 @@ def _analysis_candidates(sessions: list[dict], force: bool) -> list[dict]:
             if analysis_eligible(session)
             and session.get("ended_at") is not None
             and (force or _needs_preprocessing(session) or _needs_timing(session)
-                 or _needs_validity(session))]
+                 or _needs_dialogue_transcript(session) or _needs_validity(session))]
 
 
 def main() -> None:
@@ -188,6 +198,36 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 stage_errors["timing"] = str(exc)
                 print(f"[analysis_worker] timing error for {s['session_id']}: {exc}",
+                      file=sys.stderr)
+
+            try:
+                latest = backend.get_session(s["session_id"]) or s
+                if timing and (force or _needs_dialogue_transcript(latest)):
+                    dialogue = prepare_dialogue_transcript(
+                        latest, STUDY_DATA_DIR, analysis_id, timing)
+                    transcript = copy.deepcopy(latest.get("transcript") or {})
+                    embedded = copy.deepcopy(dialogue)
+                    embedded["artifact"] = embedded.pop("result_artifact")
+                    transcript["dialogue"] = embedded
+                    backend.update_session_analysis(
+                        s["session_id"], transcript, latest.get("metrics"),
+                        bool(latest.get("audiobox_available")),
+                    )
+                    latest = backend.get_session(s["session_id"]) or latest
+                    manifest = copy.deepcopy(latest.get("artifact_manifest") or {})
+                    analysis = manifest.setdefault("analysis", {})
+                    analysis["dialogue_transcript_latest"] = dialogue["result_artifact"]
+                    analysis["dialogue_transcript_summary"] = {
+                        "schema": dialogue["schema"],
+                        "analysis_id": dialogue["analysis_id"],
+                        "status": dialogue["status"],
+                        "timing_status": dialogue["timeline"]["timing_status"],
+                        **dialogue["summary"],
+                    }
+                    backend.update_session_artifacts(s["session_id"], manifest)
+                    s = backend.get_session(s["session_id"]) or latest
+            except Exception as exc:  # noqa: BLE001
+                print(f"[analysis_worker] dialogue-transcript error for {s['session_id']}: {exc}",
                       file=sys.stderr)
 
             try:

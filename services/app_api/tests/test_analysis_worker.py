@@ -1,6 +1,10 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from study.analysis_worker import _analysis_candidates
+from study.analysis_worker import _analysis_candidates, _latest_analysis_result
 from study.session_scope import annotate_analysis_scope, annotate_analysis_scopes
 
 
@@ -50,6 +54,56 @@ class AnalysisWorkerTests(unittest.TestCase):
         }], force=True)
 
         self.assertEqual(selected, [])
+
+    def test_current_dialogue_artifact_does_not_reenter_queue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = {
+                "timing_latest": ("timing.json", "hmo.timing-analysis.v4", {}),
+                "dialogue_transcript_latest": (
+                    "dialogue.json", "hmo.dialogue-transcript.v1", {}),
+                "technical_validity_latest": (
+                    "validity.json", "hmo.technical-validity.v3", {"status": "valid"}),
+            }
+            manifest = {"analysis": {}}
+            for key, (name, schema, extra) in artifacts.items():
+                (root / name).write_text(json.dumps({"schema": schema, **extra}))
+                manifest["analysis"][key] = {"path": name}
+            session = {
+                "session_id": "complete",
+                "voice_condition": "stable_natural",
+                "ended_at": 1,
+                "files": {"participant": "participant.wav"},
+                "metrics": {},
+                "transcript": {
+                    "schema": "hmo.study-transcript.v2",
+                    "participant_segments": [],
+                },
+                "artifact_manifest": manifest,
+            }
+
+            with patch("study.analysis_worker.STUDY_DATA_DIR", root):
+                selected = _analysis_candidates([session], force=False)
+
+            self.assertEqual(selected, [])
+
+    def test_loaded_analysis_retains_its_manifest_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "timing.json").write_text(json.dumps({
+                "schema": "hmo.timing-analysis.v4",
+            }))
+            session = {"artifact_manifest": {"analysis": {
+                "timing_latest": {
+                    "path": "timing.json", "sha256": "abc", "size_bytes": 10,
+                },
+            }}}
+
+            with patch("study.analysis_worker.STUDY_DATA_DIR", root):
+                result = _latest_analysis_result(session, "timing_latest")
+
+            self.assertEqual(result["result_artifact"]["path"], "timing.json")
+            self.assertEqual(result["result_artifact"]["sha256"], "abc")
 
     def test_latest_valid_attempt_in_latest_submitted_run_is_included(self):
         def session(session_id, run_id, run_attempt, scenario_attempt, valid):

@@ -1,0 +1,337 @@
+"""Derive a browser-clock dialogue transcript from immutable study artifacts."""
+
+from __future__ import annotations
+
+import copy
+import json
+import tempfile
+import time
+import wave
+from pathlib import Path
+from typing import Any, Callable
+
+from .artifacts import atomic_write_json, file_record
+
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v1"
+_ASR_PADDING_MS = 200.0
+
+Transcriber = Callable[[str], dict]
+
+
+def _default_transcriber(path: str) -> dict:
+    from metrics import get_transcript_result
+
+    return get_transcript_result(path)
+
+
+def _capture_origin_ms(session_dir: Path, timing: dict) -> float:
+    """Return the browser-clock time represented by raw WAV sample zero."""
+    correction = float(
+        ((timing.get("integrity") or {}).get(
+            "participant_capture_latency_correction_ms")) or 0.0
+    )
+    try:
+        client = json.loads((session_dir / "client_timeline.json").read_text())
+        chunks = ((client.get("capture") or {}).get("chunks") or [])
+        first_offset = next(
+            float(row["timeline_start_ms"])
+            for row in chunks
+            if row.get("timeline_start_ms") is not None
+        )
+    except (OSError, ValueError, TypeError, StopIteration):
+        first_offset = 0.0
+    return first_offset - correction
+
+
+def _wav_duration_ms(path: Path) -> float:
+    with wave.open(str(path), "rb") as wav:
+        rate = wav.getframerate()
+        return wav.getnframes() * 1000.0 / rate if rate else 0.0
+
+
+def _write_wav_slice(source: Path, destination: Path,
+                     start_ms: float, end_ms: float) -> tuple[float, float]:
+    with wave.open(str(source), "rb") as wav:
+        params = wav.getparams()
+        total_frames = wav.getnframes()
+        start_frame = max(0, min(total_frames, round(start_ms * params.framerate / 1000)))
+        end_frame = max(start_frame, min(
+            total_frames, round(end_ms * params.framerate / 1000)))
+        wav.setpos(start_frame)
+        frames = wav.readframes(end_frame - start_frame)
+    with wave.open(str(destination), "wb") as wav:
+        wav.setparams(params)
+        wav.writeframes(frames)
+    return (
+        start_frame * 1000.0 / params.framerate,
+        end_frame * 1000.0 / params.framerate,
+    )
+
+
+def _clip_window(intervals: list[dict], index: int, origin_ms: float,
+                 duration_ms: float) -> tuple[float, float]:
+    item = intervals[index]
+    start = float(item["start_ms"])
+    end = float(item["end_ms"])
+    padded_start = start - _ASR_PADDING_MS
+    padded_end = end + _ASR_PADDING_MS
+    if index:
+        previous_end = float(intervals[index - 1]["end_ms"])
+        padded_start = max(padded_start, (previous_end + start) / 2)
+    if index + 1 < len(intervals):
+        next_start = float(intervals[index + 1]["start_ms"])
+        padded_end = min(padded_end, (end + next_start) / 2)
+    return (
+        max(0.0, min(duration_ms, padded_start - origin_ms)),
+        max(0.0, min(duration_ms, padded_end - origin_ms)),
+    )
+
+
+def _initial_voice_mode(session: dict, timing: dict) -> str:
+    switches = timing.get("route_switches") or []
+    if switches and switches[0].get("from_mode"):
+        return str(switches[0]["from_mode"])
+    schedule = session.get("schedule") or []
+    if schedule and schedule[0].get("mode"):
+        return str(schedule[0]["mode"])
+    return "vc" if session.get("voice_condition") in {
+        "stable_converted", "vc_deactivation",
+    } else "natural"
+
+
+def _route_regions(session: dict, timing: dict, end_ms: float) -> list[dict]:
+    switches = sorted(
+        (row for row in timing.get("route_switches") or []
+         if row.get("participant_timeline_ms") is not None),
+        key=lambda row: float(row["participant_timeline_ms"]),
+    )
+    mode = _initial_voice_mode(session, timing)
+    cursor = 0.0
+    regions: list[dict] = []
+    for switch in switches:
+        boundary = max(cursor, float(switch["participant_timeline_ms"]))
+        if boundary > cursor:
+            regions.append({"mode": mode, "start_ms": cursor, "end_ms": boundary})
+        mode = str(switch.get("to_mode") or mode)
+        cursor = boundary
+    regions.append({"mode": mode, "start_ms": cursor, "end_ms": max(cursor, end_ms)})
+    return regions
+
+
+def _routes_for_interval(start_ms: float, end_ms: float,
+                         regions: list[dict]) -> tuple[str | None, list[dict]]:
+    covered = []
+    for region in regions:
+        start = max(start_ms, float(region["start_ms"]))
+        end = min(end_ms, float(region["end_ms"]))
+        if end > start:
+            covered.append({
+                "mode": region["mode"],
+                "start_ms": round(start, 3),
+                "end_ms": round(end, 3),
+            })
+    modes = list(dict.fromkeys(row["mode"] for row in covered))
+    voice_mode = modes[0] if len(modes) == 1 else ("mixed" if modes else None)
+    return voice_mode, covered
+
+
+def _fragment_times(fragment: dict) -> tuple[float, float] | None:
+    try:
+        start = float(fragment["start"]) * 1000.0
+        end = float(fragment["end"]) * 1000.0
+    except (KeyError, TypeError, ValueError):
+        return None
+    return start, max(start, end)
+
+
+def _assign_model_fragments(intervals: list[dict], fragments: list[dict]) -> tuple[list[list[dict]], list[dict]]:
+    assigned: list[list[dict]] = [[] for _ in intervals]
+    unassigned = []
+    for fragment in fragments:
+        times = _fragment_times(fragment)
+        if not times or not intervals:
+            unassigned.append(copy.deepcopy(fragment))
+            continue
+        start, end = times
+        overlaps = [
+            max(0.0, min(end, float(item["end_ms"]))
+                - max(start, float(item["start_ms"])))
+            for item in intervals
+        ]
+        if max(overlaps, default=0.0) > 0:
+            index = max(range(len(intervals)), key=lambda value: overlaps[value])
+            method = "maximum_temporal_overlap"
+        else:
+            distances = [
+                (float(item["start_ms"]) - end
+                 if end < float(item["start_ms"])
+                 else start - float(item["end_ms"]))
+                for item in intervals
+            ]
+            index = min(range(len(intervals)), key=lambda value: distances[value])
+            if distances[index] > 2000.0:
+                unassigned.append(copy.deepcopy(fragment))
+                continue
+            method = "nearest_interval_edge_within_2000ms"
+        row = copy.deepcopy(fragment)
+        row["assignment_method"] = method
+        assigned[index].append(row)
+    return assigned, unassigned
+
+
+def _participant_utterances(raw_path: Path, intervals: list[dict],
+                            origin_ms: float, route_regions: list[dict],
+                            transcriber: Transcriber, temporary: Path) -> list[dict]:
+    duration_ms = _wav_duration_ms(raw_path)
+    utterances = []
+    for index, interval in enumerate(intervals):
+        start_ms = float(interval["start_ms"])
+        end_ms = float(interval["end_ms"])
+        clip_start, clip_end = _clip_window(intervals, index, origin_ms, duration_ms)
+        asr = {"text": "", "segments": [], "status": "failed",
+               "error": "empty interval after browser-to-WAV clock mapping"}
+        actual_start, actual_end = clip_start, clip_end
+        if clip_end > clip_start:
+            clip_path = temporary / f"participant_{index + 1:03d}.wav"
+            actual_start, actual_end = _write_wav_slice(
+                raw_path, clip_path, clip_start, clip_end)
+            asr = transcriber(str(clip_path))
+        voice_mode, route_segments = _routes_for_interval(
+            start_ms, end_ms, route_regions)
+        utterances.append({
+            "id": f"participant_{index + 1:03d}",
+            "speaker": "participant",
+            "start_ms": round(start_ms, 3),
+            "end_ms": round(end_ms, 3),
+            "text": str(asr.get("text") or "").strip(),
+            "voice_mode": voice_mode,
+            "route_segments": route_segments,
+            "timing": {
+                "timeline": "browser_audio_clock",
+                "source": "timing.participant_intervals",
+                "detector": interval.get("detector"),
+            },
+            "text_provenance": {
+                "source": "participant_raw.wav",
+                "method": "whisper-small_interval_asr",
+                "asr_status": asr.get("status"),
+                "asr_error": asr.get("error"),
+                "wav_start_ms": round(actual_start, 3),
+                "wav_end_ms": round(actual_end, 3),
+                "browser_clock_origin_ms": round(origin_ms, 3),
+                "context_padding_ms": _ASR_PADDING_MS,
+            },
+        })
+    return utterances
+
+
+def _assistant_utterances(intervals: list[dict], fragments: list[dict]) -> tuple[list[dict], list[dict]]:
+    assigned, unassigned = _assign_model_fragments(intervals, fragments)
+    utterances = []
+    for index, (interval, rows) in enumerate(zip(intervals, assigned)):
+        text = " ".join(
+            str(row.get("text") or "").strip() for row in rows
+            if str(row.get("text") or "").strip()
+        )
+        utterances.append({
+            "id": f"assistant_{index + 1:03d}",
+            "speaker": "assistant",
+            "start_ms": round(float(interval["start_ms"]), 3),
+            "end_ms": round(float(interval["end_ms"]), 3),
+            "text": text,
+            "timing": {
+                "timeline": "browser_audio_clock",
+                "source": "timing.assistant_intervals",
+                "detector": interval.get("detector"),
+                "first_packet_sequence": interval.get("first_packet_sequence"),
+                "last_packet_sequence": interval.get("last_packet_sequence"),
+            },
+            "text_provenance": {
+                "source": "model_transcript.json",
+                "method": "maximum_overlap_or_nearest_interval_assignment",
+                "fragment_count": len(rows),
+                "fragments": rows,
+            },
+        })
+    return utterances, unassigned
+
+
+def prepare_dialogue_transcript(session: dict, data_root: Path,
+                                analysis_id: str, timing: dict,
+                                transcriber: Transcriber | None = None) -> dict:
+    """Create a versioned, time-aligned transcript on the browser audio clock."""
+    files = session.get("files") or {}
+    if not files.get("participant_raw"):
+        raise FileNotFoundError("participant_raw audio is missing")
+    raw_path = data_root / files["participant_raw"]
+    if not raw_path.exists():
+        raise FileNotFoundError(raw_path)
+    session_dir = raw_path.parent
+    participant_intervals = timing.get("participant_intervals") or []
+    assistant_intervals = timing.get("assistant_intervals") or []
+    if not participant_intervals or not assistant_intervals:
+        raise ValueError("timing analysis has no participant or assistant speech intervals")
+
+    transcript = session.get("transcript") or {}
+    model_fragments = transcript.get("model") or []
+    end_ms = max(
+        [float(row["end_ms"]) for row in participant_intervals + assistant_intervals],
+        default=0.0,
+    )
+    origin_ms = _capture_origin_ms(session_dir, timing)
+    regions = _route_regions(session, timing, end_ms)
+    with tempfile.TemporaryDirectory(prefix="hmo-dialogue-") as temporary:
+        participant = _participant_utterances(
+            raw_path, participant_intervals, origin_ms, regions,
+            transcriber or _default_transcriber, Path(temporary),
+        )
+    assistant, unassigned = _assistant_utterances(
+        assistant_intervals, model_fragments)
+    utterances = sorted(
+        participant + assistant,
+        key=lambda row: (row["start_ms"], 0 if row["speaker"] == "assistant" else 1),
+    )
+    failed_asr = sum(
+        row["text_provenance"].get("asr_status") != "complete"
+        for row in participant
+    )
+    result: dict[str, Any] = {
+        "schema": DIALOGUE_TRANSCRIPT_SCHEMA,
+        "analysis_id": analysis_id,
+        "session_id": session.get("session_id"),
+        "created_at_unix_s": time.time(),
+        "status": "complete" if not failed_asr else "partial",
+        "timeline": {
+            "name": "participant_experienced_browser_audio_clock",
+            "timing_schema": timing.get("schema"),
+            "timing_status": timing.get("status"),
+            "speech_boundaries": "copied_from_timing_analysis_not_inferred_from_asr",
+        },
+        "utterances": utterances,
+        "overlaps": copy.deepcopy(timing.get("overlaps") or []),
+        "barge_ins": copy.deepcopy(timing.get("barge_ins") or []),
+        "route_switches": copy.deepcopy(timing.get("route_switches") or []),
+        "unassigned_model_fragments": unassigned,
+        "summary": {
+            "participant_utterances": len(participant),
+            "assistant_utterances": len(assistant),
+            "participant_asr_failures": failed_asr,
+            "assistant_intervals_without_text": sum(not row["text"] for row in assistant),
+            "unassigned_model_fragments": len(unassigned),
+        },
+        "sources": {
+            "participant_raw": file_record(raw_path, relative_to=data_root),
+            "timing": timing.get("result_artifact"),
+            "model_transcript": (
+                (((session.get("artifact_manifest") or {}).get("artifacts") or {}).get(
+                    "model_transcript"))
+                or {"source": "session.transcript.model"}
+            ),
+        },
+    }
+    out_dir = session_dir / "analysis" / "dialogue" / analysis_id
+    out_dir.mkdir(parents=True, exist_ok=False)
+    result_path = out_dir / "dialogue_transcript.json"
+    atomic_write_json(result_path, result, exclusive=True)
+    result["result_artifact"] = file_record(result_path, relative_to=data_root)
+    return result

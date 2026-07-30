@@ -20,6 +20,7 @@ from study.playback import (ensure_stable_converted_interaction_playback,
                             ensure_stable_converted_playback,
                             ensure_transition_playback)
 from study.questionnaires import missing_required_answers
+from study.router import _playback_sessions_for_condition
 from study.storage import SqliteBackend
 from study.timing_analysis import (assistant_intervals, capture_gap_diagnostics,
                                    playback_underrun_diagnostics,
@@ -53,6 +54,43 @@ class ArtifactTests(unittest.TestCase):
 
 
 class StorageTests(unittest.TestCase):
+    def test_playback_follows_persisted_condition_after_counterbalancing(self):
+        class Backend:
+            @staticmethod
+            def get_latest_run(_participant_id):
+                return {"id": 9}
+
+            @staticmethod
+            def list_sessions(_study_id):
+                return [
+                    {"session_id": "old-run", "participant_id": "P1", "run_id": 8,
+                     "scenario_order": 5, "voice_condition": "stable_converted",
+                     "scenario_attempt": 1, "started_at": 1},
+                    {"session_id": "natural", "participant_id": "P1", "run_id": 9,
+                     "scenario_order": 5, "voice_condition": "stable_natural",
+                     "scenario_attempt": 1, "started_at": 2},
+                    {"session_id": "converted-first", "participant_id": "P1", "run_id": 9,
+                     "scenario_order": 3, "voice_condition": "stable_converted",
+                     "scenario_attempt": 1, "started_at": 3},
+                    {"session_id": "converted-retry", "participant_id": "P1", "run_id": 9,
+                     "scenario_order": 3, "voice_condition": "stable_converted",
+                     "scenario_attempt": 2, "started_at": 4},
+                ]
+
+        participant = {
+            "participant_id": "P1", "study_id": 1,
+            # Deliberately stale: the persisted session row must win.
+            "assignment": {"99": {"condition": "stable_converted"}},
+        }
+
+        sessions = _playback_sessions_for_condition(
+            Backend(), participant, "stable_converted")
+
+        self.assertEqual(
+            [session["session_id"] for session in sessions],
+            ["converted-retry", "converted-first"],
+        )
+
     def test_consent_is_scoped_to_the_current_run(self):
         with tempfile.TemporaryDirectory() as temp:
             backend = SqliteBackend(str(Path(temp) / "study.db"))
