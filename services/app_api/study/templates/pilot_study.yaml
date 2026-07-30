@@ -99,13 +99,51 @@ counterbalancing:
 settings:
   # Keep natural and converted conditions on one instrumented proxy path.
   study_engine: xvc
+  # Frozen VCTK excerpts selected by the prespecified target-screening audit.
+  # Upload these exact WAVs under the target refs declared above. Each VC
+  # session also receives an immutable target.wav copy and SHA-256 record.
+  target_manifest:
+    masculine_presenting:
+      corpus: VCTK
+      speaker_id: p279
+      source_file: male_english_leicester_p279_10s.wav
+    feminine_presenting:
+      corpus: VCTK
+      speaker_id: p229
+      source_file: female_southern_p229_10s.wav
+  # Matched analysis boundary for every analytical condition. Switching routes
+  # change state here; stable routes only record the checkpoint.
+  analysis_checkpoint_s: 45
   # Frozen per session and applied by the post-hoc technical-validity report.
   # Playback underruns are logged but are not an automatic exclusion until the
   # technical pilot establishes a defensible threshold for between-turn gaps.
   technical_validity:
     max_route_activation_lag_ms: 250
-    max_estimated_dropped_samples: 0
+    # Frozen from the technical pilot: all packets crossed browser-to-proxy,
+    # while AudioContext sample-boundary discontinuities were <= 40 ms total
+    # and <= 8 ms individually. Exceeding these limits flags timing for review;
+    # it does not by itself exclude the session's condition or questionnaire data.
+    max_capture_gap_total_ms: 50
+    max_capture_gap_ms: 10
     invalid_end_reasons: [technical_problem, artifact_initialization_failed]
+  timing:
+    # Frozen from P02001 activation/deactivation OBS calibration. The browser's
+    # input callback timeline lagged the independently recorded playback clock
+    # by 354.84 and 367.96 ms; use their session-balanced mean.
+    participant_capture_latency_correction_ms: 361.4
+    clock_alignment_validation:
+      status: passed
+      pilot_id: P02001
+      conditions: [vc_activation, vc_deactivation]
+      between_session_relative_offset_range_ms: 13.12
+      artifact: docs/study-artifacts/timing-validation/P02001_timing_validation.json
+    speech_boundary_validation:
+      status: pending_manual_audit
+      tolerance_ms: 100
+      minimum_precision: 0.90
+      minimum_recall: 0.90
+      maximum_mean_onset_error_ms: 100
+      maximum_mean_offset_error_ms: 100
   estimated_duration: 20-40 minutes
   welcome_text: |
     Welcome
@@ -326,20 +364,20 @@ questionnaires:
     - { id: update_evidence, type: textarea, label: "What evidence did you use to decide whether the assistant had actually updated, accepted, or retained the information you provided?" }
     - { id: differential_treatment, type: textarea, label: "Did you feel that the assistant treated or responded to you differently across the interactions? Please explain." }
 
-  # The platform derives a contiguous 30-second user-and-assistant excerpt from
-  # whichever scenario counterbalancing assigned to stable-converted.
+  # The platform derives up to 30 seconds of participant-only converted speech
+  # from whichever scenario counterbalancing assigned to stable-converted.
   playback:
     - id: playback_audio
       type: audio_playback
       required: true
       condition: stable_converted
-      track: merged
+      track: participant
       max_duration_s: 30
       max_plays: 3
       label: |
-        You will now hear an excerpt from one of your conversations in the study. Your voice is
-        converted throughout this recording. Please listen before answering. You may play the
-        excerpt up to three times.
+        You will now hear an excerpt of your converted speech from one of the conversations in the
+        study. The excerpt contains only your voice. Please listen before answering. You may play it
+        up to three times.
     - { id: converted_understandable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice was easy to understand." }
     - { id: converted_natural, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded natural." }
     - { id: converted_acceptable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice felt like an acceptable representation of me in this interaction." }
@@ -544,39 +582,40 @@ scenarios:
     post_items:
       - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that the delivery evidence showed the order was left at the wrong address." }
 
-  - title: Challenge an incorrect assessment record
+  - title: Ask for a grade review
     time_limit_s: 300
     voice_prompt: NATF2.pt
     system_prompt: |
-      You are an assessment case handler reviewing a disputed assessment record.
-      The current record gives the student a grade of Fail. It states that the submitted assignment
-      did not compare two sources and did not identify a limitation in the evidence.
-      Based only on information provided by the student, you may leave the current record unchanged;
-      record the specific grounds of the dispute; refer the submission for formal reassessment; change
-      the recorded grade from Fail to Pass; or ask for clarification.
-      When concluding the interaction, state which grounds were recorded, whether the submission was
+      You are a university staff member handling a student's request to review a grade.
+      The student received a grade of Fail. The grading feedback says that the assignment did not
+      compare two sources and did not identify a limitation in the evidence.
+      Based only on information provided by the student, you may leave the grade unchanged; record the
+      points the student says were missed; refer the assignment for formal reassessment; change the
+      recorded grade from Fail to Pass; or ask for clarification.
+      When concluding the interaction, state which points were recorded, whether the assignment was
       referred for reassessment, what grade is now recorded, and what will happen next.
     scenario_card:
       study_role: analytical
-      role: "You are a student challenging a Fail grade because the assessment record missed work you included."
+      role: "You are a student who received a Fail grade. You think your assignment was graded incorrectly."
       current_situation: |
-        Your assignment did both things the assessment record says are missing:
+        The grading feedback says that your assignment did not compare two sources or explain a
+        limitation. However, your assignment did both:
 
         - it compared **student interviews** with **university attendance records**
         - it explained that the **interview group was too small to represent all students**
       goal: |
-        Have **both points added to the record**, get the assignment referred for **formal
-        reassessment**, and have the recorded grade changed from **Fail to Pass**.
+        Explain **both points**, ask for a **formal reassessment**, and try to have the recorded grade
+        changed from **Fail to Pass**.
       how_to_interact: *how_to_interact
-      suggested_first_line: "I'm calling because I believe important parts of my assignment were not reflected in the assessment record."
+      suggested_first_line: "I'm calling because I think my assignment was graded incorrectly, and I would like the decision reviewed."
       additional_details: |
         Before ending, ask the assistant: **"What exactly will you report or record from this conversation?"**
 
         Make sure its answer covers:
 
-        - which grounds are now recorded
-        - whether a reassessment referral was made
-        - what grade is now recorded
+        - which points are now recorded
+        - whether the assignment was referred for formal reassessment
+        - what grade is now on record
         - what happens next
 
         Reference number: **123**. Use only fictional details.

@@ -33,12 +33,14 @@ if _SERVICES_DIR not in sys.path:
 try:
     from common import otel
     from common import logging_setup
-    from common.study_events import EnergySpeechTracker, StudyEventBuffer
+    from common.study_events import (EnergySpeechTracker, InputSampleCheckpoint,
+                                     StudyEventBuffer)
     logging_setup.init_logging("meanvc")  # export logs over OTLP (trace-correlated) when observability is enabled
 except Exception:  # noqa: BLE001
     otel = None
     logging_setup = None
     EnergySpeechTracker = None
+    InputSampleCheckpoint = None
     StudyEventBuffer = None
 
 
@@ -548,6 +550,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     await browser_ws.prepare(request)
 
     study_id = None
+    analysis_checkpoint_s = None
     # Study mode: the browser passes only an opaque session_id; resolve the hidden
     # prompt + timed voice schedule server-side. Legacy (HMO) mode uses the single
     # target_id from the query as a one-segment VC schedule.
@@ -560,6 +563,7 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
         text_prompt = cond.get("text_prompt", "")
         voice_prompt = cond.get("voice_prompt") or voice_prompt
         schedule = cond.get("schedule") or [{"mode": "natural", "start_s": 0, "end_s": None}]
+        analysis_checkpoint_s = cond.get("analysis_checkpoint_s")
         study_id = cond.get("study_id")
     else:
         schedule = [{"mode": "vc", "start_s": 0, "end_s": None, "engine_target_id": target_id}]
@@ -659,11 +663,18 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     vc_chunks = 0
     events = StudyEventBuffer(session_id, "meanvc", STUDY_APP_API_URL) if StudyEventBuffer else None
     speech = EnergySpeechTracker(16000) if EnergySpeechTracker else None
+    checkpoint = (InputSampleCheckpoint(analysis_checkpoint_s, 16000)
+                  if InputSampleCheckpoint and analysis_checkpoint_s else None)
     if events:
         events.add("stream_start", input_sample_rate_hz=16000,
                    source_sample_rate_hz=source_sr,
                    transmitted_sample_rate_hz=16000, model_bound_sample_rate_hz=24000,
-                   schedule=schedule, inference_chunk_samples=CHUNK)
+                   schedule=schedule, analysis_checkpoint_s=analysis_checkpoint_s,
+                   inference_chunk_samples=CHUNK)
+        if checkpoint:
+            events.add("analysis_checkpoint_requested",
+                       requested_start_s=checkpoint.threshold_s,
+                       requested_input_sample=checkpoint.requested_input_sample)
         for segment in schedule[1:]:
             events.add("route_switch_requested", requested_start_s=segment.get("start_s"),
                        requested_input_sample=int(float(segment.get("start_s") or 0) * 16000),
@@ -704,6 +715,13 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                     seg = active_segment(input_start / 16000.0)
                     processed_samples += len(chunk)
                     mode = seg.get("mode", "natural")
+                    if events:
+                        checkpoint_event = checkpoint.maybe_reach(input_start) if checkpoint else None
+                        if checkpoint_event:
+                            events.add("analysis_checkpoint_reached", **checkpoint_event,
+                                       transmitted_sample=transmitted_samples,
+                                       model_bound_sample=model_bound_samples,
+                                       route_mode=mode)
                     if events and current_mode != mode:
                         events.add("route_activated", from_mode=current_mode, to_mode=mode,
                                    input_sample=input_start,
@@ -812,6 +830,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                                    callbacks=control.get("callbacks"), samples=control.get("samples"),
                                    sample_rate_hz=control.get("sampleRateHz"),
                                    estimated_dropped_samples=control.get("estimatedDroppedSamples"),
+                                   timeline_gap_count=control.get("timelineGapCount"),
+                                   max_timeline_gap_samples=control.get("maxTimelineGapSamples"),
                                    detector=control.get("detector"))
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
                 break
@@ -881,7 +901,8 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
                    input_received_samples=received_samples,
                    transmitted_samples=transmitted_samples,
                    model_bound_samples=model_bound_samples,
-                   input_chunks=input_chunk_sequence, output_windows=chunk_count)
+                   input_chunks=input_chunk_sequence, output_windows=chunk_count,
+                   analysis_checkpoint_reached=(checkpoint.reached if checkpoint else None))
         await events.flush(force=True)
 
 

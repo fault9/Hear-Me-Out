@@ -1,0 +1,169 @@
+{
+  "schema": "hmo.obs-timing-validation.v1",
+  "pilot_id": "P02001",
+  "status": "clock_alignment_passed_boundary_audit_inconclusive",
+  "scope": {
+    "sessions": [
+      "P02001_R01_S03_A01",
+      "P02001_R01_S04_A01"
+    ],
+    "conditions": [
+      "vc_activation",
+      "vc_deactivation"
+    ],
+    "applicability": "Same participant station, browser audio configuration, microphone, and output path used for data collection. Recalibrate after hardware or browser audio-path changes."
+  },
+  "method": {
+    "independent_clock": "OBS Studio 32.2.1 mixed microphone and macOS audio at 48000 Hz",
+    "participant_reference": "participant_raw.wav projected by the first persisted browser capture timestamp",
+    "assistant_reference": "model.wav decoded packets reconstructed on the AudioContext schedule using persisted decoded sample counts, output latency, and queue underruns",
+    "alignment": "Waveform cross-correlation at 8000 Hz over automatic speech intervals; session medians are used so sessions receive equal calibration weight.",
+    "acceptance_criteria": {
+      "browser_proxy_crosswalk_complete": true,
+      "minimum_matches_per_source_per_session": 3,
+      "maximum_within_source_alignment_mad_ms": 10.0,
+      "maximum_between_session_relative_offset_range_ms": 25.0,
+      "maximum_capture_gap_total_ms": 50.0,
+      "maximum_capture_gap_ms": 10.0,
+      "speech_boundary_tolerance_ms": 100.0,
+      "minimum_speech_boundary_precision": 0.9,
+      "minimum_speech_boundary_recall": 0.9,
+      "maximum_mean_onset_error_ms": 100.0,
+      "maximum_mean_offset_error_ms": 100.0
+    }
+  },
+  "sessions": [
+    {
+      "session_id": "P02001_R01_S03_A01",
+      "condition": "vc_activation",
+      "participant_alignment": {
+        "matches": 12,
+        "median_obs_offset_ms": 8865.45,
+        "median_absolute_deviation_ms": 0.12
+      },
+      "assistant_alignment": {
+        "matches": 13,
+        "median_obs_offset_ms": 9220.29,
+        "median_absolute_deviation_ms": 0.04
+      },
+      "relative_assistant_minus_participant_offset_ms": 354.84,
+      "capture_integrity": {
+        "browser_proxy_crosswalk_complete": true,
+        "missing_at_proxy": 0,
+        "missing_at_client": 0,
+        "gap_count": 2,
+        "total_gap_ms": 16.0,
+        "max_gap_ms": 8.0,
+        "legacy_browser_estimate_samples": 2176
+      },
+      "playback_integrity": {
+        "queue_underrun_count": 31,
+        "queue_underrun_total_ms": 757.333333344377,
+        "queue_underrun_max_ms": 272.00000000038926,
+        "audible_boundary_underrun_count": 8,
+        "audible_boundary_underrun_total_ms": 186.666666667,
+        "audible_boundary_underrun_max_ms": 48.0,
+        "audible_boundary_definition": "Gap greater than 2 ms with preceding or following decoded-packet RMS at least 0.008",
+        "underruns_reproduced_in_obs_alignment": true
+      },
+      "route_integrity": {
+        "expected": ["natural", "vc"],
+        "observed_input": ["natural", "vc"],
+        "observed_transmitted": ["natural", "vc"],
+        "activation_lag_ms": 56.0
+      }
+    },
+    {
+      "session_id": "P02001_R01_S04_A01",
+      "condition": "vc_deactivation",
+      "participant_alignment": {
+        "matches": 11,
+        "median_obs_offset_ms": 9531.12,
+        "median_absolute_deviation_ms": 0.12
+      },
+      "assistant_alignment": {
+        "matches": 9,
+        "median_obs_offset_ms": 9899.08,
+        "median_absolute_deviation_ms": 0.04
+      },
+      "relative_assistant_minus_participant_offset_ms": 367.96,
+      "capture_integrity": {
+        "browser_proxy_crosswalk_complete": true,
+        "missing_at_proxy": 0,
+        "missing_at_client": 0,
+        "gap_count": 2,
+        "total_gap_ms": 16.0,
+        "max_gap_ms": 8.0,
+        "legacy_browser_estimate_samples": 3200
+      },
+      "playback_integrity": {
+        "queue_underrun_count": 49,
+        "queue_underrun_total_ms": 672.0000000007752,
+        "queue_underrun_max_ms": 53.333333333348776,
+        "audible_boundary_underrun_count": 1,
+        "audible_boundary_underrun_total_ms": 18.666666667,
+        "audible_boundary_underrun_max_ms": 18.666666667,
+        "audible_boundary_definition": "Gap greater than 2 ms with preceding or following decoded-packet RMS at least 0.008",
+        "underruns_reproduced_in_obs_alignment": true
+      },
+      "route_integrity": {
+        "expected": ["vc", "natural"],
+        "observed_input": ["vc", "natural"],
+        "observed_transmitted": ["vc", "natural"],
+        "activation_lag_ms": 56.0
+      }
+    }
+  ],
+  "calibration": {
+    "participant_capture_latency_correction_ms": 361.4,
+    "calculation": "Mean of the two session-level relative offsets (354.84 and 367.96 ms)",
+    "between_session_range_ms": 13.12,
+    "result": "passed"
+  },
+  "boundary_validation": {
+    "status": "inconclusive_reference_granularity",
+    "automatic_detector": "20 ms RMS frames with 250 ms hangover",
+    "human_reference": {
+      "annotator_count": 1,
+      "format": "Praat interval tiers named participant and assistant; non-speech intervals left blank",
+      "activation_textgrid": "docs/study-artifacts/timing-validation/annotations/P02001_vc_activation.TextGrid",
+      "deactivation_textgrid": "docs/study-artifacts/timing-validation/annotations/P02001_vc_deactivation.TextGrid"
+    },
+    "strict_interval_results": {
+      "method": "One-to-one intervals count as matches only when both onset and offset are within the prespecified 100 ms tolerance. Automatic intervals outside the OBS recording and right-censored human intervals are excluded.",
+      "vc_activation": {
+        "participant": {"automatic": 21, "human": 18, "matches": 4, "precision": 0.1904761905, "recall": 0.2222222222, "mean_onset_error_ms": 69.2479, "mean_offset_error_ms": 53.5918},
+        "assistant": {"automatic": 16, "human": 11, "matches": 6, "precision": 0.375, "recall": 0.5454545455, "mean_onset_error_ms": 48.8539, "mean_offset_error_ms": 54.0078}
+      },
+      "vc_deactivation": {
+        "participant": {"automatic": 23, "human": 12, "matches": 1, "precision": 0.0434782609, "recall": 0.0833333333, "mean_onset_error_ms": 79.83, "mean_offset_error_ms": 55.8201},
+        "assistant": {"automatic": 14, "human": 11, "matches": 6, "precision": 0.4285714286, "recall": 0.5454545455, "mean_onset_error_ms": 43.6536, "mean_offset_error_ms": 37.3815}
+      }
+    },
+    "speech_activity_frame_audit": {
+      "frame_ms": 20,
+      "note": "Frame agreement is substantially stronger than exact interval agreement. The human reference grouped some conversational turns more coarsely than the detector's acoustic speech runs, and the annotator subsequently reported that the manual boundaries were not careful enough to serve as ground truth. This secondary audit therefore cannot establish whether individual disagreements came from the detector or the reference annotation.",
+      "vc_activation": {
+        "participant": {"precision": 0.98, "recall": 0.836, "f1": 0.902, "intersection_over_union": 0.822},
+        "assistant": {"precision": 0.994, "recall": 0.889, "f1": 0.938, "intersection_over_union": 0.884}
+      },
+      "vc_deactivation": {
+        "participant": {"precision": 0.985, "recall": 0.839, "f1": 0.906, "intersection_over_union": 0.829},
+        "assistant": {"precision": 0.994, "recall": 0.931, "f1": 0.962, "intersection_over_union": 0.926}
+      }
+    },
+    "conclusion": "Clock alignment is validated. The available manual labels are not sufficiently reliable to validate or reject the automatic speech boundaries, so exact onsets and offsets remain estimated. Do not use automatic overlap, barge-in, or stop-latency measures as confirmatory outcomes until a carefully annotated reference meets frozen acceptance criteria. The persisted raw audio and timelines permit this post-hoc validation without recollecting participant data."
+  },
+  "source_hashes_sha256": {
+    "vc_activation.mov": "81482635780ecea46bf939f956fae7cd24ffa9ef01e892fd5032b1776a134e41",
+    "vc_deactivation.mov": "152c4f3723ea8b3dbb57d3e17c4b2483d8a6883ac198385139ac0321129d8919",
+    "vc_activation.wav": "b4a90dca312b9b096059a3f288542472e4b88f3c8be89cad3e4f20ff2394cde0",
+    "vc_deactivation.wav": "2a61b7015034b1b63082635c80f92086e2029a7998b9bb2052c2751bc5e6ddec",
+    "P02001_vc_activation.TextGrid": "209bdeb0f0069fd21ceac32d1f211e88d46c2bd73ae0285ae939aa6d6da212d9",
+    "P02001_vc_deactivation.TextGrid": "5e07734755d7bdd47c6b1eb5b2e768fee2ddea125a773124699b5149438bc54d",
+    "P02001_R01_S03_A01/client_timeline.json": "7fb9635d065cbb344f76e042202c54186e55da2a41e48f36fc1a45120058c32a",
+    "P02001_R01_S03_A01/manifest.final.json": "10c65e7b7bbf2f9ef93cb925c3afec51bb79da7a5d4f67663acca19e2d2a52c4",
+    "P02001_R01_S04_A01/client_timeline.json": "56a4c18c02026d6878530e029b23684aba8b78ee5940eb9e4d325ed27d2f861c",
+    "P02001_R01_S04_A01/manifest.final.json": "df5be392194be65bef649cd8752ed69b1452f356de5ad6bf377681f79a19331d"
+  }
+}

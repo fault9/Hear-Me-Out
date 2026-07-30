@@ -19,9 +19,10 @@ reuses or overwrites a previous recording.
 The VC proxy records monotonic event sequence numbers and sample offsets for
 route requests and activations, input chunks, transmitted windows, model-bound
 packets, output packets, estimated speech boundaries, and inference failures.
-The browser separately reports ScriptProcessor callback gaps as an estimate;
-these are labelled `reported_by: browser` and must not be described as
-server-observed packet loss.
+The browser records every ScriptProcessor chunk's sample boundary. Post-hoc
+timing reconstruction derives capture gaps from those persisted boundaries and
+keeps the browser's legacy callback-jitter estimate only as a diagnostic. These
+gaps must not be described as server-observed packet loss.
 
 ## Timing timelines
 
@@ -53,6 +54,32 @@ labelled `estimated_pending_validation`; use `validate_intervals` with manually
 annotated pilot intervals before treating these measures as validated outcomes.
 New captures store packet RMS on the browser AudioContext schedule. Existing
 captures fall back to RMS over the silence-preserving `model.wav` artifact.
+The technical pilot froze microphone-continuity limits at 50 ms total and 10 ms
+for any single sample-boundary gap per scenario. The pilot observed complete
+browser/proxy packet crosswalks, at most 40 ms total, and at most 8 ms per gap.
+Both the derived gaps and the browser-reported estimate remain in `timing.json`;
+only the derived sample-boundary values determine automatic timing eligibility.
+Exceeding either limit creates an auditable warning and blocks confirmatory
+timing use, but does not by itself discard questionnaire, outcome, transcript,
+or VC-quality data from an otherwise valid session.
+Playback diagnostics separately report all queue underruns and the subset whose
+preceding or following decoded packet contains speech energy. This prevents
+silent-packet timing gaps from being described as audible interruptions while
+retaining every persisted gap for audit.
+Independent OBS alignment of the activation and deactivation pilot sessions
+found participant/assistant relative offsets of 354.84 ms and 367.96 ms. The
+study therefore freezes their session-balanced mean, 361.4 ms, as the browser
+input-capture latency correction. Timing analysis subtracts this value from the
+participant-produced timeline while retaining the uncorrected capture timeline
+for route and proxy diagnostics. This calibration corrects clock alignment. The
+separate Praat audit found strong 20 ms speech-activity agreement (F1
+0.902--0.962), but the annotator reported that the manual boundaries grouped
+some turns too coarsely to serve as reliable onset-and-offset ground truth. The
+boundary audit is therefore inconclusive rather than evidence that the RMS
+detector failed. Automatic overlap, barge-in, and stop-latency measures remain
+estimated rather than confirmatory until checked against a careful reference.
+The raw tracks and linked timelines permit that post-hoc validation without
+recollecting participant data.
 The saved `model.wav` decodes the complete PersonaPlex Opus stream in one pass
 and prepends its first scheduled browser-playback offset. Per-packet network and
 decode gaps remain available in `client_timeline.json` but are not reintroduced
@@ -66,8 +93,17 @@ first transcribes recordings and derives interaction timing, then automatically
 runs VC quality. It is backend-owned and continues if the admin page is closed.
 The general transcript includes raw participant text, browser-clock participant
 segments with route labels, the transmitted transcript, and PersonaPlex turns.
+Whole-session Whisper inference uses its absolute long-form segment output;
+timestamp tokens from separate long-form windows must not be concatenated and
+decoded as one local 0-30 second clock. Transcript schema changes trigger an
+automatic preprocessing rerun so older unversioned outputs are not reused.
 Whole-recording metrics must not be used as a route-specific VC comparison for
 switching sessions.
+
+Session manifests freeze the HMO revision, external X-VC revision, pinned
+PersonaPlex revision, and VC-quality revision. The admin ZIP export is assembled
+on disk and includes the database-derived study, allocation, run, questionnaire,
+session, and analysis records together with the participant artifact tree.
 
 The optional `VC-quality rerun` control runs the repository's real
 `vc_quality.py` for one session, one participant, or the full study. It:
@@ -142,7 +178,12 @@ complete natural route, and ranks converted UTMOS with WER and target SIM as
 guardrails. The same source session may be used for both target directories so
 candidate comparisons share one source signal. Confirm finalists by blinded
 listening; do not select on the ranking alone. Temporary renders are deleted
-and neither candidate WAVs nor study data are modified.
+and neither candidate WAVs nor study data are modified. Every run saves a
+timestamped `target_screening_results.json` and
+`target_screening_summary.csv` under
+`/workspace/data/target-screening/results`. Use separate candidate directories
+for the feminine- and masculine-presenting screens. Add `--out <new-directory>`
+only when the converted render WAVs must also be retained.
 
 Browser processing choices such as echo cancellation cannot be reconstructed
 from one saved raw track. Compare those settings using separate technical-pilot

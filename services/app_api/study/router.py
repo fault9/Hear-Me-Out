@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import io
 import json
 import logging
 import os
 import shutil
+import tempfile
 import threading
 import time
 import zipfile
@@ -26,6 +26,7 @@ from typing import Optional
 from fastapi import (APIRouter, Depends, File, Form, Header, HTTPException,
                      UploadFile)
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 
 from .analysis import get_runner
 from .artifacts import (append_jsonl, atomic_write_bytes, atomic_write_json,
@@ -174,6 +175,8 @@ def _initialize_session_artifacts(backend, session: dict, study_snapshot: dict,
         "scenario_attempt": session.get("scenario_attempt"),
         "condition": session["voice_condition"],
         "voice_schedule": schedule,
+        "analysis_checkpoint_s": (
+            (study_snapshot.get("settings") or {}).get("analysis_checkpoint_s")),
         "sample_rates_hz": {"input": 16000, "transmitted": 16000, "model_bound": 24000},
     }
     atomic_write_json(out_dir / "session_config.json", session_config, exclusive=True)
@@ -351,7 +354,16 @@ def build_study_router() -> APIRouter:
 
     @router.delete("/studies/{study_id}", dependencies=[Depends(require_admin)])
     async def archive_study(study_id: int):
+        if not backend.get_study(study_id):
+            raise HTTPException(status_code=404, detail="Unknown study")
         backend.archive_study(study_id, True)
+        return {"ok": True}
+
+    @router.post("/studies/{study_id}/restore", dependencies=[Depends(require_admin)])
+    async def restore_study(study_id: int):
+        if not backend.get_study(study_id):
+            raise HTTPException(status_code=404, detail="Unknown study")
+        backend.archive_study(study_id, False)
         return {"ok": True}
 
     @router.put("/studies/{study_id}/questionnaires", dependencies=[Depends(require_admin)])
@@ -512,24 +524,44 @@ def build_study_router() -> APIRouter:
         }
         if format == "json":
             return JSONResponse(data)
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr("study_export.json", json.dumps(data, indent=2))
-            z.writestr("study_config.yaml", yaml_io.dump_yaml(yaml_io.study_to_dict(backend, study_id)))
-            study_sessions_dir = SESSIONS_DIR / f"study_{study_id}"
-            if study_sessions_dir.exists():
-                for p in study_sessions_dir.rglob("*"):
-                    if p.is_file():
-                        z.write(p, str(p.relative_to(STUDY_DATA_DIR)))
-        buf.seek(0)
-        return StreamingResponse(buf, media_type="application/zip",
-                                 headers={"Content-Disposition": f"attachment; filename=study{study_id}_export.zip"})
+        archive = tempfile.NamedTemporaryFile(
+            prefix=f"study{study_id}_export_", suffix=".zip",
+            dir=STUDY_DATA_DIR, delete=False,
+        )
+        archive_path = Path(archive.name)
+        archive.close()
+        try:
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("study_export.json", json.dumps(data, indent=2))
+                z.writestr(
+                    "study_config.yaml",
+                    yaml_io.dump_yaml(yaml_io.study_to_dict(backend, study_id)),
+                )
+                study_sessions_dir = SESSIONS_DIR / f"study_{study_id}"
+                if study_sessions_dir.exists():
+                    for p in study_sessions_dir.rglob("*"):
+                        if p.is_file():
+                            z.write(p, str(p.relative_to(STUDY_DATA_DIR)))
+        except Exception:
+            archive_path.unlink(missing_ok=True)
+            raise
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename=f"study{study_id}_export.zip",
+            background=BackgroundTask(archive_path.unlink, missing_ok=True),
+        )
 
     # ============================ PARTICIPANT ============================
     def _require_participant(code: str) -> dict:
         p = backend.get_participant_by_code(code)
         if not p:
             raise HTTPException(status_code=404, detail="Invalid code")
+        study = backend.get_study(p["study_id"])
+        if not study:
+            raise HTTPException(status_code=404, detail="Study not found")
+        if study.get("archived"):
+            raise HTTPException(status_code=410, detail="This study is no longer active")
         return p
 
     @router.post("/enter")
@@ -624,10 +656,10 @@ def build_study_router() -> APIRouter:
                 status_code=409,
                 detail="Complete the background questionnaire before starting a scenario")
         run = _guard_window(p["participant_id"])
-        if not backend.has_answer(p["participant_id"], run["id"], "background"):
+        if not backend.has_answer(p["participant_id"], run["id"], "audio_check"):
             raise HTTPException(
                 status_code=409,
-                detail="Complete consent, audio check, and background questions before a scenario")
+                detail="Complete consent, background questions, and the audio check before a scenario")
         scenario = _resolve_scenario(backend, p, body.scenario_order)
         engine = _scenario_engine(scenario) or (
             ((study or {}).get("settings") or {}).get("study_engine"))
@@ -740,6 +772,9 @@ def build_study_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="Unknown participant/study")
         snapshot = session.get("config_snapshot") or {}
         scenario = snapshot.get("scenario") or _resolve_scenario(backend, p, session["scenario_order"])
+        snapshot_study = snapshot.get("study") or {}
+        checkpoint_s = ((snapshot_study.get("settings") or {})
+                        .get("analysis_checkpoint_s"))
         targets = {t["ref"]: t for t in backend.list_targets(session["study_id"])}
 
         schedule = session.get("schedule") or scenario.get("voice_schedule") or [
@@ -762,6 +797,7 @@ def build_study_router() -> APIRouter:
         return {"text_prompt": text_prompt,
                 "voice_prompt": scenario.get("voice_prompt") or default_voice,
                 "schedule": resolved,
+                "analysis_checkpoint_s": checkpoint_s,
                 "study_id": session["study_id"]}
 
     @router.post("/session/{session_id}/save")

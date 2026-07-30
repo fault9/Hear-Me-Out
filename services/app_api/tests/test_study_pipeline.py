@@ -12,6 +12,7 @@ import yaml
 
 from study.artifacts import atomic_write_bytes, sha256_file
 from study.analysis import _participant_segments
+from study.analysis_worker import _needs_preprocessing
 from study.counterbalance import (CounterbalanceError, allocate, balance_report,
                                   choose_balanced_target, resolve_target_assignment,
                                   validate_and_compile)
@@ -20,9 +21,12 @@ from study.playback import (ensure_stable_converted_interaction_playback,
                             ensure_transition_playback)
 from study.questionnaires import missing_required_answers
 from study.storage import SqliteBackend
-from study.timing_analysis import (assistant_intervals, prepare_timing_analysis,
-                                   speech_intervals, validate_intervals)
-from study.transcript_timing import whisper_timestamp_segments
+from study.timing_analysis import (assistant_intervals, capture_gap_diagnostics,
+                                   playback_underrun_diagnostics,
+                                   prepare_timing_analysis, speech_intervals,
+                                   validate_intervals)
+from study.transcript_timing import (whisper_longform_segments,
+                                     whisper_timestamp_segments)
 from study.transition_analysis import prepare_session_analysis, route_regions
 
 
@@ -304,6 +308,15 @@ class PilotTemplateTests(unittest.TestCase):
 
     def test_playback_is_limited_to_three_plays(self):
         protocol = self._protocol()
+        self.assertEqual(protocol["settings"]["analysis_checkpoint_s"], 45)
+        self.assertEqual(
+            protocol["settings"]["target_manifest"]["masculine_presenting"]["speaker_id"],
+            "p279",
+        )
+        self.assertEqual(
+            protocol["settings"]["target_manifest"]["feminine_presenting"]["speaker_id"],
+            "p229",
+        )
         self.assertIn("practice recording",
                       protocol["settings"]["practice_intro_text"].lower())
         self.assertIn("four main study conversations",
@@ -528,7 +541,7 @@ class TransitionTests(unittest.TestCase):
             self.assertEqual(repeated, output)
             self.assertEqual(repeated_manifest["output"]["sha256"], manifest["output"]["sha256"])
 
-    def test_stable_converted_playback_is_speech_only_and_duration_limited(self):
+    def test_stable_converted_playback_uses_participant_utterances_and_is_limited(self):
         events = [
             {"event": "route_activated", "event_sequence": 1,
              "from_mode": None, "to_mode": "vc", "input_sample": 0,
@@ -554,7 +567,9 @@ class TransitionTests(unittest.TestCase):
             output, manifest = ensure_stable_converted_playback(
                 session, root, max_duration_s=2)
             self.assertEqual(manifest["selection"],
-                             "rms_speech_from_stable_converted")
+                             "rms_utterances_from_stable_converted")
+            self.assertEqual(manifest["join_silence_ms"], 300)
+            self.assertGreater(manifest["utterance_count"], 0)
             with wave.open(str(output), "rb") as wav:
                 self.assertLessEqual(wav.getnframes(), 2 * wav.getframerate())
 
@@ -676,10 +691,104 @@ class TimingAnalysisTests(unittest.TestCase):
                 result["integrity"]["playback"]["decode_strategy"], "serialized")
             self.assertEqual(
                 result["integrity"]["playback"]["initial_jitter_buffer_ms"], 120)
-            self.assertEqual(result["schema"], "hmo.timing-analysis.v2")
+            self.assertEqual(result["schema"], "hmo.timing-analysis.v4")
             self.assertEqual(result["status"], "estimated_pending_validation")
             self.assertTrue((session_dir / "analysis" / "timing" / "analysis-1"
                              / "timing.json").exists())
+
+    def test_participant_capture_latency_correction_is_frozen_in_timing_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session_dir = root / "sessions" / "attempt"
+            session_dir.mkdir(parents=True)
+            write_wav(session_dir / "participant_raw.wav", seconds=1)
+            timeline = {
+                "capture": {
+                    "sample_rate_hz": 16000,
+                    "chunks": [{
+                        "chunk_sequence": 1,
+                        "capture_start_sample": 0,
+                        "sample_count": 16000,
+                        "timeline_start_ms": 500,
+                    }],
+                },
+                "playback": {"assistant_packets": []},
+            }
+            (session_dir / "client_timeline.json").write_text(json.dumps(timeline))
+            (session_dir / "events.jsonl").write_text("")
+            session = {
+                "session_id": "s1",
+                "files": {"participant_raw": "sessions/attempt/participant_raw.wav"},
+                "config_snapshot": {"study": {"settings": {"timing": {
+                    "participant_capture_latency_correction_ms": 361.4,
+                }}}},
+            }
+
+            result = prepare_timing_analysis(session, root, "analysis-1")
+
+        self.assertEqual(
+            result["integrity"]["participant_capture_latency_correction_ms"],
+            361.4,
+        )
+        self.assertAlmostEqual(result["participant_intervals"][0]["start_ms"], 138.6)
+
+    def test_validated_boundary_configuration_unlocks_confirmatory_status(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session_dir = root / "sessions" / "attempt"
+            session_dir.mkdir(parents=True)
+            write_wav(session_dir / "participant_raw.wav", seconds=1)
+            (session_dir / "client_timeline.json").write_text(json.dumps({
+                "capture": {"sample_rate_hz": 16000, "chunks": [{
+                    "chunk_sequence": 1, "capture_start_sample": 0,
+                    "sample_count": 16000, "timeline_start_ms": 100,
+                }]},
+                "playback": {"assistant_packets": [{
+                    "packet_sequence": 1, "timeline_start_ms": 100,
+                    "timeline_end_ms": 1100, "rms": 0.1,
+                }]},
+            }))
+            (session_dir / "events.jsonl").write_text("")
+            session = {
+                "session_id": "s1",
+                "files": {"participant_raw": "sessions/attempt/participant_raw.wav"},
+                "config_snapshot": {"study": {"settings": {"timing": {
+                    "speech_boundary_validation": {
+                        "status": "validated", "tolerance_ms": 100,
+                        "artifact": "boundary-audit.json",
+                        "artifact_sha256": "abc123",
+                    },
+                }}}},
+            }
+
+            result = prepare_timing_analysis(session, root, "analysis-1")
+
+        self.assertEqual(result["status"], "validated")
+        self.assertEqual(
+            result["integrity"]["speech_boundary_validation"]["tolerance_ms"],
+            100,
+        )
+
+    def test_capture_gaps_use_sample_boundaries_not_legacy_callback_sum(self):
+        diagnostics = capture_gap_diagnostics({
+            "sample_rate_hz": 16000,
+            "estimated_dropped_samples": 2816,
+            "detector": "script_processor_playback_time",
+            "chunks": [
+                {"chunk_sequence": 1, "capture_start_sample": 0,
+                 "sample_count": 2048},
+                {"chunk_sequence": 2, "capture_start_sample": 2176,
+                 "sample_count": 2048},
+                {"chunk_sequence": 3, "capture_start_sample": 4224,
+                 "sample_count": 2048},
+            ],
+        })
+
+        self.assertEqual(diagnostics["gap_count"], 1)
+        self.assertEqual(diagnostics["total_gap_samples"], 128)
+        self.assertEqual(diagnostics["max_gap_ms"], 8)
+        self.assertEqual(
+            diagnostics["browser_reported_estimated_dropped_samples"], 2816)
 
     def test_assistant_silence_packets_do_not_become_speech(self):
         intervals = assistant_intervals({
@@ -715,8 +824,48 @@ class TimingAnalysisTests(unittest.TestCase):
         self.assertEqual(intervals[0]["detector"],
                          "model_wav_rms_playback_fallback")
 
+    def test_playback_underruns_distinguish_silent_and_audible_gaps(self):
+        diagnostics = playback_underrun_diagnostics({"assistant_packets": [
+            {"packet_sequence": 1, "timeline_start_ms": 0,
+             "underrun_ms": 0, "rms": 0.02},
+            {"packet_sequence": 2, "timeline_start_ms": 100,
+             "underrun_ms": 20, "rms": 0.0},
+            {"packet_sequence": 3, "timeline_start_ms": 200,
+             "underrun_ms": 30, "rms": 0.0},
+        ]})
+
+        self.assertEqual(diagnostics["all"]["count"], 2)
+        self.assertEqual(diagnostics["audible_boundaries"]["count"], 1)
+        self.assertEqual(diagnostics["audible_boundaries"]["total_ms"], 20)
+
 
 class TranscriptTimingTests(unittest.TestCase):
+    def test_old_unversioned_transcript_is_reprocessed(self):
+        self.assertTrue(_needs_preprocessing({
+            "metrics": {},
+            "transcript": {"participant_segments": []},
+        }))
+
+    def test_whisper_longform_segments_keep_absolute_session_timestamps(self):
+        class Tokenizer:
+            @staticmethod
+            def decode(tokens, skip_special_tokens=True):
+                del skip_special_tokens
+                return " ".join({10: "first", 11: "second"}[token]
+                                for token in tokens)
+
+        result = whisper_longform_segments({
+            "segments": [[
+                {"start": 2.0, "end": 4.0, "tokens": [10]},
+                {"start": 38.0, "end": 40.0, "tokens": [11]},
+            ]],
+        }, Tokenizer())
+
+        self.assertEqual(result, [
+            {"text": "first", "start": 2.0, "end": 4.0},
+            {"text": "second", "start": 38.0, "end": 40.0},
+        ])
+
     def test_whisper_timestamp_tokens_become_ordered_segments(self):
         class Tokenizer:
             all_special_ids = [1, 2, 999]

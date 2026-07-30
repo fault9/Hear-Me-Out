@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import os
+import re
 import statistics
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pilot_calibration import (
@@ -29,6 +33,18 @@ from pilot_calibration import (
 def _median(values):
     usable = [float(value) for value in values if isinstance(value, (int, float))]
     return statistics.median(usable) if usable else None
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._") or "screening"
 
 
 def _candidate_wavs(directory: Path) -> list[Path]:
@@ -342,10 +358,15 @@ def _score_candidates(
 def _print_report(session_id: str, result: dict) -> None:
     candidate_width = max(24, max(len(row["candidate"]) for row in result["summaries"]))
     width = candidate_width + 78
+    profile = production_stream_profile()
     print("\n" + "=" * width)
     print(f"X-VC TARGET SCREENING: {session_id}")
     print("Source: participant.wav from a natural route")
-    print("Production stream only: current=120, smooth=20, future=100, gate=0.008")
+    print(
+        "Production stream only: "
+        f"current={profile['current_ms']}, smooth={profile['smooth_ms']}, "
+        f"future={profile['future_ms']}, gate={profile['silence_gate_rms']}"
+    )
     print("-" * width)
     print(
         f"{'#':>2} {'Candidate':<{candidate_width}} {'N':>3} {'Target':>7} "
@@ -393,12 +414,80 @@ def _run(args: argparse.Namespace, work_dir: Path) -> dict:
     )
     result.update({
         "schema": "hmo.xvc-target-screening.v1",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "session_id": args.session,
         "source_track": str(prepared["source_track"]),
+        "source_track_sha256": _sha256(prepared["source_track"]),
         "candidate_root": str(candidate_root),
+        "candidate_files": [
+            {
+                "candidate": str(candidate.relative_to(candidate_root)),
+                "sha256": _sha256(candidate),
+            }
+            for candidate in candidates
+        ],
+        "production_profile": production_stream_profile(),
+        "selection_settings": {
+            "guard_s": args.guard_s,
+            "padding_s": args.padding_s,
+            "min_utterance_s": args.min_utterance_s,
+            "max_utterances": args.max_utterances,
+            "max_candidates": args.max_candidates,
+            "quality_device": args.quality_device,
+            "xvc_directory": str(Path(args.xvc_dir).expanduser().resolve()),
+            "xvc_config": str(Path(
+                args.xvc_config
+                or Path(args.xvc_dir).expanduser() / "configs" / "xvc.yaml"
+            ).resolve()),
+            "xvc_checkpoint": str(Path(
+                args.xvc_ckpt
+                or Path(args.xvc_dir).expanduser() / "ckpts" / "xvc.pt"
+            ).resolve()),
+            "xvc_device": args.xvc_device,
+        },
     })
     _print_report(args.session, result)
     return result
+
+
+def _write_result_bundle(
+    result: dict, directory: Path, *, create_directory: bool = True
+) -> None:
+    if create_directory:
+        directory.mkdir(parents=True, exist_ok=False)
+    elif not directory.is_dir():
+        raise FileNotFoundError(f"result directory does not exist: {directory}")
+    (directory / "target_screening_results.json").write_text(
+        json.dumps(result, indent=2), encoding="utf-8"
+    )
+    columns = (
+        "rank", "candidate", "utterances", "target_utmos", "converted_utmos",
+        "utmos_delta", "sim_median", "wer", "sim_all", "rtf_median", "wer_error",
+    )
+    with (directory / "target_screening_summary.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(result["summaries"])
+
+
+def _default_result_directory(args: argparse.Namespace) -> Path:
+    root = (
+        Path(args.results_dir).expanduser().resolve()
+        if args.results_dir
+        else Path(args.data_root).expanduser().resolve().parent
+        / "target-screening" / "results"
+    )
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    category = _safe_name(Path(args.candidates).expanduser().resolve().name)
+    base_name = _safe_name(f"{timestamp}_{args.session}_{category}")
+    destination = root / base_name
+    suffix = 2
+    while destination.exists():
+        destination = root / f"{base_name}_{suffix}"
+        suffix += 1
+    return destination
 
 
 def main() -> None:
@@ -424,6 +513,13 @@ def main() -> None:
     parser.add_argument("--quality-device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--out", help="retain renders and JSON here; directory must not exist")
+    parser.add_argument(
+        "--results-dir",
+        help=(
+            "directory for timestamped JSON/CSV result bundles; defaults to "
+            "<data-root parent>/target-screening/results"
+        ),
+    )
     args = parser.parse_args()
     if args.max_candidates is not None and args.max_candidates <= 0:
         parser.error("--max-candidates must be > 0")
@@ -439,16 +535,20 @@ def main() -> None:
     )
     if args.out:
         work_dir = Path(args.out).expanduser().resolve()
-        work_dir.mkdir(parents=True, exist_ok=False)
+        if work_dir.exists():
+            raise FileExistsError(f"output directory already exists: {work_dir}")
+        work_dir.parent.mkdir(parents=True, exist_ok=True)
+        work_dir.mkdir()
         result = _run(args, work_dir)
-        (work_dir / "target_screening_results.json").write_text(
-            json.dumps(result, indent=2), encoding="utf-8"
-        )
+        _write_result_bundle(result, work_dir, create_directory=False)
         print(f"Retained target-screening artifacts: {work_dir}")
     else:
         with tempfile.TemporaryDirectory(prefix="hmo-target-screening-") as temporary:
-            _run(args, Path(temporary))
+            result = _run(args, Path(temporary))
+        result_dir = _default_result_directory(args)
+        _write_result_bundle(result, result_dir)
         print("Temporary renders removed; study data and candidate WAVs were unchanged.")
+        print(f"Saved target-screening results: {result_dir}")
 
 
 if __name__ == "__main__":

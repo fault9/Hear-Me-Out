@@ -6,6 +6,13 @@ import { ItemListEditor } from "@/components/admin/ItemListEditor"
 
 type Preset = "natural" | "vc" | "natural_vc" | "vc_natural"
 
+const PRESET_LABELS: Record<Preset, string> = {
+  natural: "Natural only",
+  vc: "VC only",
+  natural_vc: "Natural → VC",
+  vc_natural: "VC → Natural",
+}
+
 function scheduleFromPreset(preset: Preset, engine: string, target: string, switchS: number): any[] {
   if (preset === "natural") return [{ mode: "natural", start_s: 0, end_s: null }]
   if (preset === "vc") return [{ mode: "vc", engine, target_ref: target, start_s: 0, end_s: null }]
@@ -31,10 +38,31 @@ function presetFromSchedule(schedule: any[]): { preset: Preset; engine: string; 
   return { preset: first === "natural" ? "natural_vc" : "vc_natural", engine, target, switchS }
 }
 
-export function ScenarioEditor({ token, studyId, scenario, index, voices, engines, targets, onChange, onGoToTargets, onCopyPostToAll }: any) {
+function describeSchedule(schedule: any[]): string {
+  const parsed = presetFromSchedule(schedule)
+  const suffix = parsed.preset === "natural_vc" || parsed.preset === "vc_natural"
+    ? ` at ${parsed.switchS} s`
+    : ""
+  return `${PRESET_LABELS[parsed.preset]}${suffix}`
+}
+
+export function ScenarioEditor({ token, studyId, scenario, index, voices, engines, targets,
+  counterbalancing, onChange, onGoToTargets, onCopyPostToAll }: any) {
   const [open, setOpen] = useState(false)
   const card = scenario.scenario_card || {}
   const init = useMemo(() => presetFromSchedule(scenario.voice_schedule), [scenario.id])
+  const conditions = counterbalancing?.conditions || {}
+  const variantSchedules = (counterbalancing?.variants || []).map((variant: any) => {
+    const conditionId = variant.condition_assignment?.[index + 1]
+    const condition = conditions[conditionId]
+    const schedule = Array.isArray(condition) ? condition : condition?.voice_schedule
+    return {
+      variantId: String(variant.id || ""),
+      conditionId: String(conditionId || ""),
+      schedule: Array.isArray(schedule) ? schedule : [],
+    }
+  }).filter((row: any) => row.variantId && row.conditionId && row.schedule.length)
+  const usesCounterbalancedSchedule = variantSchedules.length > 0
 
   const [title, setTitle] = useState(scenario.title || "")
   const [role, setRole] = useState(card.role || "")
@@ -78,7 +106,9 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
           extra_fields: extraFields.filter(f => f.label.trim()),
         },
         system_prompt: prompt, voice_prompt: voicePrompt, time_limit_s: Number(timeLimit),
-        voice_schedule: scheduleFromPreset(preset, engine, target, Number(switchS)),
+        voice_schedule: usesCounterbalancedSchedule
+          ? scenario.voice_schedule
+          : scheduleFromPreset(preset, engine, target, Number(switchS)),
         post_items: postItems,
       })
       onChange()
@@ -89,7 +119,11 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
     <div className="rounded-lg border">
       <button className="flex w-full items-center justify-between px-4 py-3 text-left" onClick={() => setOpen(o => !o)}>
         <span className="font-medium">{index + 1}. {title || "Untitled scenario"}</span>
-        <span className="text-xs text-muted-foreground">{preset.replace("_", "→")}{needsTarget ? ` · ${engine}` : ""}</span>
+        <span className="text-xs text-muted-foreground">
+          {usesCounterbalancedSchedule
+            ? "Assigned by counterbalancing"
+            : `${PRESET_LABELS[preset]}${needsTarget ? ` · ${engine}` : ""}`}
+        </span>
       </button>
       {open && (
         <div className="flex flex-col gap-3 border-t p-4">
@@ -131,32 +165,54 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
 
           <div className="rounded-md border p-3">
             <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Voice schedule</div>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Field label="Mode">
-                <Select value={preset} onChange={v => setPreset(v as Preset)}
-                  options={["natural", "vc", "natural_vc", "vc_natural"]}
-                  labels={{ natural: "Natural only", vc: "VC only", natural_vc: "Natural → VC", vc_natural: "VC → Natural" }} />
-              </Field>
-              {needsTarget && (
-                <Field label="Engine"><Select value={engine} onChange={v => { setEngine(v); setTarget("") }} options={engines} /></Field>
-              )}
-              {needsTarget && (
-                <Field label="Target voice">
-                  <Select value={target} onChange={setTarget}
-                    options={engineTargets.map((t: any) => t.ref)}
-                    labels={Object.fromEntries(engineTargets.map((t: any) => [t.ref, t.speaker_id]))}
-                    placeholder="Select voice" />
-                </Field>
-              )}
-              {needsSwitch && (
-                <Field label="Switch at (s)"><Input type="number" value={switchS} onChange={e => setSwitchS(Number(e.target.value))} /></Field>
-              )}
-            </div>
-            {needsTarget && engineTargets.length === 0 && (
-              <p className="mt-2 text-xs text-destructive">
-                No {engine} voices uploaded —{" "}
-                <button type="button" className="underline" onClick={onGoToTargets}>go to the Targets tab</button> to add one.
-              </p>
+            {usesCounterbalancedSchedule ? (
+              <div>
+                <div className="divide-y border-y text-sm">
+                  {variantSchedules.map((row: any) => (
+                    <div key={row.variantId} className="grid grid-cols-[4rem_minmax(0,1fr)_minmax(0,1fr)] gap-3 py-2">
+                      <span className="font-mono font-medium">{row.variantId}</span>
+                      <span>{row.conditionId.replaceAll("_", " ")}</span>
+                      <span className="text-muted-foreground">{describeSchedule(row.schedule)}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  The YAML assigns this schedule per counterbalance variant.
+                  {counterbalancing?.target_assignment
+                    ? " VC segments use the participant target assigned from the background questionnaire."
+                    : ""}
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <Field label="Mode">
+                    <Select value={preset} onChange={v => setPreset(v as Preset)}
+                      options={["natural", "vc", "natural_vc", "vc_natural"]}
+                      labels={PRESET_LABELS} />
+                  </Field>
+                  {needsTarget && (
+                    <Field label="Engine"><Select value={engine} onChange={v => { setEngine(v); setTarget("") }} options={engines} /></Field>
+                  )}
+                  {needsTarget && (
+                    <Field label="Target voice">
+                      <Select value={target} onChange={setTarget}
+                        options={engineTargets.map((t: any) => t.ref)}
+                        labels={Object.fromEntries(engineTargets.map((t: any) => [t.ref, t.speaker_id]))}
+                        placeholder="Select voice" />
+                    </Field>
+                  )}
+                  {needsSwitch && (
+                    <Field label="Switch at (s)"><Input type="number" value={switchS} onChange={e => setSwitchS(Number(e.target.value))} /></Field>
+                  )}
+                </div>
+                {needsTarget && engineTargets.length === 0 && (
+                  <p className="mt-2 text-xs text-destructive">
+                    No {engine} voices uploaded —{" "}
+                    <button type="button" className="underline" onClick={onGoToTargets}>go to the Targets tab</button> to add one.
+                  </p>
+                )}
+              </>
             )}
           </div>
 

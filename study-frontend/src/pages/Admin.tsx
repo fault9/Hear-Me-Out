@@ -13,6 +13,7 @@ export function Admin() {
   const [studies, setStudies] = useState<any[]>([])
   const [selected, setSelected] = useState<number | null>(null)
   const [newName, setNewName] = useState("")
+  const [showArchived, setShowArchived] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const loadStudies = useCallback(async (tok: string) => {
@@ -49,7 +50,12 @@ export function Admin() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6">
-      <h1 className="mb-6 text-2xl font-bold">Studies</h1>
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">Studies</h1>
+        <Button size="sm" variant="ghost" onClick={() => setShowArchived(value => !value)}>
+          {showArchived ? "Hide archived" : `Show archived (${studies.filter(s => s.archived).length})`}
+        </Button>
+      </div>
 
       <div className="mb-6 flex gap-2">
         <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder="New study name" />
@@ -63,7 +69,7 @@ export function Admin() {
       {err && <p className="mb-3 text-sm text-destructive">{err}</p>}
 
       <div className="flex flex-col gap-2">
-        {studies.map(s => (
+        {studies.filter(s => showArchived || !s.archived).map(s => (
           <div key={s.id} className="flex items-center justify-between rounded-lg border p-3">
             <div className="flex items-center gap-2">
               <button className="font-medium hover:underline" onClick={() => setSelected(s.id)}>{s.name}</button>
@@ -74,13 +80,23 @@ export function Admin() {
               <Button size="sm" variant="secondary" onClick={() => setSelected(s.id)}>Open</Button>
               {!s.archived && (
                 <Button size="sm" variant="ghost" onClick={async () => {
+                  if (!window.confirm(`Archive “${s.name}”? Participant codes for this study will stop working, but its data will be preserved.`)) return
                   await adminApi.archiveStudy(token, s.id); loadStudies(token)
                 }}>Archive</Button>
+              )}
+              {s.archived && (
+                <Button size="sm" variant="ghost" onClick={async () => {
+                  await adminApi.restoreStudy(token, s.id); loadStudies(token)
+                }}>Restore</Button>
               )}
             </div>
           </div>
         ))}
-        {studies.length === 0 && <p className="text-sm text-muted-foreground">No studies yet — create one above.</p>}
+        {studies.filter(s => showArchived || !s.archived).length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {studies.length ? "No active studies." : "No studies yet — create one above."}
+          </p>
+        )}
       </div>
     </div>
   )

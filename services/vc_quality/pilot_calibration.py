@@ -38,7 +38,16 @@ EVENT_SAMPLE_RATE = 16000
 
 def production_stream_profile() -> dict:
     """The single X-VC streaming profile used by the study."""
-    return {"id": "production_stream", "mode": "streaming"}
+    return {
+        "id": "production_stream",
+        "mode": "streaming",
+        "chunk_ms": 2400,
+        "current_ms": 120,
+        "smooth_ms": 20,
+        "future_ms": 100,
+        "silence_gate_rms": 0.008,
+        "silence_hangover_ms": 360,
+    }
 
 
 def diagnostic_profiles() -> list[dict]:

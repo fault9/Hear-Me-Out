@@ -36,8 +36,8 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-from study.analysis import (STUDY_DATA_DIR, _session_paths, run_session_analysis,
-                            status_path)  # noqa: E402
+from study.analysis import (STUDY_DATA_DIR, TRANSCRIPT_SCHEMA, _session_paths,
+                            run_session_analysis, status_path)  # noqa: E402
 from study.session_scope import analysis_eligible  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 from study.technical_validity import (TECHNICAL_VALIDITY_SCHEMA,
@@ -119,6 +119,7 @@ def _needs_preprocessing(session: dict) -> bool:
     transcript = session.get("transcript") or {}
     return (session.get("metrics") is None
             or not isinstance(transcript, dict)
+            or transcript.get("schema") != TRANSCRIPT_SCHEMA
             or "participant_segments" not in transcript)
 
 
@@ -202,9 +203,11 @@ def main() -> None:
                     key: validity[key] for key in (
                         "schema", "evaluated_at", "status",
                         "valid_for_condition_analysis",
+                        "valid_for_post_checkpoint_analysis",
                         "valid_for_timing_reconstruction",
                         "valid_for_confirmatory_timing_analysis",
-                        "speech_boundary_validation_status", "failures", "warnings",
+                        "speech_boundary_validation_status", "analysis_checkpoint_s",
+                        "failures", "warnings",
                     )
                 }
                 backend.update_session_artifacts(s["session_id"], manifest)

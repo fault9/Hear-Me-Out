@@ -114,11 +114,6 @@ export function QuestionnaireForm({
   return (
     <div className="mx-auto w-full max-w-2xl">
       <h2 className="mb-5 text-2xl font-semibold tracking-tight">{title}</h2>
-      {showErrors && hasErrors && (
-        <div role="alert" className="mb-5 rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-base text-destructive">
-          You have not filled in all required answers. Please review the highlighted questions.
-        </div>
-      )}
       <div className="flex flex-col gap-6">
         {items.filter(it => visible(it, answers)).map(item => {
           const err = showErrors ? fieldError(item, answers) : null
@@ -152,7 +147,16 @@ export function QuestionnaireForm({
         })}
         {items.length === 0 && <p className="text-base text-muted-foreground">No questions.</p>}
       </div>
-      <div className="mt-6 flex justify-end">
+      <div className="mt-6 flex flex-col items-stretch gap-3 sm:items-end">
+        {showErrors && hasErrors && (
+          <div
+            role="alert"
+            aria-live="polite"
+            className="w-full rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-base text-destructive sm:max-w-md"
+          >
+            You have not filled in all required answers. Please review the highlighted questions.
+          </div>
+        )}
         <Button className="text-base" onClick={submit} disabled={busy}>{busy ? "Saving…" : submitLabel}</Button>
       </div>
     </div>

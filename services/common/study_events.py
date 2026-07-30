@@ -12,6 +12,32 @@ import aiohttp
 import numpy as np
 
 
+class InputSampleCheckpoint:
+    """Emit one deterministic checkpoint at the first input boundary on/after a threshold."""
+
+    def __init__(self, threshold_s: float, sample_rate_hz: int):
+        self.threshold_s = float(threshold_s)
+        self.sample_rate_hz = int(sample_rate_hz)
+        if self.threshold_s <= 0 or self.sample_rate_hz <= 0:
+            raise ValueError("checkpoint threshold and sample rate must be positive")
+        self.requested_input_sample = round(self.threshold_s * self.sample_rate_hz)
+        self.reached = False
+
+    def maybe_reach(self, input_start_sample: int) -> dict | None:
+        input_sample = int(input_start_sample)
+        if self.reached or input_sample < self.requested_input_sample:
+            return None
+        self.reached = True
+        return {
+            "requested_start_s": self.threshold_s,
+            "requested_input_sample": self.requested_input_sample,
+            "input_sample": input_sample,
+            "checkpoint_lag_ms": (
+                input_sample - self.requested_input_sample
+            ) * 1000.0 / self.sample_rate_hz,
+        }
+
+
 class StudyEventBuffer:
     def __init__(self, session_id: str, engine: str, app_api_url: str):
         self.session_id = session_id

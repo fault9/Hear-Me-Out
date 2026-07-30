@@ -30,6 +30,7 @@ def technical_validity_summary(session: dict) -> dict:
     if isinstance(summary, dict):
         return summary
     return {"status": "pending", "valid_for_condition_analysis": False,
+            "valid_for_post_checkpoint_analysis": False,
             "failures": [], "warnings": []}
 
 

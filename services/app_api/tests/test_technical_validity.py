@@ -53,7 +53,8 @@ class TechnicalValidityTests(unittest.TestCase):
                 "engine": "xvc",
                 "study": {"settings": {"technical_validity": {
                     "max_route_activation_lag_ms": 250,
-                    "max_estimated_dropped_samples": 0,
+                    "max_capture_gap_total_ms": 50,
+                    "max_capture_gap_ms": 10,
                 }}},
             },
             "artifact_manifest": {
@@ -69,6 +70,12 @@ class TechnicalValidityTests(unittest.TestCase):
             "status": "estimated_pending_validation",
             "integrity": {
                 "estimated_dropped_samples": 0,
+                "capture_gaps": {
+                    "gap_count": 0,
+                    "total_gap_ms": 0,
+                    "max_gap_ms": 0,
+                    "browser_reported_estimated_dropped_samples": 0,
+                },
                 "crosswalk_complete": True,
                 "valid_for_timing": True,
                 "playback": {"queue_underrun_count": 0,
@@ -90,7 +97,61 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertFalse(result["valid_for_confirmatory_timing_analysis"])
         self.assertEqual(result["failures"], [])
 
-    def test_inference_failure_and_dropped_samples_invalidate_session(self):
+    def test_matched_analysis_checkpoint_is_a_separate_post_checkpoint_gate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session, timing = self._fixture(root)
+            session["config_snapshot"]["study"]["settings"][
+                "analysis_checkpoint_s"
+            ] = 0.1
+            event_path = root / session["artifact_manifest"]["artifacts"]["events"]["path"]
+            rows = [json.loads(line) for line in event_path.read_text().splitlines()]
+            rows.insert(1, {
+                "event": "analysis_checkpoint_requested",
+                "event_sequence": 2,
+                "requested_start_s": 0.1,
+                "requested_input_sample": 1600,
+            })
+            rows.insert(-1, {
+                "event": "analysis_checkpoint_reached",
+                "event_sequence": 7,
+                "requested_start_s": 0.1,
+                "requested_input_sample": 1600,
+                "input_sample": 1664,
+                "checkpoint_lag_ms": 4.0,
+                "route_mode": "vc",
+            })
+            for sequence, row in enumerate(rows, start=1):
+                row["event_sequence"] = sequence
+            event_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            session["artifact_manifest"]["artifacts"]["events"] = file_record(
+                event_path, relative_to=root)
+
+            result = evaluate_technical_validity(session, root, timing)
+
+        self.assertTrue(result["valid_for_condition_analysis"])
+        self.assertTrue(result["valid_for_post_checkpoint_analysis"])
+        self.assertEqual(result["analysis_checkpoint_s"], 0.1)
+        self.assertTrue(result["checks"]["analysis_checkpoint_reached"]["passed"])
+
+    def test_short_session_remains_valid_but_has_no_post_checkpoint_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._fixture(Path(temp))
+            session["config_snapshot"]["study"]["settings"][
+                "analysis_checkpoint_s"
+            ] = 45
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertTrue(result["valid_for_condition_analysis"])
+        self.assertFalse(result["valid_for_post_checkpoint_analysis"])
+        self.assertFalse(result["checks"]["analysis_checkpoint_reached"]["passed"])
+        self.assertNotIn(
+            "analysis_checkpoint_reached",
+            {warning["code"] for warning in result["warnings"]},
+        )
+
+    def test_inference_failure_invalidates_session_and_capture_gap_is_scoped_to_timing(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             session, timing = self._fixture(root)
@@ -101,14 +162,57 @@ class TechnicalValidityTests(unittest.TestCase):
             event_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
             session["artifact_manifest"]["artifacts"]["events"] = file_record(
                 event_path, relative_to=root)
-            timing["integrity"]["estimated_dropped_samples"] = 80
+            timing["integrity"]["estimated_dropped_samples"] = 960
+            timing["integrity"]["capture_gaps"] = {
+                "gap_count": 2,
+                "total_gap_ms": 60,
+                "max_gap_ms": 12,
+                "browser_reported_estimated_dropped_samples": 4096,
+            }
 
             result = evaluate_technical_validity(session, root, timing)
 
-        codes = {failure["code"] for failure in result["failures"]}
+        failure_codes = {failure["code"] for failure in result["failures"]}
+        warning_codes = {warning["code"] for warning in result["warnings"]}
         self.assertEqual(result["status"], "invalid")
-        self.assertIn("xvc_inference_failures", codes)
-        self.assertIn("microphone_capture_drops", codes)
+        self.assertIn("xvc_inference_failures", failure_codes)
+        self.assertNotIn("microphone_capture_drops", failure_codes)
+        self.assertIn("microphone_capture_drops", warning_codes)
+
+    def test_large_capture_gap_preserves_condition_data_but_blocks_timing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._fixture(Path(temp))
+            timing["integrity"]["capture_gaps"] = {
+                "gap_count": 2,
+                "total_gap_ms": 60,
+                "max_gap_ms": 12,
+                "browser_reported_estimated_dropped_samples": 4096,
+            }
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertEqual(result["status"], "valid")
+        self.assertTrue(result["valid_for_condition_analysis"])
+        self.assertFalse(result["valid_for_timing_reconstruction"])
+        self.assertIn("microphone_capture_drops",
+                      {warning["code"] for warning in result["warnings"]})
+
+    def test_small_sample_boundary_gaps_pass_despite_legacy_overestimate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._fixture(Path(temp))
+            timing["integrity"]["estimated_dropped_samples"] = 640
+            timing["integrity"]["capture_gaps"] = {
+                "gap_count": 5,
+                "total_gap_ms": 40,
+                "max_gap_ms": 8,
+                "browser_reported_estimated_dropped_samples": 3200,
+            }
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertEqual(result["status"], "valid")
+        self.assertTrue(result["valid_for_condition_analysis"])
+        self.assertTrue(result["valid_for_timing_reconstruction"])
 
     def test_rerunnable_posthoc_failure_is_a_warning_not_session_exclusion(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -68,6 +68,7 @@ export function StudyEditor({ token, studyId, onBack }: {
           {scenarios.map((sc, i) => (
             <ScenarioEditor key={sc.id} token={token} studyId={studyId} scenario={sc} index={i}
               voices={voices} engines={engines} targets={targets} onChange={reload}
+              counterbalancing={study.settings?.counterbalancing || {}}
               onGoToTargets={() => setTab("targets")} onCopyPostToAll={copyPostToAll} />
           ))}
           <Button variant="secondary" onClick={async () => {
@@ -381,13 +382,22 @@ function DataPanel({ token, studyId }: any) {
           rows={sessions.map(s => {
             const excluded = s.analysis_eligible === false
             const validity = s.technical_validity?.status || "pending"
+            const reviewLabels = validity === "valid" ? [
+              s.technical_validity?.valid_for_timing_reconstruction === false
+                ? "timing review" : null,
+              s.technical_validity?.valid_for_post_checkpoint_analysis === false
+                ? "no post-checkpoint window" : null,
+            ].filter(Boolean) : []
+            const validityLabel = reviewLabels.length
+              ? `valid; ${reviewLabels.join("; ")}`
+              : validity
             const dataset = s.analysis_included
               ? "included"
               : (s.analysis_exclusion_reasons || []).join(", ") || "pending"
             return [s.session_id, s.voice_condition,
               excluded ? "excluded" : (s.metrics ? "analyzed" : "pending"),
               excluded ? "excluded" : (s.vc_quality_status || "pending"),
-              excluded ? "excluded" : validity,
+              excluded ? "excluded" : validityLabel,
               dataset]
           })} />
       </div>

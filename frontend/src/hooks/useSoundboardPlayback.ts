@@ -85,6 +85,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
   const recRef = useRef<Recorder | null>(null)
   const activeSlotRef = useRef<Slot | null>(null)
   const startedAtRef = useRef<number>(0)
+  const sourceEndedAtRef = useRef<number>(0)
   const clipDurationRef = useRef<number>(0)
 
   // Local monitor: whether the researcher hears the clip through their own
@@ -122,7 +123,9 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
     // Un-suppress the live mic so normal conversation can resume.
     ws.setMicMuted(false)
     if (slot) {
-      const endMs = performance.now()
+      // The encoder receives a short flush grace period after the source ends.
+      // Audit timing must use the audio-source boundary, not teardown time.
+      const endMs = sourceEndedAtRef.current || performance.now()
       onPlayEnd?.(slot, {
         slotId: slot.id,
         startMs: startedAtRef.current,
@@ -130,6 +133,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
         clipDurationMs: clipDurationRef.current,
       })
     }
+    sourceEndedAtRef.current = 0
     activeSlotRef.current = null
     setPlayingSlotId(null)
   }, [onPlayEnd, teardown, ws])
@@ -219,6 +223,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
       srcRef.current = src
       recRef.current = recorder
       activeSlotRef.current = slot
+      sourceEndedAtRef.current = 0
       clipDurationRef.current = clipDurationMs
 
       // Suppress the live mic BEFORE starting the encoder so no mic packets
@@ -288,6 +293,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
       // onended fires when the buffer plays through; we give the encoder a
       // tiny grace period to flush any partial frame before stopping.
       src.onended = () => {
+        sourceEndedAtRef.current = performance.now()
         // Small flush window so the encoder emits the last frame's page.
         setTimeout(() => { void stop() }, 60)
       }

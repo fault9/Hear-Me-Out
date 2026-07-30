@@ -37,9 +37,9 @@ def _wav_bytes(samples: np.ndarray, rate: int) -> bytes:
     return output.getvalue()
 
 
-def _condense_speech(samples: np.ndarray, start: int, end: int, rate: int,
-                     threshold: float) -> np.ndarray:
-    """Keep RMS-active speech runs while removing long conversational silence."""
+def _speech_pieces(samples: np.ndarray, start: int, end: int, rate: int,
+                   threshold: float) -> list[np.ndarray]:
+    """Return complete RMS-active runs with a small amount of acoustic context."""
     start = max(0, min(len(samples), start))
     end = max(start, min(len(samples), end))
     frame = max(1, round(rate * 0.02))
@@ -50,7 +50,7 @@ def _condense_speech(samples: np.ndarray, start: int, end: int, rate: int,
         if rms >= threshold:
             active_frames.append(frame_index)
     if not active_frames:
-        return np.zeros(0, dtype="<i2")
+        return []
 
     # Join activity separated by at most 200 ms and retain 100 ms of context.
     max_gap = max(1, round(0.2 / 0.02))
@@ -65,13 +65,25 @@ def _condense_speech(samples: np.ndarray, start: int, end: int, rate: int,
     runs.append((first, previous + 1))
 
     pieces = []
-    join_silence = np.zeros(round(rate * 0.08), dtype="<i2")
-    for index, (first_frame, last_frame) in enumerate(runs):
+    for first_frame, last_frame in runs:
         run_start = max(start, start + first_frame * frame - pad)
         run_end = min(end, start + last_frame * frame + pad)
+        pieces.append(samples[run_start:run_end])
+    return pieces
+
+
+def _condense_speech(samples: np.ndarray, start: int, end: int, rate: int,
+                     threshold: float, join_silence_s: float = 0.08) -> np.ndarray:
+    """Keep RMS-active speech runs while removing long conversational silence."""
+    runs = _speech_pieces(samples, start, end, rate, threshold)
+    if not runs:
+        return np.zeros(0, dtype="<i2")
+    join_silence = np.zeros(round(rate * join_silence_s), dtype="<i2")
+    pieces = []
+    for index, run in enumerate(runs):
         if index:
             pieces.append(join_silence)
-        pieces.append(samples[run_start:run_end])
+        pieces.append(run)
     return np.concatenate(pieces) if pieces else np.zeros(0, dtype="<i2")
 
 
@@ -160,7 +172,7 @@ def ensure_transition_playback(session: dict, data_root: Path,
 
 def ensure_stable_converted_playback(session: dict, data_root: Path,
                                      max_duration_s: int = 30) -> tuple[Path, dict]:
-    """Create a participant-speech excerpt from an all-VC study condition."""
+    """Create a participant-only utterance excerpt from an all-VC condition."""
     files = session.get("files") or {}
     relative_source = files.get("participant")
     if not relative_source:
@@ -172,7 +184,7 @@ def ensure_stable_converted_playback(session: dict, data_root: Path,
 
     duration_limit = max(1, min(int(max_duration_s or 30), 30))
     output_dir = source.parent / "derived" / "playback"
-    output = output_dir / f"stable_converted_{duration_limit}s.wav"
+    output = output_dir / f"stable_converted_participant_v2_{duration_limit}s.wav"
     manifest_path = output.with_suffix(".json")
     if output.exists() and manifest_path.exists():
         return output, json.loads(manifest_path.read_text())
@@ -186,22 +198,52 @@ def ensure_stable_converted_playback(session: dict, data_root: Path,
         "STUDY_PLAYBACK_RMS_THRESHOLD",
         os.environ.get("STUDY_VAD_RMS_THRESHOLD", "0.012"),
     ))
-    speech = _condense_speech(samples, 0, len(samples), rate, threshold)
-    if not len(speech):
+    utterances = _speech_pieces(samples, 0, len(samples), rate, threshold)
+    if not utterances:
         raise ValueError("eligible converted participant speech was not found")
-    clip = speech[:round(duration_limit * rate)]
+
+    # Use complete participant utterances where possible. A fixed short pause
+    # keeps the excerpt listenable without preserving long assistant turns.
+    max_samples = round(duration_limit * rate)
+    join_silence_ms = 300
+    separator = np.zeros(round(rate * join_silence_ms / 1000), dtype="<i2")
+    selected: list[np.ndarray] = []
+    selected_utterances = 0
+    selected_speech_samples = 0
+    total_samples = 0
+    for utterance in utterances:
+        required = len(utterance) + (len(separator) if selected else 0)
+        if total_samples + required > max_samples:
+            if not selected:
+                # A single unusually long turn is still preferable to no clip.
+                selected.append(utterance[:max_samples])
+                selected_utterances = 1
+                selected_speech_samples = max_samples
+                total_samples = max_samples
+            break
+        if selected:
+            selected.append(separator)
+            total_samples += len(separator)
+        selected.append(utterance)
+        selected_utterances += 1
+        selected_speech_samples += len(utterance)
+        total_samples += len(utterance)
+    clip = np.concatenate(selected)
 
     if not output.exists():
         atomic_write_bytes(output, _wav_bytes(clip, rate), exclusive=True)
     manifest = {
         "schema": "hmo.playback-clip.v1",
         "session_id": session.get("session_id"),
-        "selection": "rms_speech_from_stable_converted",
+        "selection": "rms_utterances_from_stable_converted",
         "max_duration_s": duration_limit,
         "rms_threshold": threshold,
+        "utterance_count": selected_utterances,
+        "join_silence_ms": join_silence_ms,
         "source_audio": file_record(source, relative_to=data_root),
         "source_events": file_record(events_path, relative_to=data_root),
-        "converted_speech_s": len(clip) / rate,
+        "converted_speech_s": selected_speech_samples / rate,
+        "output_duration_s": len(clip) / rate,
         "output": file_record(output, relative_to=data_root),
     }
     atomic_write_json(manifest_path, manifest, exclusive=True)

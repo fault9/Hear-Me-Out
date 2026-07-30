@@ -87,8 +87,13 @@ export function useMeanVCPipeline(
   const resumeRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sendRawRef = useRef(sendRawAudio);
   sendRawRef.current = sendRawAudio;
-  const captureStatsRef = useRef({ callbacks: 0, samples: 0, estimatedDroppedSamples: 0 });
-  const expectedPlaybackTimeRef = useRef<number | null>(null);
+  const captureStatsRef = useRef({
+    callbacks: 0,
+    samples: 0,
+    estimatedDroppedSamples: 0,
+    timelineGapCount: 0,
+    maxTimelineGapSamples: 0,
+  });
   const captureSampleRateRef = useRef(16000);
   const firstPlaybackTimeRef = useRef<number | null>(null);
   const captureSequenceRef = useRef(0);
@@ -153,8 +158,13 @@ export function useMeanVCPipeline(
     processorRef.current = processor;
     sendingRef.current = false;
     originalPcmRef.current = [];
-    captureStatsRef.current = { callbacks: 0, samples: 0, estimatedDroppedSamples: 0 };
-    expectedPlaybackTimeRef.current = null;
+    captureStatsRef.current = {
+      callbacks: 0,
+      samples: 0,
+      estimatedDroppedSamples: 0,
+      timelineGapCount: 0,
+      maxTimelineGapSamples: 0,
+    };
     firstPlaybackTimeRef.current = null;
     captureSequenceRef.current = 0;
     timelineEpochPerfMsRef.current = null;
@@ -168,7 +178,7 @@ export function useMeanVCPipeline(
       setState(s => ({ ...s, amplitude: Math.sqrt(sum / ch.length) }));
       if (!sendingRef.current) return;
       if (firstPlaybackTimeRef.current === null) firstPlaybackTimeRef.current = e.playbackTime;
-      const expected = expectedPlaybackTimeRef.current;
+      const hasPreviousPart = originalPcmRef.current.length > 0;
       const previousEnd = originalPcmRef.current.length
         ? originalPcmRef.current[originalPcmRef.current.length - 1].startSample
           + originalPcmRef.current[originalPcmRef.current.length - 1].pcm.length
@@ -177,12 +187,15 @@ export function useMeanVCPipeline(
         previousEnd,
         Math.round((e.playbackTime - firstPlaybackTimeRef.current) * audioCtx.sampleRate),
       );
-      if (expected !== null && e.playbackTime > expected) {
-        captureStatsRef.current.estimatedDroppedSamples += Math.max(
-          0, Math.round((e.playbackTime - expected) * audioCtx.sampleRate),
+      const timelineGapSamples = hasPreviousPart ? clockStart - previousEnd : 0;
+      if (timelineGapSamples > 0) {
+        captureStatsRef.current.estimatedDroppedSamples += timelineGapSamples;
+        captureStatsRef.current.timelineGapCount += 1;
+        captureStatsRef.current.maxTimelineGapSamples = Math.max(
+          captureStatsRef.current.maxTimelineGapSamples,
+          timelineGapSamples,
         );
       }
-      expectedPlaybackTimeRef.current = e.playbackTime + ch.length / audioCtx.sampleRate;
       captureStatsRef.current.callbacks += 1;
       captureStatsRef.current.samples += ch.length;
       // Snapshot the raw mic (inputBuffer is reused, so copy) before sending.
@@ -249,12 +262,15 @@ export function useMeanVCPipeline(
 
   // Phase 2: open the gate so mic PCM starts flowing to the proxy.
   const getClientCaptureTimeline = useCallback(() => ({
-    schema: "hmo.client-capture-timeline.v1",
+    schema: "hmo.client-capture-timeline.v2",
     epoch: "personaplex_handshake_performance_now",
     sample_rate_hz: captureSampleRateRef.current,
     callbacks: captureStatsRef.current.callbacks,
     captured_samples: captureStatsRef.current.samples,
     estimated_dropped_samples: captureStatsRef.current.estimatedDroppedSamples,
+    timeline_gap_count: captureStatsRef.current.timelineGapCount,
+    max_timeline_gap_samples: captureStatsRef.current.maxTimelineGapSamples,
+    detector: "sample_timeline_boundary_gap",
     chunks: captureTimelineRef.current,
   }), []);
 

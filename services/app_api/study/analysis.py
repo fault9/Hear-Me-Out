@@ -21,6 +21,7 @@ from .artifacts import atomic_write_json
 from .transition_analysis import read_events, route_regions
 
 logger = logging.getLogger(__name__)
+TRANSCRIPT_SCHEMA = "hmo.study-transcript.v2"
 
 # metrics.py lives one level up (services/app_api/); make it importable.
 _APP_API_DIR = str(Path(__file__).resolve().parents[1])
@@ -36,7 +37,11 @@ def run_session_analysis(session_id: str, converted_wav: str | None,
     from .storage import get_backend
 
     backend = get_backend()
-    transcript = {"model": model_transcript or [], "participant": None}
+    transcript = {
+        "schema": TRANSCRIPT_SCHEMA,
+        "model": model_transcript or [],
+        "participant": None,
+    }
     metrics = None
     audiobox = False
 

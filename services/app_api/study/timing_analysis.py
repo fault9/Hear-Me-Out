@@ -14,7 +14,7 @@ import numpy as np
 from .artifacts import atomic_write_json, file_record
 from .transition_analysis import read_events
 
-TIMING_SCHEMA = "hmo.timing-analysis.v2"
+TIMING_SCHEMA = "hmo.timing-analysis.v4"
 
 
 def _mono_float(path: Path) -> tuple[int, np.ndarray]:
@@ -122,6 +122,47 @@ def assistant_intervals(playback: dict, *, model_audio: np.ndarray | None = None
     return intervals
 
 
+def playback_underrun_diagnostics(playback: dict, *, speech_threshold: float = 0.008,
+                                  minimum_gap_ms: float = 2.0) -> dict:
+    """Separate queue gaps in silent packets from potentially audible gaps."""
+    packets = sorted(
+        playback.get("assistant_packets") or [],
+        key=lambda row: float(row.get("timeline_start_ms") or 0.0),
+    )
+    gaps: list[dict[str, float | int | bool]] = []
+    for index, packet in enumerate(packets):
+        gap_ms = float(packet.get("underrun_ms") or 0.0)
+        if gap_ms <= minimum_gap_ms:
+            continue
+        previous_rms = float(packets[index - 1].get("rms") or 0.0) if index else 0.0
+        current_rms = float(packet.get("rms") or 0.0)
+        gaps.append({
+            "packet_sequence": int(packet.get("packet_sequence") or 0),
+            "timeline_start_ms": float(packet.get("timeline_start_ms") or 0.0),
+            "gap_ms": gap_ms,
+            "previous_rms": previous_rms,
+            "current_rms": current_rms,
+            "audible_boundary": (
+                previous_rms >= speech_threshold or current_rms >= speech_threshold),
+        })
+    audible = [row for row in gaps if row["audible_boundary"]]
+    return {
+        "minimum_gap_ms": minimum_gap_ms,
+        "speech_rms_threshold": speech_threshold,
+        "all": {
+            "count": len(gaps),
+            "total_ms": sum(float(row["gap_ms"]) for row in gaps),
+            "max_ms": max((float(row["gap_ms"]) for row in gaps), default=0.0),
+        },
+        "audible_boundaries": {
+            "count": len(audible),
+            "total_ms": sum(float(row["gap_ms"]) for row in audible),
+            "max_ms": max((float(row["gap_ms"]) for row in audible), default=0.0),
+        },
+        "gaps": gaps,
+    }
+
+
 def _overlaps(participant: list[dict], assistant: list[dict], minimum_ms: float) -> list[dict]:
     rows = []
     for p_index, p in enumerate(participant):
@@ -152,7 +193,8 @@ def _barge_ins(participant: list[dict], assistant: list[dict]) -> list[dict]:
     return rows
 
 
-def _route_switches(events: list[dict], chunks: dict[int, dict]) -> list[dict]:
+def _route_switches(events: list[dict], chunks: dict[int, dict],
+                    participant_capture_latency_ms: float = 0.0) -> list[dict]:
     input_chunks = [row for row in events if row.get("event") == "input_chunk"]
     switches = []
     for event in events:
@@ -172,10 +214,60 @@ def _route_switches(events: list[dict], chunks: dict[int, dict]) -> list[dict]:
         switches.append({
             "from_mode": event.get("from_mode"), "to_mode": event.get("to_mode"),
             "proxy_input_sample": sample, "browser_chunk_sequence": sequence or None,
-            "participant_timeline_ms": timeline_ms,
+            "capture_timeline_ms": timeline_ms,
+            "participant_timeline_ms": (
+                timeline_ms - participant_capture_latency_ms
+                if timeline_ms is not None else None),
             "requested_start_s": event.get("requested_start_s"),
         })
     return switches
+
+
+def capture_gap_diagnostics(capture: dict) -> dict:
+    """Measure discontinuities from persisted sample boundaries.
+
+    Older clients summed every positive AudioContext callback fluctuation and
+    therefore overestimated missing audio when late and early callbacks
+    alternated. Sample boundaries are the auditable source of truth because the
+    raw WAV is assembled on this same timeline.
+    """
+    chunks = sorted(
+        capture.get("chunks") or [],
+        key=lambda row: int(row.get("chunk_sequence") or 0),
+    )
+    gaps: list[dict[str, int]] = []
+    overlap_samples = 0
+    for previous, current in zip(chunks, chunks[1:]):
+        expected = (int(previous.get("capture_start_sample") or 0)
+                    + int(previous.get("sample_count") or 0))
+        observed = int(current.get("capture_start_sample") or 0)
+        difference = observed - expected
+        if difference > 0:
+            gaps.append({
+                "after_chunk_sequence": int(previous.get("chunk_sequence") or 0),
+                "before_chunk_sequence": int(current.get("chunk_sequence") or 0),
+                "samples": difference,
+            })
+        elif difference < 0:
+            overlap_samples += -difference
+
+    sample_rate = int(capture.get("sample_rate_hz") or 16000)
+    total = sum(row["samples"] for row in gaps)
+    maximum = max((row["samples"] for row in gaps), default=0)
+    return {
+        "detector": "sample_timeline_boundary_gap",
+        "sample_rate_hz": sample_rate,
+        "gap_count": len(gaps),
+        "total_gap_samples": total,
+        "max_gap_samples": maximum,
+        "total_gap_ms": total * 1000.0 / sample_rate,
+        "max_gap_ms": maximum * 1000.0 / sample_rate,
+        "overlap_samples": overlap_samples,
+        "gaps": gaps,
+        "browser_reported_estimated_dropped_samples": capture.get(
+            "estimated_dropped_samples"),
+        "browser_detector": capture.get("detector"),
+    }
 
 
 def validate_intervals(automatic: list[dict], human: list[dict],
@@ -222,12 +314,27 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
     events = read_events(events_path)
     capture = client.get("capture") or {}
     playback = client.get("playback") or {}
+    capture_gaps = capture_gap_diagnostics(capture)
+    snapshot = session.get("config_snapshot") or {}
+    study = snapshot.get("study") or {}
+    timing_settings = ((study.get("settings") or {}).get("timing") or {})
+    participant_capture_latency_ms = float(
+        timing_settings.get("participant_capture_latency_correction_ms") or 0.0)
+    boundary_validation = timing_settings.get("speech_boundary_validation") or {}
+    timing_status = (
+        "validated"
+        if (boundary_validation.get("status") == "validated"
+            and boundary_validation.get("artifact")
+            and boundary_validation.get("artifact_sha256"))
+        else "estimated_pending_validation"
+    )
     chunks = {int(row["chunk_sequence"]): row for row in capture.get("chunks") or []}
     first_offset = next((float(row["timeline_start_ms"]) for row in capture.get("chunks") or []
                          if row.get("timeline_start_ms") is not None), 0.0)
     sample_rate, raw = _mono_float(raw_path)
     participant = speech_intervals(
-        raw, sample_rate, offset_ms=first_offset,
+        raw, sample_rate,
+        offset_ms=first_offset - participant_capture_latency_ms,
         threshold=float(os.environ.get("STUDY_VAD_RMS_THRESHOLD", "0.012")),
     )
     model_path = data_root / files["model"] if files.get("model") else None
@@ -283,16 +390,19 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
         "queue_underrun_count": playback.get("queue_underrun_count"),
         "queue_underrun_total_ms": playback.get("queue_underrun_total_ms"),
         "queue_underrun_max_ms": playback.get("queue_underrun_max_ms"),
+        "underrun_diagnostics": playback_underrun_diagnostics(
+            playback, speech_threshold=assistant_threshold),
     }
     overlaps = _overlaps(participant, assistant, 200.0)
     barge_ins = _barge_ins(participant, assistant)
     result: dict[str, Any] = {
         "schema": TIMING_SCHEMA, "analysis_id": analysis_id,
         "session_id": session.get("session_id"),
-        "status": "estimated_pending_validation",
+        "status": timing_status,
         "participant_intervals": participant, "assistant_intervals": assistant,
         "overlaps": overlaps, "barge_ins": barge_ins,
-        "route_switches": _route_switches(events, chunks),
+        "route_switches": _route_switches(
+            events, chunks, participant_capture_latency_ms),
         "summary": {
             "participant_speech_intervals": len(participant),
             "assistant_speech_intervals": len(assistant),
@@ -313,7 +423,15 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
             "playback_crosswalk_complete": playback_crosswalk_complete,
             "crosswalk_complete": (capture_crosswalk_complete
                                    and playback_crosswalk_complete),
-            "estimated_dropped_samples": capture.get("estimated_dropped_samples"),
+            # Compatibility alias: this is now derived from persisted sample
+            # boundaries rather than the legacy callback-jitter accumulator.
+            "estimated_dropped_samples": capture_gaps["total_gap_samples"],
+            "capture_gaps": capture_gaps,
+            "participant_capture_latency_correction_ms": (
+                participant_capture_latency_ms),
+            "clock_alignment_validation": (
+                timing_settings.get("clock_alignment_validation") or {}),
+            "speech_boundary_validation": boundary_validation,
             "playback": playback_diagnostics,
             "assistant_vad_rms_threshold": assistant_threshold,
             "valid_for_timing": bool(participant and assistant

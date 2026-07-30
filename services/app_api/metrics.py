@@ -13,7 +13,8 @@ matplotlib.use('Agg')  # Use non-interactive backend for server environments
 warnings.filterwarnings("ignore", message="Support for mismatched key_padding_mask and attn_mask")
 from matplotlib.patches import FancyBboxPatch
 import matplotlib.pyplot as plt
-from study.transcript_timing import whisper_timestamp_segments
+from study.transcript_timing import (whisper_longform_segments,
+                                     whisper_timestamp_segments)
 
 try:
     from audiobox_aesthetics.infer import initialize_predictor
@@ -81,17 +82,32 @@ def get_transcript_result(audio_path):
             audio, sampling_rate=16000, return_tensors="pt",
             truncation=False, padding="longest", return_attention_mask=True,
         )
+        is_longform = len(audio) > 30 * 16000
         with torch.no_grad():
             # Force English transcription (not language auto-detect / translation) so
             # results are deterministic regardless of what's spoken.
-            ids = model.generate(**inputs, return_timestamps=True,
-                                 language="en", task="transcribe")
-        text = processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
-        token_ids = ids[0].detach().cpu().tolist()
+            generated = model.generate(
+                **inputs,
+                return_timestamps=True,
+                return_segments=is_longform,
+                language="en",
+                task="transcribe",
+            )
+        if is_longform:
+            ids = generated.get("sequences") if isinstance(generated, dict) else None
+            segments = whisper_longform_segments(generated, processor.tokenizer)
+        else:
+            ids = generated
+            token_ids = ids[0].detach().cpu().tolist()
+            segments = whisper_timestamp_segments(
+                token_ids, processor.tokenizer, len(audio) / 16000)
+        if ids is not None:
+            text = processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        else:
+            text = " ".join(segment["text"] for segment in segments).strip()
         return {
             "text": text,
-            "segments": whisper_timestamp_segments(
-                token_ids, processor.tokenizer, len(audio) / 16000),
+            "segments": segments,
             "status": "complete",
             "error": None,
         }

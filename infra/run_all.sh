@@ -255,6 +255,22 @@ export PERSONAPLEX_PROXY_PORT="${PERSONAPLEX_PROXY_PORT:-8000}"
 export MEANVC_SV_CKPT="${MEANVC_SV_CKPT:-$WORKSPACE/models/meanvc-sv/wavlm_large_finetune.pth}"
 export SPEAKER_VERIFICATION_ROOT="${SPEAKER_VERIFICATION_ROOT:-$WORKSPACE}"
 
+# Freeze external engine revisions into every immutable session manifest. The
+# HMO revision is discovered by app-api itself; these dependencies live outside
+# this repository or are pinned as a uv git source.
+if [ "$VC_ENGINE" = "xvc" ]; then
+    export XVC_DIR="${XVC_DIR:-$WORKSPACE/X-VC}"
+    if [ -z "$XVC_GIT_COMMIT" ] && [ -d "$XVC_DIR/.git" ]; then
+        XVC_GIT_COMMIT="$(git -C "$XVC_DIR" rev-parse HEAD 2>/dev/null || true)"
+        export XVC_GIT_COMMIT
+    fi
+fi
+if [ -z "$PERSONAPLEX_VERSION" ]; then
+    PERSONAPLEX_VERSION="$(sed -n 's/.*moshi-personaplex.*rev = "\([^"]*\)".*/\1/p' \
+        "$SERVICES/personaplex/pyproject.toml" | head -1)"
+    export PERSONAPLEX_VERSION
+fi
+
 echo -e "${DIM}────────────────────────────────────────────────────${NC}"
 
 # --- Speech LM :8000 ---

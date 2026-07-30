@@ -9,7 +9,11 @@ if str(VC_QUALITY_DIR) not in sys.path:
     sys.path.insert(0, str(VC_QUALITY_DIR))
 
 from pilot_calibration import diagnostic_profiles, select_vc_utterances  # noqa: E402
-from target_screening import _candidate_wavs, select_natural_utterances  # noqa: E402
+from target_screening import (  # noqa: E402
+    _candidate_wavs,
+    _write_result_bundle,
+    select_natural_utterances,
+)
 
 
 class PilotCalibrationTests(unittest.TestCase):
@@ -19,7 +23,10 @@ class PilotCalibrationTests(unittest.TestCase):
             [profile["id"] for profile in profiles],
             ["observed", "offline", "production_stream"],
         )
-        self.assertEqual(profiles[-1], {"id": "production_stream", "mode": "streaming"})
+        self.assertEqual(profiles[-1]["id"], "production_stream")
+        self.assertEqual(profiles[-1]["mode"], "streaming")
+        self.assertEqual(profiles[-1]["current_ms"], 120)
+        self.assertEqual(profiles[-1]["silence_gate_rms"], 0.008)
 
     def test_target_screening_discovers_only_wavs_recursively(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -33,6 +40,36 @@ class PilotCalibrationTests(unittest.TestCase):
             self.assertEqual(
                 [path.name for path in _candidate_wavs(root)],
                 ["a.wav", "b.WAV"],
+            )
+
+    def test_target_screening_writes_json_and_csv_results(self):
+        result = {
+            "schema": "hmo.xvc-target-screening.v1",
+            "summaries": [{
+                "rank": 1,
+                "candidate": "target.wav",
+                "utterances": 2,
+                "target_utmos": 4.1,
+                "converted_utmos": 3.2,
+                "utmos_delta": -0.4,
+                "sim_median": 0.6,
+                "wer": 0.05,
+                "sim_all": 0.62,
+                "rtf_median": 0.17,
+                "wer_error": None,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "result"
+            _write_result_bundle(result, destination)
+
+            self.assertIn(
+                '"schema": "hmo.xvc-target-screening.v1"',
+                (destination / "target_screening_results.json").read_text(),
+            )
+            self.assertIn(
+                "1,target.wav,2,4.1,3.2,-0.4,0.6,0.05,0.62,0.17,",
+                (destination / "target_screening_summary.csv").read_text(),
             )
 
     def test_vc_utterances_use_guard_padding_and_route_mapping(self):
