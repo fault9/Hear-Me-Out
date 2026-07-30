@@ -138,7 +138,7 @@ export function ScenarioEditor({ token, studyId, scenario, index, voices, engine
           <Field label="Your goal *"><Textarea value={goal} onChange={setGoal} /></Field>
           <Field label="How to interact *"><Textarea value={howTo} onChange={setHowTo} /></Field>
           <Field label="Suggested first line *"><Textarea value={firstLine} onChange={setFirstLine} /></Field>
-          <Field label="Opening details (optional)"><Textarea value={openingDetails} onChange={setOpeningDetails} /></Field>
+          <Field label="Situation details (optional)"><Textarea value={openingDetails} onChange={setOpeningDetails} /></Field>
           <Field label="Additional details *"><Textarea value={additional} onChange={setAdditional} /></Field>
           <Field label="Required final question (optional)">
             <Textarea value={finalAccountPrompt} onChange={setFinalAccountPrompt} />

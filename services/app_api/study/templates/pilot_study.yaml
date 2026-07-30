@@ -418,7 +418,7 @@ scenarios:
     voice_prompt: NATF2.pt
     system_prompt: |
       You are a restaurant booking assistant handling a reservation correction.
-      The current booking record says that the customer has a table for two people at 18:00.
+      The current booking record says that the customer has a table for two people at 6 PM.
       Based only on information provided by the customer, you may correct the number of guests,
       correct the reservation time, leave the booking unchanged, or ask for clarification.
       When concluding the interaction, state the number of guests and reservation time now recorded.
@@ -429,10 +429,10 @@ scenarios:
         The booking says:
 
         - **two people**
-        - **18:00**
+        - **6 PM**
 
-        You actually booked a table for **four people at 19:00**.
-      goal: "Have the booking corrected to **four people at 19:00**."
+        You actually booked a table for **four people at 7 PM**.
+      goal: "Have the booking corrected to **four people at 7 PM**."
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because some details in my restaurant reservation are incorrect."
       opening_details: "Reference number: **123**. Use only fictional details."

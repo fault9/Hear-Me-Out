@@ -358,6 +358,11 @@ class PilotTemplateTests(unittest.TestCase):
             self.assertEqual(schedule[1]["start_s"], 45)
 
         self.assertEqual(protocol["scenarios"][0]["scenario_card"]["study_role"], "practice")
+        practice_text = yaml.safe_dump(protocol["scenarios"][0])
+        self.assertIn("6 PM", practice_text)
+        self.assertIn("7 PM", practice_text)
+        self.assertNotIn("18:00", practice_text)
+        self.assertNotIn("19:00", practice_text)
         self.assertTrue({"eligibility", "consent", "background", "audio_check", "post",
                          "pre_playback", "playback", "debrief"}.issubset(
                             protocol["questionnaires"]))

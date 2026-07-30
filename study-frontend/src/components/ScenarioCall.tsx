@@ -135,6 +135,12 @@ export function ScenarioCall({ code, scenario, onDone }: {
               value={scenario.current_situation}
               className="mt-2 text-base leading-7 text-muted-foreground"
             />
+            {scenario.opening_details && (
+              <ScenarioText
+                value={scenario.opening_details}
+                className="mt-3 text-sm leading-6 text-muted-foreground"
+              />
+            )}
           </section>
 
           <section className="-mx-5 mt-5 border-y bg-primary/5 px-5 py-4 sm:-mx-6 sm:px-6" aria-labelledby="scenario-goal">
@@ -154,12 +160,6 @@ export function ScenarioCall({ code, scenario, onDone }: {
                 <div className="min-w-0">
                   <SectionLabel id="scenario-opening">Start here</SectionLabel>
                   <p className="whitespace-pre-wrap text-base italic leading-7">“{scenario.suggested_first_line}”</p>
-                  {scenario.opening_details && (
-                    <ScenarioText
-                      value={scenario.opening_details}
-                      className="mt-2 text-sm leading-6 text-muted-foreground"
-                    />
-                  )}
                 </div>
               </div>
             </section>
