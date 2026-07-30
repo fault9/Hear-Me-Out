@@ -435,7 +435,7 @@ scenarios:
       goal: "Have the booking corrected to **four people at 7 PM**."
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because some details in my restaurant reservation are incorrect."
-      opening_details: "Reference number: **123**. Use only fictional details."
+      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
         Listen for:
@@ -478,7 +478,7 @@ scenarios:
         **replacement pair of headphones approved**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling about a declined warranty request, and I would like the case reviewed."
-      opening_details: "Reference number: **123**. Use only fictional details."
+      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
         Listen for:
@@ -536,13 +536,13 @@ scenarios:
         - the photo shows a **red door**; your building has a **blue door**
         - the courier wrote **building 18**; your address is **building 16**
 
-        You did not receive the food and were still charged **250 SEK**.
+        You did not receive the food and were still charged **$25**.
       goal: |
         Have the delivery marked as going to the **wrong address**, get a **refund**, and have a
         **replacement meal arranged**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because an order I did not receive is marked as successfully delivered."
-      opening_details: "Reference number: **123**. Use only fictional details."
+      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
         Listen for:
@@ -602,7 +602,7 @@ scenarios:
         changed from **Fail to Pass**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because I think my assignment was graded incorrectly, and I would like the decision reviewed."
-      opening_details: "Reference number: **123**. Use only fictional details."
+      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
         Listen for:
@@ -666,7 +666,7 @@ scenarios:
         version, and have **reimbursement approved**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because the incident description in my sports-injury claim is inaccurate."
-      opening_details: "Reference number: **123**. Use only fictional details."
+      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
       final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
       additional_details: |
         Listen for:

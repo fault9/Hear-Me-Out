@@ -300,9 +300,13 @@ class PilotTemplateTests(unittest.TestCase):
         self.assertEqual(len(final_prompts), 1)
         self.assertIn("what information is now recorded", next(iter(final_prompts)).lower())
         self.assertTrue(all(
-            "reference number" in scenario["scenario_card"].get("opening_details", "").lower()
+            "if the assistant asks for a reference number" in
+            scenario["scenario_card"].get("opening_details", "").lower()
             for scenario in protocol["scenarios"]
         ))
+        delivery_text = yaml.safe_dump(protocol["scenarios"][2])
+        self.assertIn("$25", delivery_text)
+        self.assertNotIn("SEK", delivery_text)
         self.assertTrue(all(
             "listen for:" in scenario["scenario_card"].get("additional_details", "").lower()
             for scenario in protocol["scenarios"]
