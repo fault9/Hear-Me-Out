@@ -339,13 +339,22 @@ class PilotTemplateTests(unittest.TestCase):
                       protocol["settings"]["practice_intro_text"].lower())
         self.assertIn("four main study conversations",
                       protocol["settings"]["main_intro_text"].lower())
-        playback = next(
+        playback = [
             item for item in protocol["questionnaires"]["playback"]
             if item["type"] == "audio_playback"
+        ]
+        self.assertEqual(len(playback), 2)
+        self.assertEqual(
+            [(item["max_duration_s"], item["clip_index"]) for item in playback],
+            [(5, 1), (10, 2)],
         )
-        self.assertEqual(playback["condition"], "stable_converted")
-        self.assertEqual(playback["max_plays"], 3)
-        self.assertTrue(playback["required"])
+        self.assertTrue(all(
+            item["condition"] == "stable_converted"
+            and item["track"] == "participant"
+            and item["max_plays"] == 3
+            and item["required"]
+            for item in playback
+        ))
 
         consent_text = "\n".join(
             str(item.get("label", ""))
@@ -590,11 +599,65 @@ class TransitionTests(unittest.TestCase):
             output, manifest = ensure_stable_converted_playback(
                 session, root, max_duration_s=2)
             self.assertEqual(manifest["selection"],
-                             "rms_utterances_from_stable_converted")
+                             "distinct_rms_utterances_from_stable_converted")
             self.assertEqual(manifest["join_silence_ms"], 300)
-            self.assertGreater(manifest["utterance_count"], 0)
+            self.assertGreater(manifest["selected_utterance_count"], 0)
             with wave.open(str(output), "rb") as wav:
-                self.assertLessEqual(wav.getnframes(), 2 * wav.getframerate())
+                self.assertEqual(wav.getnframes(), 2 * wav.getframerate())
+
+    def test_stable_converted_playback_slots_use_distinct_utterances(self):
+        rate = 16000
+        samples = np.zeros(8 * rate, dtype="<i2")
+        for start_s, end_s, frequency in ((0.5, 2.5, 220), (4.0, 7.5, 330)):
+            start = round(start_s * rate)
+            end = round(end_s * rate)
+            positions = np.arange(end - start)
+            samples[start:end] = (
+                np.sin(2 * np.pi * frequency * positions / rate) * 12000
+            ).astype("<i2")
+        events = [
+            {"event": "route_activated", "event_sequence": 1,
+             "from_mode": None, "to_mode": "vc", "input_sample": 0,
+             "transmitted_sample": 0},
+            {"event": "transmitted_window", "event_sequence": 2,
+             "route_mode": "vc", "input_start_sample": 0,
+             "input_end_sample": 8 * rate, "transmitted_start_sample": 0,
+             "transmitted_end_sample": 8 * rate},
+            {"event": "stream_stop", "event_sequence": 3,
+             "input_samples": 8 * rate},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session_dir = root / "sessions" / "attempt"
+            session_dir.mkdir(parents=True)
+            with wave.open(str(session_dir / "participant.wav"), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(rate)
+                wav.writeframes(samples.tobytes())
+            with (session_dir / "events.jsonl").open("w") as stream:
+                for row in events:
+                    stream.write(json.dumps(row) + "\n")
+            session = {"session_id": "s1", "files": {
+                "participant": "sessions/attempt/participant.wav",
+            }}
+
+            short, short_manifest = ensure_stable_converted_playback(
+                session, root, max_duration_s=5, clip_index=1)
+            long, long_manifest = ensure_stable_converted_playback(
+                session, root, max_duration_s=10, clip_index=2)
+
+            self.assertTrue(
+                set(short_manifest["selected_utterance_indices"]).isdisjoint(
+                    long_manifest["selected_utterance_indices"]))
+            self.assertIsNone(short_manifest["selection_fallback"])
+            self.assertIsNone(long_manifest["selection_fallback"])
+            self.assertNotEqual(
+                short_manifest["output"]["sha256"], long_manifest["output"]["sha256"])
+            with wave.open(str(short), "rb") as wav:
+                self.assertEqual(wav.getnframes(), 5 * wav.getframerate())
+            with wave.open(str(long), "rb") as wav:
+                self.assertEqual(wav.getnframes(), 10 * wav.getframerate())
 
     def test_stable_converted_interaction_is_contiguous_and_duration_limited(self):
         events = [

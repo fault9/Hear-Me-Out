@@ -365,7 +365,8 @@ export function ParticipantFlow() {
       <QuestionnaireForm title="Recording and voice ratings" items={q("playback")}
         submitLabel="Continue to debriefing" busy={busy}
         playbackUrl={(item) => api.playbackUrl(
-          code, item.scenario_order, item.track, item.condition, item.max_duration_s)}
+          code, item.scenario_order, item.track, item.condition, item.max_duration_s,
+          item.clip_index)}
         onSubmit={async (ans) => {
           setBusy(true)
           try {
@@ -395,7 +396,8 @@ export function ParticipantFlow() {
     return Frame(
       <QuestionnaireForm title="Final questionnaire" items={q("final")} submitLabel="Submit study" busy={busy}
         scenarioOptions={analyticalScenarioOptions} playbackUrl={(item) => api.playbackUrl(
-          code, item.scenario_order, item.track, item.condition, item.max_duration_s)}
+          code, item.scenario_order, item.track, item.condition, item.max_duration_s,
+          item.clip_index)}
         onSubmit={async (ans) => {
           setBusy(true)
           try {

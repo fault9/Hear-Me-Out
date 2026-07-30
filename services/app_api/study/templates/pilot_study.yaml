@@ -155,7 +155,7 @@ settings:
     Your speech will be recorded. Depending on the interaction, your transmitted speech may remain
     natural, be digitally voice-converted, or change between natural and converted speech. You will
     not hear the converted version of your voice during the live interactions. After the four
-    interactions, you will hear one study recording.
+    interactions, you will hear two short excerpts of your converted speech.
 
     Participation is voluntary. The study is expected to take approximately 20-40 minutes.
   practice_intro_text: |
@@ -196,7 +196,8 @@ questionnaires:
           participant information.
         - You understand that your speech will be recorded and may be digitally voice-converted or
           change between natural and converted speech during an interaction. You will not hear the
-          converted version live, but you will hear one study recording afterward.
+          converted version live, but you will hear two short excerpts of your converted speech
+          afterward.
 
         ### Your data rights
 
@@ -364,20 +365,33 @@ questionnaires:
     - { id: update_evidence, type: textarea, label: "What evidence did you use to decide whether the assistant had actually updated, accepted, or retained the information you provided?" }
     - { id: differential_treatment, type: textarea, label: "Did you feel that the assistant treated or responded to you differently across the interactions? Please explain." }
 
-  # The platform derives up to 30 seconds of participant-only converted speech
-  # from whichever scenario counterbalancing assigned to stable-converted.
+  # The platform derives two fixed-length, non-overlapping participant-only
+  # converted-speech excerpts from the stable-converted condition.
   playback:
-    - id: playback_audio
+    - id: playback_intro
+      type: notice
+      label: |
+        You will now hear two different excerpts of your converted speech. Each excerpt contains
+        only your voice. Play both excerpts before answering. You must play each one at least once
+        and may play each one up to three times.
+    - id: playback_audio_short
       type: audio_playback
       required: true
       condition: stable_converted
       track: participant
-      max_duration_s: 30
+      max_duration_s: 5
+      clip_index: 1
       max_plays: 3
-      label: |
-        You will now hear an excerpt of your converted speech from one of the conversations in the
-        study. The excerpt contains only your voice. Please listen before answering. You may play it
-        up to three times.
+      label: "Clip 1 — 5 seconds"
+    - id: playback_audio_long
+      type: audio_playback
+      required: true
+      condition: stable_converted
+      track: participant
+      max_duration_s: 10
+      clip_index: 2
+      max_plays: 3
+      label: "Clip 2 — 10 seconds"
     - { id: converted_understandable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice was easy to understand." }
     - { id: converted_natural, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice sounded natural." }
     - { id: converted_acceptable, type: scale, required: true, min: 1, max: 7, min_label: "Strongly disagree", max_label: "Strongly agree", label: "The converted voice felt like an acceptable representation of me in this interaction." }

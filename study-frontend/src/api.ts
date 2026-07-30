@@ -113,12 +113,13 @@ export const api = {
     } catch { return null; }
   },
   playbackUrl: (code: string, scenarioOrder?: number, track?: string,
-                condition?: string, maxDurationS?: number) => {
+                condition?: string, maxDurationS?: number, clipIndex?: number) => {
     const qs = new URLSearchParams()
     if (scenarioOrder) qs.set("scenario", String(scenarioOrder))
     if (track) qs.set("track", track)
     if (condition) qs.set("condition", condition)
     if (maxDurationS) qs.set("max_duration_s", String(maxDurationS))
+    if (clipIndex) qs.set("clip_index", String(clipIndex))
     const q = qs.toString()
     return `${BASE}/playback/${encodeURIComponent(code)}${q ? `?${q}` : ""}`
   },

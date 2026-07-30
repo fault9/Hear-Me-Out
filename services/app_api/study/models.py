@@ -42,6 +42,11 @@ class QuestionnaireItem(BaseModel):
     mid_label: Optional[str] = None            # scale midpoint
     max_label: Optional[str] = None
     placeholder: Optional[str] = None
+    scenario_order: Optional[int] = None         # audio_playback: scenario position
+    track: Optional[str] = None                  # audio_playback: merged | participant
+    condition: Optional[str] = None              # audio_playback: assigned condition id
+    max_duration_s: Optional[int] = None         # audio_playback: fixed clip duration
+    clip_index: Optional[int] = None             # audio_playback: distinct excerpt slot (1 | 2)
     max_plays: Optional[int] = None             # audio_playback: permitted playback starts
 
     class Config:

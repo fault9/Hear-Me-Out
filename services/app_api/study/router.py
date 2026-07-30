@@ -1146,7 +1146,8 @@ def build_study_router() -> APIRouter:
 
     @router.get("/playback/{code}")
     async def playback(code: str, scenario: int = 0, track: str = "merged",
-                       condition: str = "", max_duration_s: int = 0):
+                       condition: str = "", max_duration_s: int = 0,
+                       clip_index: int = 1):
         """Streams a recording for the post-session playback item. `scenario`
         (1-based order) + `track` (merged|participant) select it explicitly; unset
         falls back to the participant's VC->natural scenario's merged recording.
@@ -1179,7 +1180,7 @@ def build_study_router() -> APIRouter:
                           and max_duration_s):
                         try:
                             path, _manifest = ensure_stable_converted_playback(
-                                session, STUDY_DATA_DIR, max_duration_s)
+                                session, STUDY_DATA_DIR, max_duration_s, clip_index)
                         except (FileNotFoundError, ValueError, OSError) as exc:
                             raise HTTPException(
                                 status_code=409,

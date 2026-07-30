@@ -26,6 +26,7 @@ export interface QItem {
   track?: string            // audio_playback: merged | participant
   condition?: string        // audio_playback: assigned condition id
   max_duration_s?: number   // audio_playback: requested derived-clip duration
+  clip_index?: number       // audio_playback: distinct excerpt slot (1 | 2)
   max_plays?: number        // audio_playback: total permitted playback starts
   insert_after?: string     // scenario item: place after this shared item id
 }
