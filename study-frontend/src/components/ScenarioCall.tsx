@@ -236,12 +236,6 @@ export function ScenarioCall({ code, scenario, onDone }: {
 
         {phase === "active" && (
           <div className="flex flex-col gap-2">
-            {finalAccountPrompt && (
-              <div className="mb-1 flex items-start gap-2 border-y border-primary/40 py-2.5 text-sm leading-5">
-                <Info className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-                <span>Final summary required before ending.</span>
-              </div>
-            )}
             <p className="text-center text-base text-muted-foreground">Speak with the assistant. End the call when you are done.</p>
             <Button
               className="w-full gap-2 text-base"
