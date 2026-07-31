@@ -429,8 +429,9 @@ questionnaires:
         performance, and the timing of important information will also be considered in the analysis.
 
 _how_to_interact: &how_to_interact >
-  Use your own words. Ask questions, correct the assistant, or interrupt when needed. End the call
-  once you have reached your aim or believe you cannot make further progress.
+  Try to reach the aim shown above. Use only the information in the scenario to explain and support
+  your request. You may persuade, clarify, correct, or interrupt the assistant when needed. End the
+  call once you have reached your aim or believe you cannot make further progress.
 
 # Analytical outcomes are intentionally simplified, fictional helpfulness levels.
 # They are experimental task states rather than representations of real institutional policy.
