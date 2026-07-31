@@ -89,6 +89,8 @@ except OSError:
 
 ADMIN_TOKEN = os.environ.get("STUDY_ADMIN_TOKEN") or "changeme-study-admin"
 EVENT_TOKEN = os.environ.get("STUDY_EVENT_TOKEN") or "local-study-events"
+SESSION_JSON_UPLOAD_MAX_BYTES = int(os.environ.get(
+    "STUDY_SESSION_JSON_UPLOAD_MAX_BYTES", str(32 * 1024 * 1024)))
 if ADMIN_TOKEN == "changeme-study-admin":
     logger.warning("STUDY_ADMIN_TOKEN is not set — using an insecure default. Set it in production.")
 
@@ -113,6 +115,27 @@ def _validate_required_answers(items: list[dict], payload: dict) -> None:
         raise HTTPException(
             status_code=422,
             detail=f"Required questionnaire item {missing[0]!r} is missing")
+
+
+async def _load_session_json_artifact(upload: UploadFile | None, legacy_text: str,
+                                      label: str):
+    """Decode a session JSON artifact from a spooled file or a legacy form field."""
+    if upload is not None:
+        payload = await upload.read(SESSION_JSON_UPLOAD_MAX_BYTES + 1)
+        if len(payload) > SESSION_JSON_UPLOAD_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{label} exceeds the session JSON upload limit")
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid {label} encoding") from exc
+    else:
+        text = legacy_text or "null"
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid {label} JSON") from exc
 
 
 def _playback_sessions_for_condition(backend, participant: dict,
@@ -831,6 +854,8 @@ def build_study_router() -> APIRouter:
                            participant_raw: UploadFile | None = File(None),
                            model: UploadFile | None = File(None),
                            merged: UploadFile | None = File(None),
+                           model_transcript_file: UploadFile | None = File(None),
+                           client_timeline_file: UploadFile | None = File(None),
                            model_transcript: str = Form("null"),
                            client_timeline: str = Form("null")):
         session = backend.get_session(session_id)
@@ -843,13 +868,12 @@ def build_study_router() -> APIRouter:
         out_dir = _session_dir(session)
         if not out_dir.exists():
             raise HTTPException(status_code=500, detail="Session artifact directory is missing")
-        try:
-            model_turns = (json.loads(model_transcript)
-                           if model_transcript and model_transcript != "null" else [])
-            timeline = (json.loads(client_timeline)
-                        if client_timeline and client_timeline != "null" else None)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="Invalid session JSON artifact") from exc
+        model_turns = await _load_session_json_artifact(
+            model_transcript_file, model_transcript, "model transcript")
+        timeline = await _load_session_json_artifact(
+            client_timeline_file, client_timeline, "client timeline")
+        if model_turns is None:
+            model_turns = []
         if not isinstance(model_turns, list):
             raise HTTPException(status_code=422, detail="Invalid model transcript")
         if (timeline is not None and

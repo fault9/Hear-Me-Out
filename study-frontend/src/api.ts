@@ -133,8 +133,14 @@ export const api = {
     if (arts.participant_raw) fd.append("participant_raw", arts.participant_raw, "participant_raw.wav");
     if (arts.model) fd.append("model", arts.model, "model.wav");
     if (arts.merged) fd.append("merged", arts.merged, "merged.wav");
-    fd.append("model_transcript", JSON.stringify(arts.model_transcript ?? null));
-    fd.append("client_timeline", JSON.stringify(arts.client_timeline ?? null));
+    // Timelines grow beyond Starlette's 1 MB limit for ordinary multipart text
+    // fields during longer calls. A filename makes these proper spooled file parts.
+    fd.append("model_transcript_file", new Blob(
+      [JSON.stringify(arts.model_transcript ?? null)], { type: "application/json" }
+    ), "model_transcript.json");
+    fd.append("client_timeline_file", new Blob(
+      [JSON.stringify(arts.client_timeline ?? null)], { type: "application/json" }
+    ), "client_timeline.json");
     const r = await fetch(`${BASE}/session/${sessionId}/save`, { method: "POST", headers: traceHeaders(), body: fd });
     if (!r.ok) throw await asError(r);
     return r.json();

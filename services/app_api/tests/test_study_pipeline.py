@@ -20,7 +20,8 @@ from study.playback import (ensure_stable_converted_interaction_playback,
                             ensure_stable_converted_playback,
                             ensure_transition_playback)
 from study.questionnaires import missing_required_answers
-from study.router import _playback_sessions_for_condition
+from study.router import (_load_session_json_artifact,
+                          _playback_sessions_for_condition)
 from study.storage import SqliteBackend
 from study.timing_analysis import (assistant_intervals, capture_gap_diagnostics,
                                    playback_underrun_diagnostics,
@@ -51,6 +52,25 @@ class ArtifactTests(unittest.TestCase):
                 atomic_write_bytes(path, b"second", exclusive=True)
             self.assertEqual(path.read_bytes(), b"first")
             self.assertEqual(sha256_file(path), digest)
+
+
+class SessionJsonUploadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_large_timeline_is_accepted_as_a_file_part(self):
+        class Upload:
+            async def read(self, size):
+                return json.dumps({"schema": "hmo.client-timeline.v1",
+                                   "payload": "x" * (1024 * 1024)}).encode()[:size]
+
+        result = await _load_session_json_artifact(Upload(), "null", "client timeline")
+
+        self.assertEqual(result["schema"], "hmo.client-timeline.v1")
+        self.assertGreater(len(result["payload"]), 1024 * 1024 - 100)
+
+    async def test_legacy_text_field_remains_supported(self):
+        result = await _load_session_json_artifact(
+            None, '{"schema":"hmo.client-timeline.v1"}', "client timeline")
+
+        self.assertEqual(result["schema"], "hmo.client-timeline.v1")
 
 
 class StorageTests(unittest.TestCase):
