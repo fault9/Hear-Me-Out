@@ -144,7 +144,7 @@ settings:
       minimum_recall: 0.90
       maximum_mean_onset_error_ms: 100
       maximum_mean_offset_error_ms: 100
-  estimated_duration: 20-40 minutes
+  estimated_duration: 20-30 minutes
   welcome_text: |
     Welcome
 
@@ -157,7 +157,7 @@ settings:
     not hear the converted version of your voice during the live interactions. After the four
     interactions, you will hear two short excerpts of your converted speech.
 
-    Participation is voluntary. The study is expected to take approximately 20-40 minutes.
+    Participation is voluntary. The study is expected to take approximately 20-30 minutes.
   practice_intro_text: |
     You will now complete a short practice conversation to become familiar with the study tasks and
     controls.
