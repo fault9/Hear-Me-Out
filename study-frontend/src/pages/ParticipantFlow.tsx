@@ -47,6 +47,12 @@ export function ParticipantFlow() {
   const q = (kind: keyof NonNullable<EnterResult["questionnaires"]>): QItem[] =>
     ((data?.questionnaires as any)?.[kind] ?? []) as QItem[]
 
+  // Each phase is a new participant-facing page even though the SPA does not
+  // navigate, so do not carry the previous scenario's scroll position forward.
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" })
+  }, [phase, scenarioIdx])
+
   // Header run-countdown tick.
   useEffect(() => {
     if (!deadline) return
