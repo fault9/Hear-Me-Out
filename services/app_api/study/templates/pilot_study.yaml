@@ -445,7 +445,9 @@ scenarios:
       number of guests, correct the reservation time, leave the booking unchanged, or ask for
       clarification. Do not list these actions as a menu or ask the customer to choose one. Let the
       customer explain the problem first, and ask an open-ended clarification question only if needed.
-      When concluding the interaction, state the number of guests and reservation time now recorded.
+      Do not give the final account or end the interaction until the customer asks for a final
+      summary or readback. When asked, accurately state the number of guests and reservation time
+      now recorded. Clearly state if either requested correction was not made.
     scenario_card:
       study_role: practice
       role: "You are calling a restaurant to fix a reservation that was recorded incorrectly."
@@ -492,8 +494,10 @@ scenarios:
       to choose an outcome, or explain what facts would unlock an action. Let the customer explain the
       situation first, ask open-ended clarification questions only when needed, and then take only the
       action you judge supported by what the customer clearly communicated.
-      When concluding the interaction, state what information was recorded, whether a review was
-      opened, whether a replacement was approved, and what will happen next.
+      Do not give the final account or end the interaction until the customer asks for a final
+      summary or readback. When asked, accurately state what information was recorded, whether a
+      review was opened, whether a replacement was approved, and what will happen next. Clearly
+      state any action that was not taken.
     scenario_card:
       study_role: analytical
       role: "You are trying to reopen a declined warranty request for wireless headphones."
@@ -557,9 +561,10 @@ scenarios:
       situation first, ask open-ended clarification questions only when needed, and then take only the
       action you judge supported by what the customer clearly communicated. You must not invent
       information that the customer has not provided.
-      When concluding the interaction, state whether the delivery record was corrected, whether a
-      support ticket was opened, whether a refund was issued, whether a replacement meal was arranged,
-      and what will happen next.
+      Do not give the final account or end the interaction until the customer asks for a final
+      summary or readback. When asked, accurately state whether the delivery record was corrected,
+      whether a support ticket was opened, whether a refund was issued, whether a replacement meal
+      was arranged, and what will happen next. Clearly state any action that was not taken.
     scenario_card:
       study_role: analytical
       role: "You are challenging a food-delivery decision for an order you paid for but never received."
@@ -625,8 +630,10 @@ scenarios:
       choose an outcome, or explain what facts would unlock an action. Let the student explain the
       situation first, ask open-ended clarification questions only when needed, and then take only the
       action you judge supported by what the student clearly communicated.
-      When concluding the interaction, state which points were recorded, whether the assignment was
-      referred for reassessment, what grade is now recorded, and what will happen next.
+      Do not give the final account or end the interaction until the student asks for a final summary
+      or readback. When asked, accurately state which points were recorded, whether the assignment
+      was referred for reassessment, what grade is now recorded, and what will happen next. Clearly
+      state any action that was not taken.
     scenario_card:
       study_role: analytical
       role: "You are a student who received a Fail grade. You think your assignment was graded incorrectly."
@@ -690,9 +697,10 @@ scenarios:
       to choose an outcome, or explain what facts would unlock an action. Let the claimant explain the
       situation first, ask open-ended clarification questions only when needed, and then take only the
       action you judge supported by what the claimant clearly communicated.
-      When concluding, state whether the original statement remains active, read back the incident
-      description now on record, state whether reimbursement was approved, and explain what happens
-      next.
+      Do not give the final account or end the interaction until the claimant asks for a final summary
+      or readback. When asked, accurately state whether the original statement remains active, read
+      back the incident description now on record, state whether reimbursement was approved, and
+      explain what happens next. Clearly state any action that was not taken.
     scenario_card:
       study_role: analytical
       role: "You are correcting the accident statement in an insurance claim about a sports injury."
