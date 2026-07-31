@@ -270,12 +270,20 @@ questionnaires:
       min_label: "I would have great difficulty understanding the conversation"
       max_label: "I could understand the conversation easily and accurately"
       extra_options: ["Prefer not to answer"]
+    - id: prior_generative_ai
+      type: radio
+      label: >
+        During the past six months, how often have you used a generative-AI system through text or
+        another non-voice interface? Examples include ChatGPT, Claude, Gemini, Microsoft Copilot,
+        and similar systems.
+      options: ["Never", "Less than once a month", "1-3 times per month", "1-2 days per week", "3-5 days per week", "Daily or almost daily", "Prefer not to answer"]
     - id: prior_spoken_ai
       type: radio
       label: >
-        How often have you used spoken conversational AI or a voice mode in a generative AI system?
-        Examples include ChatGPT Voice, Gemini Live, Claude voice mode, and similar conversational AI assistants.
-      options: ["Never", "Once or twice", "A few times", "Less than monthly", "Monthly", "Weekly", "Daily or almost daily"]
+        During the past six months, how often have you used spoken conversational AI or a voice mode
+        in a generative-AI system? Examples include ChatGPT Voice, Gemini Live, Claude voice mode,
+        and similar systems.
+      options: ["Never", "Less than once a month", "1-3 times per month", "1-2 days per week", "3-5 days per week", "Daily or almost daily", "Prefer not to answer"]
     - id: prior_voice_conversion
       type: radio
       label: "Before today, had you heard your own voice changed using voice conversion or similar software?"
