@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useCallback } from "react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@shared/ui/tabs"
 import { ConversationView } from "@/components/ConversationView"
 import { VoiceConversion } from "@/components/VoiceConversion"
@@ -11,14 +11,17 @@ import { Mic, GitCompare, Wand2, ListMusic } from "lucide-react"
 
 function App() {
   const ws = useWebSocket()
+  const { isMicMuted, sendAudio } = ws
   // Live-mic bytes are gated by ws.isMicMuted() so the soundboard can suppress
   // them mid-clip. Without this the mic stream and the soundboard-clip stream
   // are both sent as Opus over the same 0x01 channel, doubling PP's input rate
-  // and confusing its turn-taking logic (short "okay" barge-ins).
-  const recorder = useRecorder((data) => {
-    if (ws.isMicMuted()) return
-    ws.sendAudio(data)
-  })
+  // and confusing its turn-taking logic (short "okay" barge-ins). useCallback
+  // keeps its identity stable so the recorder-start effect doesn't re-fire.
+  const handleMicData = useCallback((data: ArrayBuffer) => {
+    if (isMicMuted()) return
+    sendAudio(data)
+  }, [isMicMuted, sendAudio])
+  const recorder = useRecorder(handleMicData)
   const [activeTab, setActiveTab] = useState("conversation")
   // Lifted here (not inside ConversationView) so it survives tab switches.
   // Radix Tabs unmounts inactive TabsContent by default, so any state inside

@@ -36,7 +36,7 @@ export const PP_BIT_DEPTH = 16
 // on the 1-frame-per-page granularity for low-latency processing.
 export const OPUS_ENCODER_CONFIG = {
   encoderPath:
-    "https://cdn.jsdelivr.net/npm/opus-recorder@latest/dist/encoderWorker.min.js",
+    "https://cdn.jsdelivr.net/npm/opus-recorder@8.0.5/dist/encoderWorker.min.js",
   streamPages: true,
   encoderApplication: 2049,        // OPUS_APPLICATION_VOIP
   encoderFrameSize: 80,            // ms per frame (NOT samples)
