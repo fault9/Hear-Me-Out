@@ -17,6 +17,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import os
 import re
 import secrets
 from pathlib import Path
@@ -24,6 +25,11 @@ from typing import Any, Iterable
 
 PACKET_SCHEMA = "hmo.coding-packet.v1"
 FINAL_PROBE_MATCH_THRESHOLD = 0.55
+# Mechanical transmitted-presence rule (codebook §3): content-word recall of
+# the raw delivery text within the transmitted-track text of the same
+# intervals. Content words are alphanumeric tokens of length >= 4 or numbers.
+TRANSMITTED_RECALL_THRESHOLD = float(
+    os.environ.get("CODING_TRANSMITTED_RECALL_THRESHOLD", "0.6"))
 
 # Keys that must never appear anywhere in a blinded packet.
 FORBIDDEN_KEYS = {
@@ -195,6 +201,18 @@ def build_packet(session: dict, data_root: Path, salt: str,
         key=lambda row: float(row["participant_timeline_ms"]),
     )
     switch_ms = float(switches[0]["participant_timeline_ms"]) if switches else None
+    transmitted = _load_analysis_artifact(
+        session, data_root, "transmitted_transcript_latest")
+    transmitted_texts = {
+        row["id"]: {"text": str(row.get("text") or ""),
+                    "asr_status": (row.get("text_provenance") or {}).get("asr_status")}
+        for row in (transmitted or {}).get("utterances") or []
+    }
+    raw_texts = {
+        row["id"]: str(row.get("text") or "")
+        for row in dialogue.get("utterances") or []
+        if row.get("speaker") == "participant"
+    }
     # Switching conditions anchor the boundary at the executed route switch;
     # stable conditions use the matched analysis checkpoint so every session
     # carries the same before/after decomposition (method: the 45 s point is
@@ -222,6 +240,14 @@ def build_packet(session: dict, data_root: Path, salt: str,
         "boundary_kind": boundary_kind,
         "route_switches": switches,
         "utterance_times": utterance_times,
+        "utterance_texts_raw": raw_texts,
+        "transmitted": {
+            "available": transmitted is not None,
+            "status": (transmitted or {}).get("status"),
+            "alignment": (transmitted or {}).get("alignment"),
+            "analysis_id": (transmitted or {}).get("analysis_id"),
+            "texts": transmitted_texts,
+        },
         "dialogue_analysis_id": dialogue.get("analysis_id"),
         "dialogue_status": dialogue.get("status"),
     }
@@ -295,6 +321,47 @@ def classify_delivery_timing(delivery_utterance_ids: list[str], meta: dict) -> s
     if first >= boundary:
         return "after_transition"
     return "across_transition"
+
+
+_CONTENT_WORD = re.compile(r"[a-z]{4,}|[0-9]+")
+
+
+def content_tokens(text: str) -> set[str]:
+    return set(_CONTENT_WORD.findall(text.lower()))
+
+
+def transmitted_completeness(delivery_utterance_ids: list[str], meta: dict,
+                             threshold: float = TRANSMITTED_RECALL_THRESHOLD) -> dict:
+    """Mechanical `complete_transmitted` code (codebook §3).
+
+    Returns {"value": 0|1|None, "recall": float|None, "reason": str|None}.
+    1  — content-word recall of the raw delivery text within the transmitted
+         text of the same intervals reaches the threshold;
+    0  — transmitted ASR completed on every delivery interval but recall
+         stayed below the threshold (observed absence);
+    None — inapplicable/unobservable, with the reason recorded.
+    """
+    if not delivery_utterance_ids:
+        return {"value": None, "recall": None,
+                "reason": "unit_not_completely_delivered"}
+    transmitted = meta.get("transmitted") or {}
+    if not transmitted.get("available"):
+        return {"value": None, "recall": None,
+                "reason": "transmitted_transcript_unavailable"}
+    raw_texts = meta.get("utterance_texts_raw") or {}
+    raw = content_tokens(" ".join(raw_texts.get(uid, "")
+                                  for uid in delivery_utterance_ids))
+    if not raw:
+        return {"value": None, "recall": None, "reason": "no_content_tokens"}
+    rows = [transmitted.get("texts", {}).get(uid) for uid in delivery_utterance_ids]
+    transmitted_text = " ".join((row or {}).get("text") or "" for row in rows)
+    recall = len(raw & content_tokens(transmitted_text)) / len(raw)
+    if recall >= threshold:
+        return {"value": 1, "recall": round(recall, 3), "reason": None}
+    if any(row is None or row.get("asr_status") != "complete" for row in rows):
+        return {"value": None, "recall": round(recall, 3),
+                "reason": "transmitted_asr_incomplete"}
+    return {"value": 0, "recall": round(recall, 3), "reason": None}
 
 
 def repair_is_post_boundary(utterance_id: str, meta: dict) -> bool | None:

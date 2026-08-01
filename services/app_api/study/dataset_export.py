@@ -297,7 +297,9 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
                 "attempted": unit.get("attempted"),
                 "complete_raw": unit.get("complete_raw"),
                 "complete_transmitted": unit.get("complete_transmitted"),
+                "transmitted_content_recall": unit.get("transmitted_content_recall"),
                 "complete_transmitted_reason": unit.get("complete_transmitted_reason"),
+                "grounding_gated_reason": unit.get("grounding_gated_reason"),
                 "delivery_relative_to_boundary": unit.get("delivery_relative_to_boundary"),
                 "delivery_utterance_ids": unit.get("delivery_utterance_ids"),
                 "acknowledgement": unit.get("acknowledgement"),
@@ -318,7 +320,8 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
             })
     unit_columns = ["session_id", "participant_id", "condition", "unit_index",
                     "unit_text", "attempted", "complete_raw",
-                    "complete_transmitted", "complete_transmitted_reason",
+                    "complete_transmitted", "transmitted_content_recall",
+                    "complete_transmitted_reason", "grounding_gated_reason",
                     "delivery_relative_to_boundary", "delivery_utterance_ids",
                     "acknowledgement", "update_claim", "incorporation",
                     "retention"]
@@ -420,11 +423,14 @@ post-scenario questionnaire.
 ## units.csv
 One row per critical-information unit per CODED session. Grounding stages
 (`acknowledgement`, `update_claim`, `incorporation`, `retention`) are empty
-when the unit was not completely delivered (codebook zero-vs-missing rule).
-`complete_transmitted` remains empty with
-`complete_transmitted_reason=transmitted_transcript_unavailable` until the
-transmitted-track transcription step exists; `complete_raw` acts as the
-gating proxy and is recorded as such.
+when the unit was not completely delivered OR not completely transmitted
+(codebook zero-vs-missing rule; `grounding_gated_reason` names the second
+case). `complete_transmitted` is computed mechanically from the
+transmitted-track transcript on the same intervals as the raw transcript:
+content-word recall (`transmitted_content_recall`) at or above the frozen
+threshold codes 1; complete transmitted ASR below it codes 0; an
+unavailable transmitted transcript or failed ASR leaves it empty with
+`complete_transmitted_reason` set, and `complete_raw` gates as proxy.
 
 ## repairs.csv
 One row per coded repair move. `post_boundary` uses the same boundary as

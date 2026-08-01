@@ -42,10 +42,18 @@ codes are assigned per unit, per interaction.
   and last of these anchor the deterministic before/after/across-transition
   classification, which is computed outside the coder from the timing
   artifact.
-- `complete_transmitted`: coded from the transmitted-track transcript when
-  available; until then recorded as `null` with reason
-  `transmitted_transcript_unavailable`, and `complete_raw` acts as the gating
-  proxy for downstream stages (provenance records `transmitted_proxy: raw`).
+- `complete_transmitted`: computed mechanically, never judged. The unit's
+  delivery utterances are located in the transmitted-track transcript (same
+  interval ids as the raw transcript), and the content-word recall of the
+  raw delivery text within the transmitted text is compared to a frozen
+  threshold (content words: alphabetic tokens of length >= 4 or numbers;
+  threshold 0.6). Recall at or above threshold codes 1; complete transmitted
+  ASR with recall below threshold codes 0 (observed absence); an unavailable
+  transmitted transcript or failed transmitted ASR codes `null` with the
+  reason recorded. The recall value is retained for audit. When a unit codes
+  0, its downstream grounding stages are set to `null` (Section 2); when it
+  codes `null`, `complete_raw` acts as the gating proxy and provenance
+  records `transmitted_proxy: raw`.
 
 **Participant-stated rule.** A unit counts as delivered only when the
 participant states its content. Assistant-presupposed content that the

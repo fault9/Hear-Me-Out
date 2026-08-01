@@ -236,10 +236,12 @@ class FixtureCase(unittest.TestCase):
             ],
         }
         (analysis_dir / "dialogue_transcript.json").write_text(json.dumps(dialogue))
+        self._write_transmitted_artifact()   # faithful by default
         rel = f"media/sessions/{self.session_id}/analysis"
         manifest = {"analysis": {
             "timing_latest": {"path": f"{rel}/timing.json"},
             "dialogue_transcript_latest": {"path": f"{rel}/dialogue_transcript.json"},
+            "transmitted_transcript_latest": {"path": f"{rel}/transmitted_transcript.json"},
             "technical_validity_summary": {
                 "status": "valid", "valid_for_condition_analysis": True,
                 "valid_for_post_checkpoint_analysis": True,
@@ -256,6 +258,28 @@ class FixtureCase(unittest.TestCase):
                             {"effort": 3, "frustration": 2,
                              "self_reported_outcome": "I partly achieved the goal."})
         backend.submit_run(self.run_id)
+
+    def _write_transmitted_artifact(self, overrides: dict | None = None,
+                                    statuses: dict | None = None):
+        """Transmitted-track transcript with per-utterance text overrides."""
+        analysis_dir = (self.data_root / "media" / "sessions"
+                        / self.session_id / "analysis")
+        transmitted = {
+            "schema": "hmo.transmitted-transcript.v1",
+            "analysis_id": "T1", "status": "complete",
+            "alignment": "assumed_chunk_aligned",
+            "utterances": [
+                {"id": uid, "speaker": "participant",
+                 "start_ms": start, "end_ms": end,
+                 "text": (overrides or {}).get(uid, text),
+                 "text_provenance": {
+                     "asr_status": (statuses or {}).get(uid, "complete")}}
+                for uid, speaker, start, end, text in UTTERANCES
+                if speaker == "participant"
+            ],
+        }
+        (analysis_dir / "transmitted_transcript.json").write_text(
+            json.dumps(transmitted))
 
     # -- helpers -----------------------------------------------------------
     def _sessions(self):
@@ -437,9 +461,10 @@ class ReviewAndExportTests(FixtureCase):
                          "before_transition")
         self.assertEqual(units[2]["delivery_relative_to_boundary"],
                          "across_transition")
-        self.assertIsNone(units[1]["complete_transmitted"])
-        self.assertEqual(units[1]["complete_transmitted_reason"],
-                         "transmitted_transcript_unavailable")
+        self.assertEqual(units[1]["complete_transmitted"], 1)
+        self.assertEqual(units[1]["transmitted_content_recall"], 1.0)
+        self.assertIsNone(units[1]["complete_transmitted_reason"])
+        self.assertEqual(final["derived"]["demonstrated_grounding"], 1)
         self.assertTrue(final["repairs"][0]["post_boundary"])
         self.assertEqual(final["derived"]["repair_post_boundary"], 1)
         self.assertEqual(final["derived"]["boundary_kind"], "switch")
@@ -492,7 +517,8 @@ class ReviewAndExportTests(FixtureCase):
         with (out_dir / "units.csv").open() as handle:
             unit_rows = list(csv_module.DictReader(handle))
         self.assertEqual(len(unit_rows), 2)
-        self.assertEqual(unit_rows[0]["complete_transmitted"], "")   # missing
+        self.assertEqual(unit_rows[0]["complete_transmitted"], "1")
+        self.assertEqual(unit_rows[0]["transmitted_content_recall"], "1.0")
         self.assertEqual(unit_rows[1]["delivery_relative_to_boundary"],
                          "across_transition")
 
@@ -516,6 +542,142 @@ class ReviewAndExportTests(FixtureCase):
             row = list(csv_module.DictReader(handle))[0]
         self.assertEqual(row["outcome_level"], "")
         self.assertEqual(row["repair_total"], "")
+
+
+class TransmittedGatingTests(FixtureCase):
+    """The mechanical complete_transmitted rule and its downstream gating."""
+
+    def _judge_and_finalize(self):
+        self._write_all_packets()
+        root = self._root()
+        freeze.freeze(root, {"model": "f", "temperature": 0.0, "max_tokens": 1})
+        runner.run_judging(root, FakeClient(make_judge_labels()), pilot=False)
+        review.finalize(root)
+        pid = read_index(root)[0]["packet_id"]
+        return json.loads((root / "labels" / "final" / f"{pid}.json").read_text())
+
+    def test_degraded_transmission_zeroes_unit_and_gates_grounding(self):
+        # Unit 2's second delivery utterance arrives garbled on the
+        # transmitted track (complete ASR, wrong content) -> recall below
+        # threshold -> observed 0 -> grounding stages become missing.
+        self._write_transmitted_artifact(
+            overrides={"participant_004": "hmm buzzing noise"})
+        final = self._judge_and_finalize()
+        units = {unit["unit_index"]: unit for unit in final["units"]}
+        self.assertEqual(units[2]["complete_transmitted"], 0)
+        self.assertLess(units[2]["transmitted_content_recall"], 0.6)
+        self.assertEqual(units[2]["grounding_gated_reason"],
+                         "unit_not_completely_transmitted")
+        for stage in ("acknowledgement", "update_claim", "incorporation",
+                      "retention"):
+            self.assertIsNone(units[2][stage])
+        # Unit 1 transmitted faithfully -> untouched.
+        self.assertEqual(units[1]["complete_transmitted"], 1)
+        self.assertEqual(units[1]["incorporation"], 1)
+        # Scenario-level demonstrated grounding: unit 2 unobservable, no
+        # observed failure -> missing, not 0.
+        self.assertIsNone(final["derived"]["demonstrated_grounding"])
+
+    def test_incomplete_transmitted_asr_is_missing_not_zero(self):
+        self._write_transmitted_artifact(
+            overrides={"participant_004": ""},
+            statuses={"participant_004": "failed"})
+        final = self._judge_and_finalize()
+        units = {unit["unit_index"]: unit for unit in final["units"]}
+        self.assertIsNone(units[2]["complete_transmitted"])
+        self.assertEqual(units[2]["complete_transmitted_reason"],
+                         "transmitted_asr_incomplete")
+        # Proxy gating keeps the raw-coded stages.
+        self.assertEqual(units[2]["incorporation"], 1)
+        self.assertEqual(units[2]["transmitted_proxy"], "raw")
+
+    def test_unavailable_transcript_falls_back_to_raw_proxy(self):
+        # Remove the manifest key entirely.
+        session = self.backend.get_session(self.session_id)
+        manifest = session["artifact_manifest"]
+        manifest["analysis"].pop("transmitted_transcript_latest")
+        self.backend.update_session_artifacts(self.session_id, manifest)
+        final = self._judge_and_finalize()
+        units = {unit["unit_index"]: unit for unit in final["units"]}
+        for index in (1, 2):
+            self.assertIsNone(units[index]["complete_transmitted"])
+            self.assertEqual(units[index]["complete_transmitted_reason"],
+                             "transmitted_transcript_unavailable")
+            self.assertEqual(units[index]["transmitted_proxy"], "raw")
+        self.assertEqual(final["derived"]["demonstrated_grounding"], 1)
+
+    def test_completeness_rule_edges(self):
+        from study.coding.packets import transmitted_completeness
+        meta = {
+            "utterance_texts_raw": {"participant_001": "charging light stayed off"},
+            "transmitted": {"available": True, "texts": {
+                "participant_001": {"text": "charging light stayed off",
+                                    "asr_status": "partial"}}},
+        }
+        # High recall counts even when transmitted ASR is only partial.
+        result = transmitted_completeness(["participant_001"], meta)
+        self.assertEqual(result["value"], 1)
+        # No delivery -> inapplicable.
+        self.assertEqual(
+            transmitted_completeness([], meta)["reason"],
+            "unit_not_completely_delivered")
+
+
+class TransmittedTranscriptModuleTests(FixtureCase):
+    """prepare_transmitted_transcript over a real (silent) WAV with a fake
+    transcriber: same interval ids as the dialogue transcript, artifact
+    registered relative to the data root."""
+
+    def test_prepare_and_load(self):
+        import wave as wave_module
+
+        from study.transmitted_transcript import (load_latest,
+                                                  prepare_transmitted_transcript)
+        session_dir = self.data_root / "media" / "sessions" / self.session_id
+        wav_path = session_dir / "participant.wav"
+        with wave_module.open(str(wav_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(b"\x00\x00" * 16000 * 82)   # 82 s of silence
+        self.backend.save_session(
+            self.session_id,
+            {"participant": f"media/sessions/{self.session_id}/participant.wav"},
+            {"model": []}, None, False)
+        session = self.backend.get_session(self.session_id)
+        timing = {
+            "schema": "hmo.timing-analysis.v4",
+            "participant_intervals": [
+                {"start_ms": start, "end_ms": end}
+                for uid, speaker, start, end, _ in UTTERANCES
+                if speaker == "participant"
+            ],
+            "integrity": {"capture_crosswalk_complete": True,
+                          "missing_at_proxy": 0},
+        }
+        calls = []
+
+        def transcriber(path):
+            calls.append(path)
+            return {"text": f"slice {len(calls)}", "status": "complete"}
+
+        result = prepare_transmitted_transcript(
+            session, self.data_root, "TT1", timing, transcriber)
+        self.assertEqual(result["schema"], "hmo.transmitted-transcript.v1")
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["alignment"], "assumed_chunk_aligned")
+        ids = [row["id"] for row in result["utterances"]]
+        self.assertEqual(ids, [uid for uid, speaker, *_ in UTTERANCES
+                               if speaker == "participant"])
+        self.assertEqual(len(calls), len(ids))
+        # Register and reload through the manifest helper.
+        manifest = session["artifact_manifest"]
+        manifest["analysis"]["transmitted_transcript_latest"] = \
+            result["result_artifact"]
+        self.backend.update_session_artifacts(self.session_id, manifest)
+        session = self.backend.get_session(self.session_id)
+        loaded = load_latest(session, self.data_root)
+        self.assertEqual(loaded["analysis_id"], "TT1")
 
 
 class AgreementMathTests(unittest.TestCase):

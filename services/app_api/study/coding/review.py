@@ -22,9 +22,11 @@ import math
 import random
 from pathlib import Path
 
-from .packets import classify_delivery_timing, read_index, repair_is_post_boundary
-from .schema import (consistency_issues, derive_scenario_labels,
-                     low_confidence_fields, validate_labels)
+from .packets import (classify_delivery_timing, read_index,
+                      repair_is_post_boundary, transmitted_completeness)
+from .schema import (GROUNDING_STAGES, consistency_issues,
+                     derive_scenario_labels, low_confidence_fields,
+                     validate_labels)
 
 SAMPLE_FRACTION = 0.25
 
@@ -218,17 +220,31 @@ def finalize(root: Path) -> dict:
             unresolved.append(pid)
             continue
         meta = _meta(root, pid)
-        derived = derive_scenario_labels(labels)
         units_enriched = []
         for unit in labels.get("units") or []:
-            units_enriched.append({
+            delivery = unit.get("delivery_utterance_ids") or []
+            transmitted = transmitted_completeness(delivery, meta)
+            enriched = {
                 **unit,
-                "complete_transmitted": None,
-                "complete_transmitted_reason": "transmitted_transcript_unavailable",
-                "transmitted_proxy": "raw",
+                "complete_transmitted": transmitted["value"],
+                "transmitted_content_recall": transmitted["recall"],
+                "complete_transmitted_reason": transmitted["reason"],
                 "delivery_relative_to_boundary": classify_delivery_timing(
-                    unit.get("delivery_utterance_ids") or [], meta),
-            })
+                    delivery, meta),
+            }
+            if transmitted["value"] == 0:
+                # Method rule: downstream grounding stages are missing when a
+                # unit was not completely transmitted. The judge coded them
+                # against the raw track; the enriched record nulls them.
+                for stage in GROUNDING_STAGES:
+                    enriched[stage] = None
+                enriched["grounding_gated_reason"] = "unit_not_completely_transmitted"
+            elif transmitted["value"] is None and delivery:
+                enriched["transmitted_proxy"] = "raw"
+            units_enriched.append(enriched)
+        # Derived labels come from the ENRICHED units so transmitted gating
+        # propagates into demonstrated grounding / false update confirmation.
+        derived = derive_scenario_labels({**labels, "units": units_enriched})
         repairs_enriched = []
         post_boundary_count = 0
         boundary_known = meta.get("boundary_participant_timeline_ms") is not None

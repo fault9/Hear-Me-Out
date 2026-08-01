@@ -45,6 +45,8 @@ from study.storage import get_backend  # noqa: E402
 from study.technical_validity import (TECHNICAL_VALIDITY_SCHEMA,
                                       prepare_technical_validity)  # noqa: E402
 from study.timing_analysis import TIMING_SCHEMA, prepare_timing_analysis  # noqa: E402
+from study.transmitted_transcript import (TRANSMITTED_TRANSCRIPT_SCHEMA,
+                                          prepare_transmitted_transcript)  # noqa: E402
 from study.vc_quality_analysis import status_path as vc_quality_status_path  # noqa: E402
 
 # Shared OTel helper (services/ is on sys.path via the insert above). No-op unless
@@ -125,6 +127,11 @@ def _needs_dialogue_transcript(session: dict) -> bool:
     return not result or result.get("schema") != DIALOGUE_TRANSCRIPT_SCHEMA
 
 
+def _needs_transmitted_transcript(session: dict) -> bool:
+    result = _latest_analysis_result(session, "transmitted_transcript_latest")
+    return not result or result.get("schema") != TRANSMITTED_TRANSCRIPT_SCHEMA
+
+
 def _needs_preprocessing(session: dict) -> bool:
     transcript = session.get("transcript") or {}
     return (session.get("metrics") is None
@@ -138,7 +145,9 @@ def _analysis_candidates(sessions: list[dict], force: bool) -> list[dict]:
             if analysis_eligible(session)
             and session.get("ended_at") is not None
             and (force or _needs_preprocessing(session) or _needs_timing(session)
-                 or _needs_dialogue_transcript(session) or _needs_validity(session))]
+                 or _needs_dialogue_transcript(session)
+                 or _needs_transmitted_transcript(session)
+                 or _needs_validity(session))]
 
 
 def main() -> None:
@@ -228,6 +237,33 @@ def main() -> None:
                     s = backend.get_session(s["session_id"]) or latest
             except Exception as exc:  # noqa: BLE001
                 print(f"[analysis_worker] dialogue-transcript error for {s['session_id']}: {exc}",
+                      file=sys.stderr)
+
+            try:
+                latest = backend.get_session(s["session_id"]) or s
+                if timing and (force or _needs_transmitted_transcript(latest)):
+                    if (latest.get("files") or {}).get("participant"):
+                        transmitted = prepare_transmitted_transcript(
+                            latest, STUDY_DATA_DIR, analysis_id, timing)
+                        manifest = copy.deepcopy(latest.get("artifact_manifest") or {})
+                        analysis = manifest.setdefault("analysis", {})
+                        analysis["transmitted_transcript_latest"] = transmitted[
+                            "result_artifact"]
+                        analysis["transmitted_transcript_summary"] = {
+                            "schema": transmitted["schema"],
+                            "analysis_id": transmitted["analysis_id"],
+                            "status": transmitted["status"],
+                            "alignment": transmitted["alignment"],
+                            **transmitted["summary"],
+                        }
+                        backend.update_session_artifacts(s["session_id"], manifest)
+                        s = backend.get_session(s["session_id"]) or latest
+                    else:
+                        stage_errors["transmitted_transcript"] = (
+                            "participant (transmitted) audio is missing")
+            except Exception as exc:  # noqa: BLE001
+                stage_errors["transmitted_transcript"] = str(exc)
+                print(f"[analysis_worker] transmitted-transcript error for {s['session_id']}: {exc}",
                       file=sys.stderr)
 
             try:
