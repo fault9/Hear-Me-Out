@@ -56,6 +56,9 @@ dependencies = [
     # uv-managed venvs don't ship setuptools by default, so pyworld errors on
     # import without this. Pinned as a direct dep so future syncs pick it up.
     "setuptools>=68",
+    # LLM-assisted coding pipeline (study.coding judge/verifier). Only the
+    # `judge` subcommand touches the API; everything else runs offline.
+    "anthropic>=0.40",
     # Distributed tracing (OpenTelemetry) — optional; code is a no-op unless OTEL_* is set.
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp-proto-http",
