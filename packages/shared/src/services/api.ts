@@ -118,6 +118,23 @@ export async function xvcFileBake(
   }
 }
 
+// Persist a soundboard-audit results zip on the study data volume
+// (STUDY_DATA_ROOT/audit/...). Returns the server-relative storage path.
+export async function uploadSoundboardAudit(
+  zip: Blob,
+  manifestSha256: string,
+): Promise<{ ok: boolean; path: string; zip_bytes: number }> {
+  const fd = new FormData()
+  fd.append("results_zip", zip, "results.zip")
+  fd.append("manifest_sha256", manifestSha256)
+  const resp = await fetch(`${API_BASE}/api/soundboard-audit/upload`, {
+    method: "POST",
+    body: fd,
+  })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  return resp.json()
+}
+
 // Offline Seed-VC conversion (the Convert tab's engine) for soundboard bakes.
 // NOT duration-preserving: the endpoint VAD-trims the source and Seed-VC may
 // re-time it, and the output sample rate is the model's own — callers must

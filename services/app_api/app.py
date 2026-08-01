@@ -597,6 +597,59 @@ def create_app():
             },
         )
 
+    @app.post("/api/soundboard-audit/upload")
+    async def soundboard_audit_upload(
+        results_zip: UploadFile = File(...),
+        manifest_sha256: str = Form(""),
+    ):
+        """Persist a soundboard-audit results zip (frozen manifest + per-run
+        PP/sent audio + timing log, produced by the HMO frontend's audit
+        runner) on the study data volume. Stored verbatim under
+        STUDY_DATA_ROOT/audit/<UTC-ts>_<manifest8>/ so audit artifacts live
+        beside the study data with the same backup/immutability treatment.
+        The directory is create-exclusive: an upload can never overwrite a
+        previous run."""
+        import json as _json
+        import re as _re
+        import time as _time
+
+        data_root = Path(os.path.expanduser(
+            os.environ.get("STUDY_DATA_ROOT", "/workspace/data")))
+        manifest8 = _re.sub(r"[^0-9a-f]", "", manifest_sha256.lower())[:8] or "nohash"
+        stamp = _time.strftime("%Y%m%dT%H%M%SZ", _time.gmtime())
+        out_dir = data_root / "audit" / f"{stamp}_{manifest8}"
+        try:
+            out_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            raise HTTPException(status_code=409, detail="audit run directory already exists")
+        zip_path = out_dir / "results.zip"
+        size = 0
+        with open(zip_path, "wb") as handle:
+            while True:
+                chunk = await results_zip.read(1 << 20)
+                if not chunk:
+                    break
+                size += len(chunk)
+                handle.write(chunk)
+        # Unpack the two JSON files for greppability; audio stays in the zip.
+        import zipfile
+        try:
+            with zipfile.ZipFile(zip_path) as archive:
+                for name in ("manifest.json", "run_log.json"):
+                    if name in archive.namelist():
+                        (out_dir / name).write_bytes(archive.read(name))
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="results_zip is not a valid zip")
+        (out_dir / "upload_meta.json").write_text(_json.dumps({
+            "received_at_unix_s": _time.time(),
+            "manifest_sha256": manifest_sha256,
+            "zip_bytes": size,
+            "source": "hmo_soundboard_audit_runner",
+        }, indent=2))
+        logger.info(f"[audit] stored soundboard audit run at {out_dir} ({size} bytes)")
+        return {"ok": True, "path": str(out_dir.relative_to(data_root)),
+                "zip_bytes": size}
+
     @app.post("/api/loudness-normalize")
     async def loudness_normalize(
         audio: UploadFile = File(...),

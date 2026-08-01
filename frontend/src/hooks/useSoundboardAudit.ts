@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { getPersonaplexWsURL } from "@/lib/config"
+import { uploadSoundboardAudit } from "@shared/services/api"
 import { makeZip } from "@/lib/soundboardZip"
 import { assembleSentWav, getCapturedClips, resetCapture } from "@/lib/soundboardCapture"
 import type { Slot } from "@/lib/soundboardDb"
@@ -158,6 +159,11 @@ export function useSoundboardAudit(opts: {
   })
   const [error, setError] = useState<string | null>(null)
   const [resultsZip, setResultsZip] = useState<Blob | null>(null)
+  // Server persistence: runs are auto-uploaded to STUDY_DATA_ROOT/audit/ so
+  // audit artifacts live on the study data volume; the local download stays
+  // available as a fallback.
+  const [uploadState, setUploadState] = useState<
+    { status: "idle" | "uploading" | "done" | "failed"; detail?: string }>({ status: "idle" })
 
   // ---- live mirrors (poll-friendly refs over React state) ----------------
   const handshakeRef = useRef(false)
@@ -427,9 +433,30 @@ export function useSoundboardAudit(opts: {
           name: a.name, data: new Uint8Array(await a.blob.arrayBuffer()),
         }))),
       ]
-      setResultsZip(makeZip(entries))
+      const zip = makeZip(entries)
+      setResultsZip(zip)
+      // Persist to the server data volume (best-effort; the researcher can
+      // retry from the UI or fall back to the local download).
+      setUploadState({ status: "uploading" })
+      try {
+        const stored = await uploadSoundboardAudit(zip, manifest.manifest_sha256 ?? "")
+        setUploadState({ status: "done", detail: stored.path })
+      } catch (e) {
+        setUploadState({ status: "failed", detail: String((e as Error).message ?? e) })
+      }
     }
   }, [manifest, ws, config.cooldownMs, runPresentation, onBeforeRun])
+
+  const retryUpload = useCallback(async () => {
+    if (!resultsZip || !manifest) return
+    setUploadState({ status: "uploading" })
+    try {
+      const stored = await uploadSoundboardAudit(resultsZip, manifest.manifest_sha256 ?? "")
+      setUploadState({ status: "done", detail: stored.path })
+    } catch (e) {
+      setUploadState({ status: "failed", detail: String((e as Error).message ?? e) })
+    }
+  }, [resultsZip, manifest])
 
   const abort = useCallback(() => { abortRef.current = true }, [])
 
@@ -458,5 +485,6 @@ export function useSoundboardAudit(opts: {
     progress, error,
     start, abort,
     resultsZip, downloadResults,
+    uploadState, retryUpload,
   }
 }

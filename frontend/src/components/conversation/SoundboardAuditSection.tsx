@@ -149,6 +149,30 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
             )}
           </div>
 
+          {/* server persistence status (STUDY_DATA_ROOT/audit/…) */}
+          {audit.uploadState.status !== "idle" && (
+            <p className="flex items-center gap-1.5 text-[10px]">
+              {audit.uploadState.status === "uploading" && (
+                <><Spinner className="size-3" /> Saving to server…</>
+              )}
+              {audit.uploadState.status === "done" && (
+                <span className="text-emerald-500">
+                  Saved on server: data/{audit.uploadState.detail}
+                </span>
+              )}
+              {audit.uploadState.status === "failed" && (
+                <>
+                  <span className="text-destructive">
+                    Server save failed: {audit.uploadState.detail}
+                  </span>
+                  <Button size="xs" variant="ghost" onClick={() => void audit.retryUpload()}>
+                    Retry
+                  </Button>
+                </>
+              )}
+            </p>
+          )}
+
           {audit.error && <p className="text-[10px] text-destructive">{audit.error}</p>}
 
           {/* live progress */}
