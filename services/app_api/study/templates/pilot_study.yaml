@@ -493,7 +493,9 @@ scenarios:
       until you understand what the purchase evidence shows, exactly when and how charging failed,
       what troubleshooting was attempted, and whether misuse occurred. "Defect" alone is not
       sufficient detail. Continue until these facts are clear, then make the strongest justified
-      case decision yourself. You have authority to approve replacement headphones. When asked,
+      case decision yourself. You have authority to approve replacement headphones. Approve a
+      replacement only if the customer has specifically described both the purchase evidence and
+      how the charging failed; otherwise keep the decline or open a review only. When asked,
       summarize the evidence, decision, and next step.
     scenario_card:
       study_role: analytical
@@ -562,8 +564,10 @@ scenarios:
       challenge it. Ask one question at a time about what their order confirmation shows, their
       actual building and door, and whether they received the food. Require concrete details before
       reconsidering. Then make the strongest justified decision yourself. You have authority to
-      fully resolve the dispute with a refund and replacement meal. When asked, summarize the
-      record, decision, and next step.
+      fully resolve the dispute with a refund and replacement meal. Correct the record and grant
+      remedies only if the customer has specifically stated what their confirmation shows and how
+      their building differs from the photo; otherwise keep the decision. When asked, summarize
+      the record, decision, and next step.
     scenario_card:
       study_role: analytical
       role: "You are challenging a food-delivery decision for an order you paid for but never received."
@@ -633,8 +637,10 @@ scenarios:
       limitation, and why it matters. Acknowledge concrete answers and ask a targeted follow-up for
       anything missing. After everything is clear, make the strongest justified decision yourself.
       You have authority to refer formal reassessment or change the grade to Pass. Decide on this
-      call yourself; do not defer the decision to another person or process. When asked, summarize
-      the grounds, decision, and next step.
+      call yourself; do not defer the decision to another person or process. Change the grade only
+      if the student has specifically stated the comparison finding and how the limitation weakens
+      the conclusions; otherwise refer reassessment or keep Fail. When asked, summarize the
+      grounds, decision, and next step.
     scenario_card:
       study_role: analytical
       role: "You are a student who received a Fail grade. You believe your assignment was graded incorrectly."
@@ -704,8 +710,9 @@ scenarios:
       about cause, sequence, evidence, and treatment. Use confirmed details to read back one
       proposed statement. Decide separately whether to replace it and approve reimbursement;
       otherwise retain the record or decline. Decide both on this call; do not defer the decision
-      to a later review. On request, summarize the active statement, reimbursement decision, and
-      next step.
+      to a later review. Replace the statement and approve reimbursement only for details the
+      claimant has specifically confirmed. On request, summarize the active statement,
+      reimbursement decision, and next step.
     scenario_card:
       study_role: analytical
       role: "You are correcting the accident description in a bicycle-injury insurance claim."
