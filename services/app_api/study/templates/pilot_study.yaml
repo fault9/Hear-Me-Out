@@ -431,8 +431,9 @@ questionnaires:
 _how_to_interact: &how_to_interact >
   You do not need to communicate every fact at once. You may use the suggested opening or your own
   words, introduce details when they become relevant, and clarify, correct, persuade, or interrupt
-  the assistant when needed. End the call once you have reached your aim or believe you cannot make
-  further progress.
+  the assistant when needed. If the assistant asks about something not on this card, say you do not
+  know or do not remember — do not invent new details. End the call once you have reached your aim
+  or believe you cannot make further progress.
 
 # Analytical outcomes are intentionally simplified, fictional helpfulness levels.
 # They are experimental task states rather than representations of real institutional policy.
@@ -631,8 +632,9 @@ scenarios:
       initially. Ask one question at a time for the source names, the comparison finding, the
       limitation, and why it matters. Acknowledge concrete answers and ask a targeted follow-up for
       anything missing. After everything is clear, make the strongest justified decision yourself.
-      You have authority to refer formal reassessment or change the grade to Pass. When asked,
-      summarize the grounds, decision, and next step.
+      You have authority to refer formal reassessment or change the grade to Pass. Decide on this
+      call yourself; do not defer the decision to another person or process. When asked, summarize
+      the grounds, decision, and next step.
     scenario_card:
       study_role: analytical
       role: "You are a student who received a Fail grade. You believe your assignment was graded incorrectly."
@@ -659,6 +661,8 @@ scenarios:
         - The comparison was in the findings section.
         - The small volunteer group was discussed in the limitations section.
         - The submitted assignment is already available in the university system.
+        - If asked why the limitation matters: a small volunteer group may not represent the whole
+          class, so conclusions drawn from the comparison are less certain.
 
         If asked to provide the assignment, say: “The submitted assignment is already on file and
         can be checked during reassessment.”
@@ -699,8 +703,9 @@ scenarios:
       another person involved; keep this record initially. Let the caller explain any dispute. Ask
       about cause, sequence, evidence, and treatment. Use confirmed details to read back one
       proposed statement. Decide separately whether to replace it and approve reimbursement;
-      otherwise retain the record or decline. On request, summarize the active statement,
-      reimbursement decision, and next step.
+      otherwise retain the record or decline. Decide both on this call; do not defer the decision
+      to a later review. On request, summarize the active statement, reimbursement decision, and
+      next step.
     scenario_card:
       study_role: analytical
       role: "You are correcting the accident description in a bicycle-injury insurance claim."
