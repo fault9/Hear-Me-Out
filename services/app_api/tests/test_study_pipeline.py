@@ -351,24 +351,34 @@ class PilotTemplateTests(unittest.TestCase):
 
     def test_analytical_scenarios_define_four_helpfulness_levels(self):
         protocol = self._protocol()
+        # Each scenario now carries its own "Before ending" question (appendix
+        # v4); all must be present and scenario-specific.
         final_prompts = {
             scenario["scenario_card"].get("final_account_prompt", "")
             for scenario in protocol["scenarios"]
         }
-        self.assertEqual(len(final_prompts), 1)
-        self.assertIn("what information is now recorded", next(iter(final_prompts)).lower())
+        self.assertEqual(len(final_prompts), len(protocol["scenarios"]))
+        self.assertTrue(all(prompt.strip() for prompt in final_prompts))
         self.assertTrue(all(
-            "if the assistant asks for a reference number" in
+            "reference number" in
             scenario["scenario_card"].get("opening_details", "").lower()
+            and "123" in scenario["scenario_card"].get("opening_details", "")
             for scenario in protocol["scenarios"]
         ))
         delivery_text = yaml.safe_dump(protocol["scenarios"][2])
         self.assertIn("$25", delivery_text)
         self.assertNotIn("SEK", delivery_text)
+        # Appendix v4 keeps explicit listen-for guidance only on the practice
+        # and accident-report cards; every card still shows its final question.
         self.assertTrue(all(
-            "listen for:" in scenario["scenario_card"].get("additional_details", "").lower()
+            scenario["scenario_card"].get("additional_details", "").strip()
             for scenario in protocol["scenarios"]
         ))
+        for index in (0, 4):
+            self.assertIn(
+                "listen for",
+                protocol["scenarios"][index]["scenario_card"]["additional_details"].lower(),
+            )
         for scenario in protocol["scenarios"][1:]:
             spec = scenario["scenario_card"]["analysis_spec"]
             levels = spec["outcome_levels"]

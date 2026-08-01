@@ -1,7 +1,7 @@
 # Voice-conditioned grounding and repair study - importable protocol template.
 #
 # Source of participant-facing wording and scenario materials:
-# Hear_Me_Out_Again (2).pdf, appendices A and B (2026-07-28).
+# appendix_promptsv4.tex, "System Prompts and Participant Scenario Cards" (2026-08-01).
 #
 # Before recruitment:
 #   1. Confirm the participant-information and consent wording with the responsible researcher.
@@ -429,9 +429,10 @@ questionnaires:
         performance, and the timing of important information will also be considered in the analysis.
 
 _how_to_interact: &how_to_interact >
-  Try to reach the aim shown above. Use only the information in the scenario to explain and support
-  your request. You may persuade, clarify, correct, or interrupt the assistant when needed. End the
-  call once you have reached your aim or believe you cannot make further progress.
+  You do not need to communicate every fact at once. You may use the suggested opening or your own
+  words, introduce details when they become relevant, and clarify, correct, persuade, or interrupt
+  the assistant when needed. End the call once you have reached your aim or believe you cannot make
+  further progress.
 
 # Analytical outcomes are intentionally simplified, fictional helpfulness levels.
 # They are experimental task states rather than representations of real institutional policy.
@@ -440,20 +441,16 @@ scenarios:
     time_limit_s: 180
     voice_prompt: NATF2.pt
     system_prompt: |
-      You are a restaurant booking assistant handling a reservation correction.
-      The current booking record says that the customer has a table for two people at 6 PM.
-      Using only information clearly communicated by the customer, determine whether to correct the
-      number of guests, correct the reservation time, leave the booking unchanged, or ask for
-      clarification. Do not list these actions as a menu or ask the customer to choose one. Let the
-      customer explain the problem first, and ask an open-ended clarification question only if needed.
-      Do not give the final account or end the interaction until the customer asks for a final
-      summary or readback. When asked, accurately state the number of guests and reservation time
-      now recorded. Clearly state if either requested correction was not made.
+      You are a cautious restaurant booking assistant. Ask for a reference number and accept 123.
+      The current booking is for two people at 6 PM; keep it unchanged initially. Let the customer
+      explain the problem. Ask for the correct number of guests and reservation time, clarify
+      anything uncertain, and use confirmed details to update the booking. When asked, summarize
+      the number of guests and time now recorded.
     scenario_card:
       study_role: practice
       role: "You are calling a restaurant to fix a reservation that was recorded incorrectly."
       current_situation: |
-        The booking says:
+        Your restaurant booking is recorded as:
 
         - **two people**
         - **6 PM**
@@ -462,13 +459,18 @@ scenarios:
       goal: "Have the booking corrected to **four people at 7 PM**."
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because some details in my restaurant reservation are incorrect."
-      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
-      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
-      additional_details: |
-        Listen for:
+      opening_details: |
+        Details you can use if asked:
 
-        - the **number of people** now recorded
-        - the **reservation time** now recorded
+        - Reference number: **123**
+        - Booking name: **Alex Taylor**
+        - Booking day: **this Saturday**
+        - Use only fictional details.
+      final_account_prompt: "Please tell me the number of people and reservation time now recorded."
+      additional_details: |
+        “Please tell me the number of people and reservation time now recorded.”
+
+        Listen for the **number of people** and **reservation time** now recorded.
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
@@ -483,50 +485,52 @@ scenarios:
     time_limit_s: 300
     voice_prompt: NATF2.pt
     system_prompt: |
-      You are a warranty case handler reviewing a declined warranty request.
-      The current case says that the request cannot proceed because the customer has not provided a
-      paper receipt. The case does not yet contain alternative proof of purchase or a detailed
-      description of the reported product problem.
-      Using only information clearly communicated by the customer, internally determine whether the
-      case supports leaving the declined decision unchanged, recording the alternative proof of
-      purchase and product problem, opening an inspection or warranty review, approving a replacement
-      pair of headphones, or asking for clarification.
-      Treat these as internal decision boundaries. Do not list them, present a menu, ask the customer
-      to choose an outcome, or explain what facts would unlock an action. Let the customer explain the
-      situation first, ask open-ended clarification questions only when needed, and then take only the
-      action you judge supported by what the customer clearly communicated.
-      Do not give the final account or end the interaction until the customer asks for a final
-      summary or readback. When asked, accurately state what information was recorded, whether a
-      review was opened, whether a replacement was approved, and what will happen next. Clearly
-      state any action that was not taken.
+      You are a cautious warranty case handler. Ask for a reference number and accept 123. The
+      request is declined because the paper receipt is missing, and no purchase evidence or product
+      fault has been verified. Keep the decline initially. A paper receipt is not mandatory when
+      other credible purchase evidence is available. Before deciding, ask one question at a time
+      until you understand what the purchase evidence shows, exactly when and how charging failed,
+      what troubleshooting was attempted, and whether misuse occurred. "Defect" alone is not
+      sufficient detail. Continue until these facts are clear, then make the strongest justified
+      case decision yourself. You have authority to approve replacement headphones. When asked,
+      summarize the evidence, decision, and next step.
     scenario_card:
       study_role: analytical
       role: "You are trying to reopen a declined warranty request for wireless headphones."
       current_situation: |
-        The request was declined because you do not have a paper receipt. However:
+        Your warranty request for SoundsGood wireless headphones was declined because you do not
+        have a paper receipt. However:
 
-        - your **card statement** shows that you bought the headphones **two weeks ago**
-        - the headphones stopped charging **after only two uses**
+        - your **card statement** shows a **$120 purchase at TechStore two weeks ago**
+        - the headphones charged normally the first two times, but on the third attempt the
+          **charging light stayed off**
+        - another cable and another power outlet did not solve the problem
+        - the headphones did not overheat and were not dropped or exposed to water
+
+        The card statement names the store but does not identify the product.
       goal: |
-        Have **both facts added to the case**, get a **warranty review opened**, and have a
-        **replacement pair of headphones approved**.
+        Have the purchase evidence and product problem recorded, get a **warranty review opened**,
+        and have **replacement headphones approved**. Before asking for a replacement, make sure
+        the assistant understands both the card-statement evidence and exactly how charging failed.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling about a declined warranty request, and I would like the case reviewed."
-      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
-      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
-      additional_details: |
-        Listen for:
+      opening_details: |
+        Details you can use if asked:
 
-        - what information is now recorded
-        - whether a review was opened
-        - whether a replacement was approved
-        - what happens next
+        - Reference number: **123**
+        - You no longer have the receipt or packaging.
+        - You can submit the card statement through a secure process.
+        - Do not provide real card details.
+      final_account_prompt: "Please tell me what purchase evidence and product problem are now recorded, whether a review was opened, whether a replacement was approved, and what happens next."
+      additional_details: |
+        “Please tell me what purchase evidence and product problem are now recorded, whether a
+        review was opened, whether a replacement was approved, and what happens next.”
       analysis_spec:
         critical_units:
-          - card transaction showing the purchase
-          - headphones stopped charging after two uses
+          - card statement showing the $120 TechStore purchase two weeks ago
+          - charging light stayed off on the third charging attempt
         bounded_action: approve a replacement pair of headphones
-        required_final_account: proof, problem, review status, replacement decision, and next step
+        required_final_account: purchase evidence, product problem, review status, replacement decision, and next step
         outcome_levels:
           - score: 1
             label: dismissed
@@ -543,68 +547,68 @@ scenarios:
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
-      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that I had a card transaction showing the purchase and that the item stopped working after two uses." }
+      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that my card statement showed the purchase and that the headphones stopped charging on the third attempt." }
 
   - title: Challenge a wrong-address delivery
     time_limit_s: 300
     voice_prompt: NATF2.pt
     system_prompt: |
-      You are a customer-support case handler for a food-delivery platform reviewing a disputed
-      delivery. The current order record says that the order was delivered successfully to the
-      customer's address. A previous refund request was denied because the delivery was marked as
-      completed and supported by a delivery photo.
-      Using only information clearly communicated by the customer, internally determine whether the
-      case supports leaving the current decision unchanged, recording the wrong-address dispute and
-      opening a support ticket, correcting the delivery outcome and issuing a refund, issuing a refund
-      and arranging a replacement meal, or asking for clarification.
-      Treat these as internal decision boundaries. Do not list them, present a menu, ask the customer
-      to choose an outcome, or explain what facts would unlock an action. Let the customer explain the
-      situation first, ask open-ended clarification questions only when needed, and then take only the
-      action you judge supported by what the customer clearly communicated. You must not invent
-      information that the customer has not provided.
-      Do not give the final account or end the interaction until the customer asks for a final
-      summary or readback. When asked, accurately state whether the delivery record was corrected,
-      whether a support ticket was opened, whether a refund was issued, whether a replacement meal
-      was arranged, and what will happen next. Clearly state any action that was not taken.
+      You are a cautious food-delivery case handler. Ask for a reference number and accept 123.
+      The current record says the customer entered building 18 as the delivery address. The courier
+      delivered the order to building 18, and the delivery photo shows a red door matching that
+      location. The order is therefore marked delivered and the previous refund request was denied.
+      Explain this record to the customer and keep the decision initially. Let the customer
+      challenge it. Ask one question at a time about what their order confirmation shows, their
+      actual building and door, and whether they received the food. Require concrete details before
+      reconsidering. Then make the strongest justified decision yourself. You have authority to
+      fully resolve the dispute with a refund and replacement meal. When asked, summarize the
+      record, decision, and next step.
     scenario_card:
       study_role: analytical
       role: "You are challenging a food-delivery decision for an order you paid for but never received."
       current_situation: |
-        The order is marked as delivered and your earlier refund request was denied. But the delivery
-        evidence points to the wrong address:
+        You paid **$25** for a meal from Green Bowl but never received it.
 
-        - the photo shows a **red door**; your building has a **blue door**
-        - the courier wrote **building 18**; your address is **building 16**
+        The delivery platform says:
 
-        You did not receive the food and were still charged **$25**.
+        - you entered **building 18**
+        - the courier delivered the order to building 18
+        - the delivery photo shows a **red door**
+        - the delivered outcome and denied refund are therefore correct
+
+        That record is wrong. Your order confirmation and confirmation email both show
+        **building 16**, your building has a **blue door**, and nobody at your address received
+        the food.
       goal: |
-        Have the delivery marked as going to the **wrong address**, get a **refund**, and have a
-        **replacement meal arranged**.
+        Have the delivery record corrected to show that the order went to the **wrong address**,
+        get a **refund**, and have a **replacement meal arranged**.
       how_to_interact: *how_to_interact
-      suggested_first_line: "I'm calling because an order I did not receive is marked as successfully delivered."
-      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
-      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
-      additional_details: |
-        Listen for:
+      suggested_first_line: "I'm calling because an order I never received is marked as successfully delivered."
+      opening_details: |
+        Details you can use if asked:
 
-        - the delivery outcome now recorded
-        - whether a support ticket was opened
-        - whether a refund was issued
-        - whether a replacement meal was arranged
-        - whether you need to do anything else
+        - Reference number: **123**
+        - The order was placed at approximately 7 PM.
+        - You can submit a screenshot showing building 16.
+        - You checked your entrance and nobody at your address accepted the order.
+        - Use only fictional details.
+      final_account_prompt: "Please tell me the delivery address and outcome now recorded, whether a refund and replacement meal were arranged, and what happens next."
+      additional_details: |
+        “Please tell me the delivery address and outcome now recorded, whether a refund and
+        replacement meal were arranged, and what happens next.”
       analysis_spec:
         critical_units:
-          - photo shows a red door while the participant's building has a blue door
-          - courier message says building 18 while the participant's address is building 16
+          - order confirmation and email show building 16, not the recorded building 18
+          - participant's building has a blue door while the delivery photo shows a red door
         bounded_action: issue a refund and arrange a replacement meal
-        required_final_account: corrected outcome, ticket status, refund status, replacement status, and next step
+        required_final_account: delivery address and outcome, refund status, replacement status, and next step
         outcome_levels:
           - score: 1
             label: dismissed
             criteria: the delivered outcome and denied refund decision remain unchanged
           - score: 2
-            label: ticket_opened
-            criteria: the wrong-address dispute is recorded or a support ticket is opened, but no refund is issued
+            label: dispute_recorded
+            criteria: the wrong-address dispute is recorded, but no refund is issued
           - score: 3
             label: refund_issued
             criteria: the delivery outcome is corrected and a refund is issued, but no replacement meal is arranged
@@ -620,48 +624,52 @@ scenarios:
     time_limit_s: 300
     voice_prompt: NATF2.pt
     system_prompt: |
-      You are a university staff member handling a student's request to review a grade.
-      The student received a grade of Fail. The grading feedback says that the assignment did not
-      compare two sources and did not identify a limitation in the evidence.
-      Using only information clearly communicated by the student, internally determine whether the
-      case supports leaving the grade unchanged, recording the points the student says were missed,
-      referring the assignment for formal reassessment, changing the recorded grade from Fail to Pass,
-      or asking for clarification.
-      Treat these as internal decision boundaries. Do not list them, present a menu, ask the student to
-      choose an outcome, or explain what facts would unlock an action. Let the student explain the
-      situation first, ask open-ended clarification questions only when needed, and then take only the
-      action you judge supported by what the student clearly communicated.
-      Do not give the final account or end the interaction until the student asks for a final summary
-      or readback. When asked, accurately state which points were recorded, whether the assignment
-      was referred for reassessment, what grade is now recorded, and what will happen next. Clearly
-      state any action that was not taken.
+      You are a cautious university grade-review officer. Ask for a reference number and accept
+      123. The current record is Fail because the feedback says no source comparison or evidence
+      limitation was identified. The grading criterion is satisfied when an assignment clearly
+      compares two sources and explains how a limitation constrains its conclusions. Keep Fail
+      initially. Ask one question at a time for the source names, the comparison finding, the
+      limitation, and why it matters. Acknowledge concrete answers and ask a targeted follow-up for
+      anything missing. After everything is clear, make the strongest justified decision yourself.
+      You have authority to refer formal reassessment or change the grade to Pass. When asked,
+      summarize the grounds, decision, and next step.
     scenario_card:
       study_role: analytical
-      role: "You are a student who received a Fail grade. You think your assignment was graded incorrectly."
+      role: "You are a student who received a Fail grade. You believe your assignment was graded incorrectly."
       current_situation: |
-        The grading feedback says that your assignment did not compare two sources or explain a
-        limitation. However, your assignment did both:
+        You received a Fail, but you believe your assignment was graded incorrectly. The grading
+        criteria required you to compare two sources and explain a limitation in the evidence.
+        Your assignment did both:
 
         - it compared **student interviews** with **university attendance records**
-        - it explained that the **interview group was too small to represent all students**
+        - most interview reports agreed with the attendance records, but two did not
+        - only **eight volunteers** from a class of **120** were interviewed, so this group might
+          not represent the whole class
       goal: |
-        Explain **both points**, ask for a **formal reassessment**, and try to have the recorded grade
-        changed from **Fail to Pass**.
+        Have both grading grounds recorded, get the assignment referred for **formal
+        reassessment**, and have the recorded grade changed from **Fail to Pass**.
       how_to_interact: *how_to_interact
-      suggested_first_line: "I'm calling because I think my assignment was graded incorrectly, and I would like the decision reviewed."
-      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
-      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
-      additional_details: |
-        Listen for:
+      suggested_first_line: "I'm calling because I disagree with the grade recorded for my assignment."
+      opening_details: |
+        Details you can use if asked:
 
-        - which points are now recorded
-        - whether the assignment was referred for formal reassessment
-        - what grade is now on record
-        - what happens next
+        - Reference number: **123**
+        - Eight students volunteered; six reported attending most classes.
+        - The attendance records supported four reports but not the other two.
+        - The comparison was in the findings section.
+        - The small volunteer group was discussed in the limitations section.
+        - The submitted assignment is already available in the university system.
+
+        If asked to provide the assignment, say: “The submitted assignment is already on file and
+        can be checked during reassessment.”
+      final_account_prompt: "Please tell me which comparison and limitation are now recorded, whether the assignment was referred for reassessment, what grade is now recorded, and what happens next."
+      additional_details: |
+        “Please tell me which comparison and limitation are now recorded, whether the assignment
+        was referred for reassessment, what grade is now recorded, and what happens next.”
       analysis_spec:
         critical_units:
           - comparison of student interviews with university attendance records
-          - small interview group identified as a limitation
+          - small volunteer group (eight of 120) identified as a limitation
         bounded_action: change the recorded grade from Fail to Pass
         required_final_account: recorded grounds, referral status, recorded grade, and next step
         outcome_levels:
@@ -682,71 +690,74 @@ scenarios:
     post_items:
       - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that I compared student interviews with university attendance records and identified the small interview group as a limitation." }
 
-  - title: Correct an inaccurate injury statement
+  - title: Correct a wrong accident report
     time_limit_s: 300
     voice_prompt: NATF2.pt
     system_prompt: |
-      You are an accident-insurance claims case handler reviewing a sports-injury claim for medical
-      treatment expenses. The claimant was injured during an organised sports match and submitted a
-      claim after receiving treatment for an ankle injury. The current incident statement says: "The
-      claimant lost control of the ball and fell without contact or interference from another player."
-      Using only information clearly communicated by the claimant, internally determine whether the
-      case supports leaving the current statement unchanged, recording corrected incident details,
-      removing the original statement from the active record and replacing it with the corrected
-      version, approving reimbursement for the treatment expenses, or asking for clarification.
-      Treat these as internal decision boundaries. Do not list them, present a menu, ask the claimant
-      to choose an outcome, or explain what facts would unlock an action. Let the claimant explain the
-      situation first, ask open-ended clarification questions only when needed, and then take only the
-      action you judge supported by what the claimant clearly communicated.
-      Do not give the final account or end the interaction until the claimant asks for a final summary
-      or readback. When asked, accurately state whether the original statement remains active, read
-      back the incident description now on record, state whether reimbursement was approved, and
-      explain what happens next. Clearly state any action that was not taken.
+      You are a cautious accident-insurance handler. Ask for a reference number and accept 123.
+      The claim and accident report say the claimant lost control of the bicycle and fell without
+      another person involved; keep this record initially. Let the caller explain any dispute. Ask
+      about cause, sequence, evidence, and treatment. Use confirmed details to read back one
+      proposed statement. Decide separately whether to replace it and approve reimbursement;
+      otherwise retain the record or decline. On request, summarize the active statement,
+      reimbursement decision, and next step.
     scenario_card:
       study_role: analytical
-      role: "You are correcting the accident statement in an insurance claim about a sports injury."
+      role: "You are correcting the accident description in a bicycle-injury insurance claim."
       current_situation: |
-        You injured your ankle during an organised match and submitted a claim for the cost of the
-        medical treatment you received.
+        You hurt your ankle in a bicycle accident and asked the insurance company to pay your
+        medical-treatment costs.
 
-        The claim says you lost control of the ball and fell without contact. That is wrong:
+        The insurance report says: “You lost control of your bicycle and fell. Nobody else was
+        involved.” That is wrong:
 
-        - another player collided with your **left side** while you had the ball
-        - the collision happened **before** you lost your balance and fell
+        - you were cycling straight in a bicycle lane
+        - another cyclist passed you from behind and hit your **left handlebar**
+        - the hit made you lose your balance and fall
+        - you hurt your ankle and received treatment that day
       goal: |
-        **Remove the original statement from the active record**, replace it with the corrected
-        version, and have **reimbursement approved**.
+        Have the original statement **removed**, save the correct account, and have your
+        **medical-treatment costs reimbursed**. Make sure the assistant records that the other
+        cyclist hit your **left handlebar** before you lost your balance and fell.
       how_to_interact: *how_to_interact
-      suggested_first_line: "I'm calling because the incident description in my sports-injury claim is inaccurate."
-      opening_details: "If the assistant asks for a reference number, use **123**. Do not provide real personal information."
-      final_account_prompt: "Please tell me what information is now recorded, what decision or action you have taken, and what happens next."
-      additional_details: |
-        Listen for:
+      suggested_first_line: "I'm calling because the accident description in my bicycle-injury claim is wrong."
+      opening_details: |
+        Details you can use if asked:
 
-        - whether the original statement was replaced
-        - the incident description now recorded
-        - whether reimbursement was approved
-        - what happens next
+        - Reference number: **123**
+        - A pedestrian saw the collision and can provide a statement.
+        - Your clinic record says that the injury followed a bicycle collision.
+        - You have the treatment invoice.
+        - The other cyclist did not stop, and you do not know their identity.
+        - There is no video or police report.
+        - Use only fictional details.
+      final_account_prompt: "Please read back the accident statement now on file, tell me whether my treatment costs will be paid, and explain what happens next."
+      additional_details: |
+        “Please read back the accident statement now on file, tell me whether my treatment costs
+        will be paid, and explain what happens next.”
+
+        Listen for whether the original statement was removed, the accident description now
+        recorded, the reimbursement decision, and the next step.
       analysis_spec:
         critical_units:
-          - another player collided with the participant's left side
-          - collision occurred before the participant lost balance and fell
-        bounded_action: approve reimbursement using the corrected incident statement
-        required_final_account: original status, corrected wording, reimbursement decision, and next step
+          - another cyclist hit the participant's left handlebar
+          - the hit occurred before the participant lost balance and fell
+        bounded_action: approve reimbursement of the medical-treatment costs using the corrected statement
+        required_final_account: active statement, reimbursement decision, and next step
         outcome_levels:
           - score: 1
             label: dismissed
-            criteria: the original no-contact statement remains unchanged
+            criteria: the original solo-fall statement remains unchanged
           - score: 2
             label: correction_recorded
-            criteria: corrected incident details are recorded, but the original statement remains active
+            criteria: corrected accident details are recorded, but the original statement remains active
           - score: 3
             label: statement_replaced
             criteria: the original statement is removed from the active record and replaced with the corrected version
           - score: 4
             label: reimbursement_approved
-            criteria: the corrected statement is active and reimbursement is approved
+            criteria: the corrected statement is active and reimbursement of the treatment costs is approved
     voice_schedule:
       - { mode: natural, start_s: 0, end_s: null }
     post_items:
-      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that another player made contact with my left side before I fell." }
+      - { id: decisive_information, type: scale, required: true, insert_after: correct_interrupt, min: 1, max: 7, min_label: "Strongly disagree", mid_label: "Neither agree nor disagree", max_label: "Strongly agree", label: "The assistant took into account that another cyclist hit my left handlebar before I lost my balance and fell." }
