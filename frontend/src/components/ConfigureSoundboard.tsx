@@ -366,6 +366,10 @@ function SlotCard({
   // <select> value matches an actual <option>.
   const vcCandidates = sb.targets.filter((t) => !!t.wav)
   const [targetId, setTargetId] = useState<string>(slot.targetId || vcCandidates[0]?.id || "")
+  // VC engine: X-VC is the production engine (duration-preserving; the only
+  // one valid for the frozen soundboard audit). Seed-VC is exploratory.
+  const [vcEngine, setVcEngine] = useState<"xvc" | "seedvc">(
+    slot.engine === "seedvc" ? "seedvc" : "xvc")
   const [semitones, setSemitones] = useState<number>(slot.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones)
   const [formantShift, setFormantShift] = useState<number>(slot.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift)
   const [baking, setBaking] = useState(false)
@@ -382,6 +386,7 @@ function SlotCard({
     setLabel(slot.label)
     setCondition(slot.condition)
     setMode(slot.manipulation)
+    setVcEngine(slot.engine === "seedvc" ? "seedvc" : "xvc")
     setSemitones(slot.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones)
     setFormantShift(slot.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift)
     const cands = sb.targets.filter((t) => !!t.wav)
@@ -414,6 +419,7 @@ function SlotCard({
       await sb.bakeSlot(slot.id, {
         mode,
         targetId: mode === "vc" ? targetId : undefined,
+        engine: mode === "vc" ? vcEngine : undefined,
         pitchSemitones: mode === "pitch_formant" ? semitones : undefined,
         formantShift: mode === "pitch_formant" ? formantShift : undefined,
         normalize: normalizeLoudness,
@@ -582,11 +588,27 @@ function SlotCard({
                     </select>
                   )}
                 </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px]">Engine</Label>
+                  <select
+                    className="h-8 rounded-md border bg-background px-2 text-xs"
+                    value={vcEngine}
+                    onChange={(e) => setVcEngine(e.target.value as "xvc" | "seedvc")}
+                  >
+                    <option value="xvc">X-VC (production)</option>
+                    <option value="seedvc">Seed-VC (exploratory)</option>
+                  </select>
+                </div>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                VC-mode bake converts your recording with X-VC before the
-                conversation. The stored 24 kHz clip goes directly to
-                PersonaPlex, with live VC kept off.
+                {vcEngine === "xvc"
+                  ? "VC-mode bake converts your recording with X-VC before the " +
+                    "conversation. The stored 24 kHz clip goes directly to " +
+                    "PersonaPlex, with live VC kept off."
+                  : "Seed-VC is exploratory only: it VAD-trims and can re-time " +
+                    "the clip, so a duration-drift flag is expected, and " +
+                    "Seed-VC slots are not valid for the frozen audit (the " +
+                    "audit characterizes the production X-VC manipulation)."}
               </p>
             </div>
           )}

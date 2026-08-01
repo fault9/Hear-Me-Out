@@ -20,6 +20,7 @@ import { Play, Square, Download, Filter, ListMusic, Headphones, Pause, Volume2, 
 import { useSoundboard, makeSessionContext, type SessionContext } from "@/hooks/useSoundboard"
 import { nextSessionNumber } from "@/lib/sessionCounter"
 import { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
+import { SoundboardAuditSection } from "@/components/conversation/SoundboardAuditSection"
 import type { useWebSocket } from "@shared/hooks/useWebSocket"
 import type { Slot } from "@/lib/soundboardDb"
 
@@ -432,6 +433,19 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
 
         {playback.error && (
           <p className="text-[10px] text-destructive">{playback.error}</p>
+        )}
+
+        {/* Automated audit runs: only in soundboard mode (this panel), only
+            with VC off (panel is disabled under VC anyway). Turns autoplay
+            off before starting so the P5 auto-advance can't double-fire
+            slots into the runner's conversations. */}
+        {!vcEnabled && (
+          <SoundboardAuditSection
+            ws={ws}
+            playback={playback}
+            slots={visible}
+            onBeforeRun={() => setAutoplay(false)}
+          />
         )}
       </CardContent>
     </Card>

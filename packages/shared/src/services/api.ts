@@ -118,6 +118,19 @@ export async function xvcFileBake(
   }
 }
 
+// Offline Seed-VC conversion (the Convert tab's engine) for soundboard bakes.
+// NOT duration-preserving: the endpoint VAD-trims the source and Seed-VC may
+// re-time it, and the output sample rate is the model's own — callers must
+// conform the result to PP's rate themselves and expect duration drift.
+export async function seedVcFileConversion(source: Blob, target: Blob): Promise<Blob> {
+  const fd = new FormData()
+  fd.append("source_audio", source, "source.wav")
+  fd.append("target_audio", target, "target.wav")
+  const resp = await fetch(`${API_BASE}/api/voice-conversion`, { method: "POST", body: fd })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  return resp.blob()
+}
+
 export async function compareMetrics(sourceFile: File, targetFile: File): Promise<Blob> {
   const fd = new FormData()
   fd.append("source_audio", sourceFile)

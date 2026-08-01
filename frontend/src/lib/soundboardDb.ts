@@ -31,7 +31,7 @@ export interface Slot {
 
   // VC-mode fields
   targetId?: string
-  engine?: "meanvc" | "xvc"
+  engine?: "meanvc" | "xvc" | "seedvc"
 
   // Pitch/formant-mode fields
   pitchSemitones?: number

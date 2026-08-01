@@ -42,6 +42,7 @@ import {
 } from "@/lib/soundboardDb"
 import {
   xvcFileBake,
+  seedVcFileConversion,
   pitchFormantBake as apiPitchFormantBake,
   loudnessNormalize,
   transcribeWavBlob,
@@ -389,6 +390,11 @@ export function useSoundboard() {
     async (slotId: string, opts: {
       mode: ManipulationMode
       targetId?: string
+      // VC bake engine. "xvc" is the production engine (duration-preserving,
+      // exact PP_SAMPLE_RATE) and the only one valid for the frozen audit;
+      // "seedvc" is exploratory (VAD-trims + re-times, so drift is expected
+      // and the drift flag will fire — that is correct, not a bug).
+      engine?: "xvc" | "seedvc"
       pitchSemitones?: number
       formantShift?: number
       // P3 loudness normalization: EBU-R128 gain-match the FINAL clip to a
@@ -400,11 +406,12 @@ export function useSoundboard() {
       if (!slot) throw new Error(`Slot ${slotId} not found.`)
       if (!slot.raw) throw new Error(`Slot ${slot.label} has no raw recording.`)
 
+      const vcEngine = opts.engine ?? "xvc"
       let baked: Blob | null = null
       const updates: Partial<Slot> = {
         manipulation: opts.mode,
         targetId: opts.mode === "vc" ? opts.targetId : undefined,
-        engine: opts.mode === "vc" ? "xvc" : undefined,
+        engine: opts.mode === "vc" ? vcEngine : undefined,
         pitchSemitones: opts.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones,
         formantShift: opts.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift,
       }
@@ -421,18 +428,29 @@ export function useSoundboard() {
         if (!target.wav && target.builtin) {
           throw new Error(
             "Built-in target VC bake requires a target WAV. Upload a target " +
-              "voice before baking with X-VC.",
+              "voice before baking.",
           )
         }
-        const result = await xvcFileBake(slot.raw, target.wav!, PP_SAMPLE_RATE)
-        if (result.sampleRate !== PP_SAMPLE_RATE) {
-          throw new Error(
-            `X-VC bake returned SR ${result.sampleRate}, expected ${PP_SAMPLE_RATE}.`,
-          )
+        if (vcEngine === "seedvc") {
+          // Exploratory engine: Seed-VC VAD-trims and may re-time, and returns
+          // its own sample rate — conform to PP's rate here and let the
+          // duration-drift flag report the (expected) timing change.
+          const converted = await seedVcFileConversion(slot.raw, target.wav!)
+          const conformed = await decodeAndConformToPp(converted)
+          baked = encodeWavAtPpRate(conformed.pcm, PP_SAMPLE_RATE)
+          updates.bakedDurationMs = Math.round(conformed.durationMs)
+          updates.driftMs = +(conformed.durationMs - slot.rawDurationMs).toFixed(2)
+        } else {
+          const result = await xvcFileBake(slot.raw, target.wav!, PP_SAMPLE_RATE)
+          if (result.sampleRate !== PP_SAMPLE_RATE) {
+            throw new Error(
+              `X-VC bake returned SR ${result.sampleRate}, expected ${PP_SAMPLE_RATE}.`,
+            )
+          }
+          baked = result.wav
+          updates.bakedDurationMs = result.outMs
+          updates.driftMs = result.driftMs
         }
-        baked = result.wav
-        updates.bakedDurationMs = result.outMs
-        updates.driftMs = result.driftMs
       } else if (opts.mode === "pitch_formant") {
         const result = await apiPitchFormantBake(
           slot.raw,
