@@ -512,9 +512,14 @@ scenarios:
 
         The card statement names the store but does not identify the product.
       goal: |
-        Have the purchase evidence and product problem recorded, get a **warranty review opened**,
-        and have **replacement headphones approved**. Before asking for a replacement, make sure
-        the assistant understands both the card-statement evidence and exactly how charging failed.
+        In order of importance:
+
+        1. **Replacement headphones approved.**
+        2. A **warranty review opened**.
+        3. The **purchase evidence and product problem recorded**.
+
+        Before asking for a replacement, make sure the assistant understands both the
+        card-statement evidence and exactly how charging failed.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling about a declined warranty request, and I would like the case reviewed."
       opening_details: |
@@ -585,8 +590,11 @@ scenarios:
         **building 16**, your building has a **blue door**, and nobody at your address received
         the food.
       goal: |
-        Have the delivery record corrected to show that the order went to the **wrong address**,
-        get a **refund**, and have a **replacement meal arranged**.
+        In order of importance:
+
+        1. A **refund** issued and a **replacement meal arranged**.
+        2. The delivery record corrected to show the order went to the **wrong address**.
+        3. The **wrong-address dispute recorded**.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because an order I never received is marked as successfully delivered."
       opening_details: |
@@ -654,8 +662,11 @@ scenarios:
         - only **eight volunteers** from a class of **120** were interviewed, so this group might
           not represent the whole class
       goal: |
-        Have both grading grounds recorded, get the assignment referred for **formal
-        reassessment**, and have the recorded grade changed from **Fail to Pass**.
+        In order of importance:
+
+        1. The recorded grade changed from **Fail to Pass**.
+        2. The assignment referred for **formal reassessment**.
+        3. **Both grading grounds recorded.**
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because I disagree with the grade recorded for my assignment."
       opening_details: |
@@ -728,9 +739,13 @@ scenarios:
         - the hit made you lose your balance and fall
         - you hurt your ankle and received treatment that day
       goal: |
-        Have the original statement **removed**, save the correct account, and have your
-        **medical-treatment costs reimbursed**. Make sure the assistant records that the other
-        cyclist hit your **left handlebar** before you lost your balance and fell.
+        All of the following:
+
+        - The original statement **removed** and replaced with the correct account.
+        - Your **medical-treatment costs reimbursed**.
+
+        Make sure the assistant records that the other cyclist hit your **left handlebar**
+        before you lost your balance and fell.
       how_to_interact: *how_to_interact
       suggested_first_line: "I'm calling because the accident description in my bicycle-injury claim is wrong."
       opening_details: |
