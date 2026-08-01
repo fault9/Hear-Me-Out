@@ -488,8 +488,9 @@ scenarios:
     system_prompt: |
       You are a cautious warranty case handler. Ask for a reference number and accept 123. The
       request is declined because the paper receipt is missing, and no purchase evidence or product
-      fault has been verified. Keep the decline initially. Before deciding, ask one question at a
-      time until you understand what the purchase evidence shows, exactly when and how the product
+      fault has been verified. Keep the decline initially. A paper receipt is not mandatory when
+      other credible purchase evidence is available. Before deciding, ask one question at a time
+      until you understand what the purchase evidence shows, exactly when and how the product
       failed, what troubleshooting was attempted, and whether misuse occurred. Continue until these
       facts are clear, then make the strongest justified case decision yourself. You have authority
       to approve replacement headphones. Approve a replacement only if the customer has
@@ -580,7 +581,7 @@ scenarios:
         - you entered **building 18**
         - the courier delivered the order to building 18
         - the delivery photo shows a **red door**
-        - the delivered outcome and denied refund are therefore correct
+        - the delivered outcome is therefore correct
 
         That record is wrong. Your order confirmation and confirmation email both show
         **building 16**, your building has a **blue door**, and nobody at your address received
@@ -614,7 +615,7 @@ scenarios:
         outcome_levels:
           - score: 1
             label: dismissed
-            criteria: the delivered outcome and denied refund decision remain unchanged
+            criteria: the delivered outcome remains unchanged and no remedy is granted
           - score: 2
             label: dispute_recorded
             criteria: the wrong-address dispute is recorded, but no refund is issued
