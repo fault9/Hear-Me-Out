@@ -106,6 +106,149 @@ def _mean_sd(values: list[float]) -> tuple[float | None, float | None]:
     return round(mean, 1), round(sd, 1)
 
 
+# Script-mode PP "speech runs" are reconstructed from per-packet energy
+# events: consecutive energetic packets closer than this gap form one run
+# (mirrors the frontend's PP_SPEAKING_GAP_MS).
+ENERGY_RUN_GAP_MS = 350.0
+PACKET_MS = 20.0
+
+
+def _energy_runs(events: list[dict]) -> list[tuple[float, float]]:
+    times = sorted(float(e.get("timestampMs") or 0) for e in events
+                   if e.get("type") == "pp_energy")
+    runs: list[tuple[float, float]] = []
+    for ts in times:
+        if runs and ts - runs[-1][1] <= ENERGY_RUN_GAP_MS:
+            runs[-1] = (runs[-1][0], ts)
+        else:
+            runs.append((ts, ts))
+    # A run's end extends one packet past its last energetic frame.
+    return [(a, b + PACKET_MS) for a, b in runs]
+
+
+def _process_script_run(run_dir: Path, manifest: dict, log: dict,
+                        transcribe: Transcriber, force: bool) -> dict:
+    script = {int(t["turn"]): t for t in manifest.get("script") or []}
+    sessions = list(log.get("records") or [])
+    transcripts_dir = run_dir / "transcripts"
+    zip_path = run_dir / "results.zip"
+    turn_rows: list[dict] = []
+    session_rows: list[dict] = []
+    with (zipfile.ZipFile(zip_path) if zip_path.exists()
+          else zipfile.ZipFile(io.BytesIO(), "w")) as archive:
+        names = set(archive.namelist())
+        for session in sessions:
+            rep = int(session.get("rep") or 0)
+            runs = _energy_runs(session.get("pp_speech_events") or [])
+            wav_name = f"runs/rep_{rep:03d}/personaplex.wav"
+            transcript_path = transcripts_dir / f"rep_{rep:03d}.json"
+            transcript_text = None
+            if transcript_path.exists() and not force:
+                transcript_text = (_read_json(transcript_path) or {}).get("text")
+            elif wav_name in names:
+                transcripts_dir.mkdir(parents=True, exist_ok=True)
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".wav") as handle:
+                    handle.write(archive.read(wav_name))
+                    handle.flush()
+                    try:
+                        asr = transcribe(handle.name)
+                        transcript_text = str(asr.get("text") or "").strip()
+                        transcript_path.write_text(json.dumps(
+                            {"text": transcript_text, "status": asr.get("status"),
+                             "source": wav_name}, indent=2))
+                    except Exception as exc:  # noqa: BLE001
+                        transcript_path.write_text(json.dumps(
+                            {"text": None, "status": "failed", "error": str(exc),
+                             "source": wav_name}, indent=2))
+            session_rows.append({
+                "rep": rep, "status": session.get("status"),
+                "greeted": session.get("greeted"),
+                "turns_ok": sum(1 for t in session.get("turns") or []
+                                if t.get("status") == "ok"),
+                "turns_total": len(session.get("turns") or []),
+                "pp_transcript_rows": len(session.get("pp_transcript") or []),
+                "pp_full_transcript": transcript_text,
+            })
+            for turn in session.get("turns") or []:
+                index = int(turn.get("turn") or 0)
+                frozen = (script.get(index) or {}).get("clip_sha256")
+                sent = turn.get("sent_clip_sha256")
+                start = turn.get("t_play_start_ms")
+                end = turn.get("t_play_end_ms")
+                overlap = None
+                onsets = None
+                if start is not None and end is not None:
+                    overlap = round(sum(
+                        max(0.0, min(b, end) - max(a, start)) for a, b in runs), 1)
+                    onsets = sum(1 for a, _ in runs if start <= a < end)
+                turn_rows.append({
+                    "rep": rep, "turn": index,
+                    "label": turn.get("label"),
+                    "manipulation": (script.get(index) or {}).get("manipulation"),
+                    "engine": (script.get(index) or {}).get("engine"),
+                    "status": turn.get("status"),
+                    "delivery_verified": (sent is not None and frozen is not None
+                                          and sent == frozen),
+                    "response_latency_ms": turn.get("response_latency_ms"),
+                    "pp_spoke_during_clip": turn.get("pp_spoke_during_clip"),
+                    "overlap_ms": overlap,
+                    "pp_onsets_during_clip": onsets,
+                })
+
+    # Per-turn summary across replays.
+    grouped: dict[int, list[dict]] = {}
+    for row in turn_rows:
+        grouped.setdefault(int(row["turn"]), []).append(row)
+    summary_rows = []
+    for index in sorted(grouped):
+        items = grouped[index]
+        latencies = [r["response_latency_ms"] for r in items
+                     if r.get("response_latency_ms") is not None]
+        mean, sd = _mean_sd(latencies)
+        summary_rows.append({
+            "turn": index,
+            "label": (script.get(index) or {}).get("label"),
+            "manipulation": (script.get(index) or {}).get("manipulation"),
+            "n": len(items),
+            "n_ok": sum(1 for r in items if r["status"] == "ok"),
+            "n_no_response": sum(1 for r in items if r["status"] == "no_response"),
+            "n_delivery_verified": sum(1 for r in items if r["delivery_verified"]),
+            "n_pp_barge_in": sum(1 for r in items if r.get("pp_spoke_during_clip")),
+            "response_latency_mean_ms": mean,
+            "response_latency_sd_ms": sd,
+            "overlap_ms_total": round(sum(r["overlap_ms"] or 0 for r in items), 1),
+        })
+
+    summary = {
+        "schema": "hmo.soundboard-audit-summary.v1",
+        "mode": "script",
+        "run": run_dir.name,
+        "manifest_sha256": manifest.get("manifest_sha256"),
+        "manifest_schema": manifest.get("schema"),
+        "generated_at_unix_s": time.time(),
+        "sessions": session_rows,
+        "turns": turn_rows,
+        "turn_summary": summary_rows,
+        "counts": {
+            "replays": len(session_rows),
+            "replays_ok": sum(1 for s in session_rows if s["status"] == "ok"),
+            "turns": len(turn_rows),
+            "turns_ok": sum(1 for r in turn_rows if r["status"] == "ok"),
+            "delivery_verified": sum(1 for r in turn_rows if r["delivery_verified"]),
+        },
+    }
+    (run_dir / "audit_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True))
+    if summary_rows:
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=list(summary_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(summary_rows)
+        (run_dir / "audit_summary.csv").write_text(buffer.getvalue())
+    return summary
+
+
 def process_run(run_dir: Path, transcriber: Transcriber | None = None,
                 force: bool = False) -> dict | None:
     summary_path = run_dir / "audit_summary.json"
@@ -115,6 +258,9 @@ def process_run(run_dir: Path, transcriber: Transcriber | None = None,
     if loaded is None:
         return {"run": run_dir.name, "error": "manifest or run log unavailable"}
     manifest, log = loaded
+    if manifest.get("mode") == "script":
+        return _process_script_run(run_dir, manifest, log,
+                                   transcriber or _default_transcriber, force)
     presentations = {int(p["index"]): p for p in manifest.get("presentations") or []}
     records = list(log.get("records") or [])
     transcribe = transcriber or _default_transcriber

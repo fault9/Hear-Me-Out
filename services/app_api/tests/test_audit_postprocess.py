@@ -144,5 +144,100 @@ class AuditPostprocessTests(unittest.TestCase):
         self.assertIn("error", result)
 
 
+SCRIPT_MANIFEST = {
+    "schema": "hmo.soundboard-audit-manifest.v2",
+    "mode": "script",
+    "manifest_sha256": "e" * 64,
+    "reps": 2,
+    "inter_turn_gap_ms": 500,
+    "script": [
+        {"turn": 1, "slot_id": "s1", "label": "line 1",
+         "manipulation": "unconverted", "engine": None,
+         "clip_sha256": "t1hash", "raw_sha256": "r1", "clip_duration_ms": 1200},
+        {"turn": 2, "slot_id": "s2", "label": "line 2",
+         "manipulation": "vc", "engine": "xvc",
+         "clip_sha256": "t2hash", "raw_sha256": "r2", "clip_duration_ms": 1400},
+    ],
+}
+
+
+def script_session(rep: int, second_turn_status: str = "ok") -> dict:
+    return {
+        "rep": rep, "status": "ok", "greeted": True,
+        "turns": [
+            {"turn": 1, "slot_id": "s1", "label": "line 1", "status": "ok",
+             "t_play_start_ms": 1000.0, "t_play_end_ms": 2200.0,
+             "response_latency_ms": 150.0, "pp_spoke_during_clip": True,
+             "sent_clip_sha256": "t1hash", "notes": []},
+            {"turn": 2, "slot_id": "s2", "label": "line 2",
+             "status": second_turn_status,
+             "t_play_start_ms": 6000.0, "t_play_end_ms": 7400.0,
+             "response_latency_ms": 220.0 if second_turn_status == "ok" else None,
+             "pp_spoke_during_clip": False,
+             "sent_clip_sha256": "WRONG", "notes": []},
+        ],
+        # Energy events: a run overlapping turn 1's clip window (1500-2000),
+        # then a response run after it.
+        "pp_speech_events": [
+            {"type": "pp_energy", "timestampMs": 1500.0},
+            {"type": "pp_energy", "timestampMs": 1700.0},
+            {"type": "pp_energy", "timestampMs": 2000.0},
+            {"type": "pp_energy", "timestampMs": 2400.0},
+        ],
+        "pp_transcript": [{"text": "hi", "speaker": "personaplex"}],
+    }
+
+
+class ScriptModePostprocessTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.run_dir = Path(self._tmp.name) / "20260802T130000Z_eeeeeeee"
+        self.run_dir.mkdir(parents=True)
+        wav = tiny_wav_bytes()
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(SCRIPT_MANIFEST))
+            archive.writestr("run_log.json", json.dumps({
+                "records": [script_session(1),
+                            script_session(2, second_turn_status="no_response")]}))
+            for rep in (1, 2):
+                archive.writestr(f"runs/rep_{rep:03d}/personaplex.wav", wav)
+        (self.run_dir / "results.zip").write_bytes(buffer.getvalue())
+        self.calls: list[str] = []
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _transcriber(self, path: str) -> dict:
+        self.calls.append(path)
+        return {"text": f"conversation {len(self.calls)}", "status": "complete"}
+
+    def test_script_run_end_to_end(self):
+        summary = process_run(self.run_dir, transcriber=self._transcriber)
+        self.assertEqual(summary["mode"], "script")
+        self.assertEqual(summary["counts"]["replays"], 2)
+        self.assertEqual(summary["counts"]["turns"], 4)
+        self.assertEqual(summary["counts"]["turns_ok"], 3)
+        # Delivery: turn 1 hash matches in both reps; turn 2 never does.
+        self.assertEqual(summary["counts"]["delivery_verified"], 2)
+        table = {row["turn"]: row for row in summary["turn_summary"]}
+        self.assertEqual(table[1]["n"], 2)
+        self.assertEqual(table[1]["n_delivery_verified"], 2)
+        self.assertEqual(table[1]["n_pp_barge_in"], 2)
+        self.assertEqual(table[1]["response_latency_mean_ms"], 150.0)
+        self.assertEqual(table[2]["n_delivery_verified"], 0)
+        self.assertEqual(table[2]["n_no_response"], 1)
+        # Overlap: energy run 1500-2020 overlaps clip window 1000-2200 fully
+        # (520ms), run 2400-2420 is outside it.
+        turn1 = [r for r in summary["turns"] if r["turn"] == 1][0]
+        self.assertAlmostEqual(turn1["overlap_ms"], 520.0, places=1)
+        self.assertEqual(turn1["pp_onsets_during_clip"], 1)
+        # One whole-conversation transcript per replay.
+        self.assertEqual(len(self.calls), 2)
+        sessions = {s["rep"]: s for s in summary["sessions"]}
+        self.assertEqual(sessions[1]["pp_full_transcript"], "conversation 1")
+        self.assertTrue((self.run_dir / "audit_summary.csv").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
