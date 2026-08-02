@@ -61,7 +61,7 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
         disabled={running}
       >
         <Bot className="size-3.5" />
-        Audit runner — automated conversations
+        Automated runs
         {running && <Spinner className="size-3" />}
         <span className="ml-auto text-[10px] font-normal text-muted-foreground">
           {open ? "hide" : "show"}
@@ -82,20 +82,18 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
                   ? "bg-primary text-primary-foreground"
                   : "border text-muted-foreground"}`}
               >
-                {m === "script" ? "Script (multi-turn)" : "Matched pairs (§3.3)"}
+                {m === "script" ? "Scripted conversation" : "Single-turn probes"}
               </button>
             ))}
           </div>
 
           <p className="text-[10px] leading-4 text-muted-foreground">
             {scriptMode
-              ? `Plays all ${audit.eligibleSlots.length} slots in soundboard order as one `
-                + `conversation (each line: play → wait for PP's reply → `
-                + `${config.interTurnGapMs}ms gap → next), then replays the whole `
-                + `script ${config.reps}× in fresh conversations. Freeze first; results `
-                + `(manifest + per-replay PP/sent audio + timing log) download as one zip.`
-              : `Runs every playable slot ${config.reps}× in seeded random order, each in `
-                + `a FRESH conversation. Freeze first; results download as one zip.`}
+              ? `One conversation through all ${audit.eligibleSlots.length} lines `
+                + `(PP finishes → ${config.interTurnGapMs} ms → next line), `
+                + `replayed ${config.reps}× fresh.`
+              : `Each slot alone in a fresh conversation, ${config.reps}× each, `
+                + `seeded random order.`}
           </p>
 
           {/* config */}
@@ -150,8 +148,9 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
                 />
               </label>
             )}
-            <label className="min-w-40 flex-1 space-y-0.5 text-[10px]">
-              <span className="block text-muted-foreground">PP text prompt (recorded in manifest)</span>
+            <label className="min-w-40 flex-1 space-y-0.5 text-[10px]"
+                   title="PersonaPlex's persona for these conversations. Frozen into the manifest.">
+              <span className="block text-muted-foreground">PP persona prompt</span>
               <input
                 value={config.prompt} disabled={running}
                 onChange={(e) => set({ prompt: e.target.value })}
@@ -186,8 +185,9 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
           {/* matched-only: per-slot interrupt mode */}
           {!scriptMode && audit.eligibleSlots.length > 0 && (
             <div className="space-y-0.5">
-              <p className="text-[10px] text-muted-foreground">
-                Interrupt mode — fire the clip WHILE PP is speaking (yielding measured):
+              <p className="text-[10px] text-muted-foreground"
+                 title="Checked slots play while PP is mid-speech instead of after silence; PP's yield time is measured.">
+                Play during PP speech (interruption items):
               </p>
               <div className="flex flex-wrap gap-x-3 gap-y-0.5">
                 {audit.eligibleSlots.map((slot) => (
@@ -215,7 +215,7 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
                   type="checkbox" checked={config.allowNonProductionEngines} disabled={running}
                   onChange={(e) => set({ allowNonProductionEngines: e.target.checked })}
                 />
-                Exploratory run — allow non-production VC engines (recorded in the manifest)
+                Allow non-X-VC bakes (exploratory; recorded in the manifest)
               </label>
             </div>
           )}
@@ -265,8 +265,9 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
           {!scriptMode && manifest && (manifest.pairing_warnings?.length ?? 0) > 0 && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2">
               {manifest.pairing_warnings!.map((w) => (
-                <p key={w} className="text-[10px] text-amber-600 dark:text-amber-400">
-                  {w} — matched pairs need the SAME source WAV in a natural and a converted slot.
+                <p key={w} className="text-[10px] text-amber-600 dark:text-amber-400"
+                   title="A pair = one source WAV in two slots (use Duplicate), one baked converted.">
+                  {w}
                 </p>
               ))}
             </div>

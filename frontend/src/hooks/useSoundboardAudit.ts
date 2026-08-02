@@ -975,6 +975,37 @@ export function useSoundboardAudit(opts: {
       }
     } finally {
       setProgress((p) => ({ ...p, running: false, phase: abortRef.current ? "aborted" : "finished" }))
+      // The frozen STIMULI go into the bundle too: the manifest's hashes prove
+      // which bytes ran, but the clips themselves live only in this browser's
+      // IndexedDB — without embedding them the audit artifacts reference audio
+      // that may no longer exist anywhere. Deduped by hash; raw sources
+      // included so matched pairs can be re-verified from the zip alone.
+      const referenced = manifest.mode === "script"
+        ? (manifest.interleaved
+            ? (manifest.scripts ?? []).flatMap((s) => s.turns)
+            : (manifest.script ?? []))
+        : (manifest.presentations ?? [])
+      const seenHashes = new Set<string>()
+      const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)
+      for (const item of referenced) {
+        const slot = slots.find((s) => s.id === item.slot_id)
+        if (!slot) continue
+        const clip = slot.baked ?? slot.raw
+        if (clip && !seenHashes.has(item.clip_sha256)) {
+          seenHashes.add(item.clip_sha256)
+          audio.push({
+            name: `stimuli/${item.clip_sha256.slice(0, 8)}_${slug(item.label)}.wav`,
+            blob: clip,
+          })
+        }
+        if (slot.raw && item.raw_sha256 && !seenHashes.has(item.raw_sha256)) {
+          seenHashes.add(item.raw_sha256)
+          audio.push({
+            name: `stimuli/raw_${item.raw_sha256.slice(0, 8)}_${slug(item.label)}.wav`,
+            blob: slot.raw,
+          })
+        }
+      }
       // Bundle everything, even a partial/aborted run — partial data beats none.
       const entries = [
         { name: "manifest.json",
