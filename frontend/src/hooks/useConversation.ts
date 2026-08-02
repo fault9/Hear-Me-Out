@@ -357,10 +357,15 @@ export function useConversation(ws: WsState, recorder: RecorderState, vcPipeline
     }
   }, [handshakeReceived, vcStreaming, beginSending])
 
-  // Non-VC mode: start recording after handshake
+  // Non-VC mode: start recording after handshake. If the mic recorder can't
+  // start (denied mic, a wedged AudioContext, encoder worker load failure),
+  // we tear the conversation down — but LOG the real reason first, otherwise
+  // the only visible symptom is a socket that closes right after handshake
+  // ("Not connected to PersonaPlex" when a soundboard clip is then played).
   useEffect(() => {
     if (handshakeReceived && micClicked.current && !isRecording && !vcStreaming) {
-      startRecorder().catch(() => {
+      startRecorder().catch((e) => {
+        console.error("Recorder startup failed — closing conversation:", e)
         disconnect()
         micClicked.current = false
       })

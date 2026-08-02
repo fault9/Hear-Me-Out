@@ -149,7 +149,16 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
         return
       }
       if (!ws.connected) {
-        setError("Not connected to PersonaPlex.")
+        setError("Not connected to PersonaPlex (the conversation closed — "
+          + "check the browser console for a recorder error, then restart the "
+          + "session).")
+        return
+      }
+      // Socket open but PP hasn't sent its handshake yet: sending Opus now
+      // would hit a server not ready to read it. Wait for warmup.
+      if (!ws.warmupComplete) {
+        setError("PersonaPlex is still warming up — wait for it to be ready "
+          + "before playing a clip.")
         return
       }
       // Recorder is loaded from CDN; if the script tag failed (offline),
