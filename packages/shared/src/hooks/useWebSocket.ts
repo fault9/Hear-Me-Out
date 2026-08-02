@@ -283,8 +283,13 @@ export function useWebSocket() {
       // Live per-packet energy for callers that need real speech-vs-silence
       // detection: PP streams continuous frames (mostly silence) while a
       // conversation is open, so mere packet ARRIVAL is not "PP speaking".
+      // The timestamp is the packet's scheduled PLAYBACK END on the perf
+      // clock — packets arrive ahead of the speakers (jitter buffer + queue
+      // lead), and callers gating on "PP has gone quiet" mean AUDIBLE quiet,
+      // not arrival quiet.
+      const playbackEndPerfMs = scheduledPerfMs + buffer.duration * 1000;
       assistantAudioListenersRef.current.forEach(
-        (l) => l(packetRms, performance.now()));
+        (l) => l(packetRms, playbackEndPerfMs));
       assistantPlaybackRef.current.push({
         packet_sequence: packetSequence,
         timeline_start_ms: Math.max(0, scheduledPerfMs - conversationStartPerf.current),

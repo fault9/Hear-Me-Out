@@ -121,6 +121,16 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
                   className="h-7 w-24 rounded-md border bg-background px-2 text-xs"
                 />
               </label>
+              <label className="space-y-0.5 text-[10px]"
+                     title="PP's utterance counts as finished after this much audible silence (sentence pauses are shorter). The gap between lines starts AFTER this.">
+                <span className="block text-muted-foreground">PP finished after quiet (ms)</span>
+                <input
+                  type="number" min={500} max={5000} step={100} value={config.responseLingerMs}
+                  disabled={running}
+                  onChange={(e) => set({ responseLingerMs: Math.max(500, Number(e.target.value) || 1500) })}
+                  className="h-7 w-24 rounded-md border bg-background px-2 text-xs"
+                />
+              </label>
               <label className="flex items-center gap-1.5 pb-1 text-[10px]"
                      title="Builds one script per condition tag (exactly two tags) and alternates replays A,B,A,B… so condition isn't confounded with time. Replays = per condition.">
                 <input

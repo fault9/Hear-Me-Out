@@ -759,18 +759,20 @@ export function useSoundboardAudit(opts: {
       ws.setMicMuted(false)
       silence = await startSilenceFeed(ws)
 
-      // Wait for PP's greeting, then quiet for the inter-turn gap.
+      // Wait for PP's greeting to FINISH (audible quiet ≥ greetingSettleMs —
+      // energy timestamps are playback-aligned), then the protocol gap.
       const handshakeAt = record.t_handshake_ms
       const greetingDeadline = performance.now() + config.greetingCapMs
       await waitFor(
         () => (sawEnergyRef.current
                 && performance.now() - handshakeAt >= MIN_PRE_CLIP_MS
                 && !speakingNow()
-                && performance.now() - lastEnergeticMsRef.current >= gap)
+                && performance.now() - lastEnergeticMsRef.current >= config.greetingSettleMs)
               || performance.now() >= greetingDeadline,
         config.greetingCapMs + 1_000,
       )
       record.greeted = sawEnergyRef.current
+      await sleep(gap)
 
       for (const turn of turns) {
         if (abortRef.current) throw new Error("aborted")
@@ -800,15 +802,19 @@ export function useSoundboardAudit(opts: {
         }
         const playEnd = performance.now()
         tr.t_play_end_ms = playEnd
-        // Response: first energetic PP packet after the clip ends; done once PP
-        // is energetically quiet for the inter-turn gap (= "500ms between lines").
+        // Response: first energetic PP packet after the clip ends. PP's
+        // utterance is FINISHED only after responseLingerMs of audible quiet
+        // (sentence pauses are shorter than that; the timestamps are
+        // playback-aligned so this is silence at the speakers, not at the
+        // network). THEN the protocol inter-turn gap runs before the next
+        // line — "PP finishes → 500 ms → next line".
         if (await waitFor(() => lastEnergeticMsRef.current > playEnd, config.responseTimeoutMs)) {
           tr.t_pp_response_start_ms = lastEnergeticMsRef.current
           tr.response_latency_ms = +(lastEnergeticMsRef.current - playEnd).toFixed(1)
           await waitFor(
             () => !speakingNow()
               && lastEnergeticMsRef.current > playEnd
-              && performance.now() - lastEnergeticMsRef.current >= gap,
+              && performance.now() - lastEnergeticMsRef.current >= config.responseLingerMs,
             120_000,
           )
           tr.t_pp_response_end_ms = lastEnergeticMsRef.current || null
@@ -816,6 +822,7 @@ export function useSoundboardAudit(opts: {
         } else {
           tr.status = "no_response"
         }
+        await sleep(gap)
         const captured = getCapturedClips()
         if (captured.length > 0) {
           tr.sent_clip_sha256 = await sha256Hex(captured[captured.length - 1].sentBlob)
