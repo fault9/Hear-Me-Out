@@ -461,7 +461,12 @@ function SlotCard({
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex-1 min-w-[200px] space-y-1">
             <Label className="text-[10px]">Label</Label>
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} onBlur={saveMeta} />
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onBlur={saveMeta}
+              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
+            />
           </div>
           <div className="w-[160px] space-y-1">
             <Label className="text-[10px]">Condition</Label>
@@ -470,6 +475,7 @@ function SlotCard({
               value={condition}
               onChange={(e) => setCondition(e.target.value)}
               onBlur={saveMeta}
+              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
             />
             <datalist id={`cond-${slot.id}`}>
               {CONDITION_PRESETS.map((c) => <option key={c} value={c} />)}
