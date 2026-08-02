@@ -379,6 +379,14 @@ export function useWebSocket() {
     };
 
     socket.onclose = (event) => {
+      // Always log the close (even for superseded runs): the code tells us
+      // WHO closed — 1000/1005 after our own disconnect() is client-side,
+      // 1006 is an abnormal server/network drop.
+      console.warn("[ws] closed", {
+        runId, code: event.code, reason: event.reason,
+        intentional: intentionalClose.current,
+        superseded: runId !== runIdRef.current,
+      });
       if (runId !== runIdRef.current) return;
       setConnected(false);
       if (!intentionalClose.current) {
@@ -511,6 +519,10 @@ export function useWebSocket() {
   }, []);
 
   const disconnect = useCallback(() => {
+    // Stack-traced so a surprise mid-conversation close names its caller
+    // (recorder-failure catch, stopConversation, audit teardown, unmount…).
+    console.warn("[ws] disconnect() called from:",
+      new Error("disconnect trace").stack);
     runIdRef.current += 1;
     intentionalClose.current = true;
     socketRef.current?.close();
