@@ -239,5 +239,88 @@ class ScriptModePostprocessTests(unittest.TestCase):
         self.assertTrue((self.run_dir / "audit_summary.csv").exists())
 
 
+class InterleavedScriptPostprocessTests(unittest.TestCase):
+    """Interleaved A/B replays: per-condition scripts, condition-suffixed run
+    folders, gap taken from the frozen manifest constants."""
+
+    MANIFEST = {
+        "schema": "hmo.soundboard-audit-manifest.v2",
+        "mode": "script",
+        "interleaved": True,
+        "manifest_sha256": "d" * 64,
+        "reps": 1,
+        "timing": {"ppSpeakingGapMs": 350, "ppEnergyThresholdRms": 0.02},
+        "scripts": [
+            {"condition": "natural", "turns": [
+                {"turn": 1, "slot_id": "n1", "label": "line [nat]",
+                 "manipulation": "unconverted", "engine": None,
+                 "clip_sha256": "natHash", "raw_sha256": "r1",
+                 "clip_duration_ms": 1000}]},
+            {"condition": "converted", "turns": [
+                {"turn": 1, "slot_id": "c1", "label": "line [xvc]",
+                 "manipulation": "vc", "engine": "xvc",
+                 "clip_sha256": "convHash", "raw_sha256": "r1",
+                 "clip_duration_ms": 1000}]},
+        ],
+        "replay_plan": [
+            {"rep": 1, "condition": "natural", "cycle": 1},
+            {"rep": 2, "condition": "converted", "cycle": 1},
+        ],
+    }
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.run_dir = Path(self._tmp.name) / "20260802T140000Z_dddddddd"
+        self.run_dir.mkdir(parents=True)
+
+        def session(rep, condition, sent):
+            return {
+                "rep": rep, "condition": condition, "status": "ok",
+                "greeted": True,
+                "turns": [{"turn": 1, "slot_id": "x", "label": "line",
+                           "status": "ok",
+                           "t_play_start_ms": 1000.0, "t_play_end_ms": 2000.0,
+                           "response_latency_ms": 120.0 if condition == "natural" else 480.0,
+                           "pp_spoke_during_clip": False,
+                           "sent_clip_sha256": sent, "notes": []}],
+                "pp_speech_events": [], "pp_transcript": [],
+            }
+
+        wav = tiny_wav_bytes()
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(self.MANIFEST))
+            archive.writestr("run_log.json", json.dumps({"records": [
+                session(1, "natural", "natHash"),
+                session(2, "converted", "convHash"),
+            ]}))
+            archive.writestr("runs/rep_001_natural/personaplex.wav", wav)
+            archive.writestr("runs/rep_002_converted/personaplex.wav", wav)
+        (self.run_dir / "results.zip").write_bytes(buffer.getvalue())
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_interleaved_grouping_and_lookup(self):
+        calls = []
+
+        def transcriber(path):
+            calls.append(path)
+            return {"text": "t", "status": "complete"}
+
+        summary = process_run(self.run_dir, transcriber=transcriber)
+        self.assertTrue(summary["interleaved"])
+        self.assertEqual(summary["detection"]["energy_run_gap_ms"], 350)
+        self.assertEqual(summary["detection"]["source"], "manifest.timing")
+        # Delivery verified per condition against that condition's script hash.
+        self.assertEqual(summary["counts"]["delivery_verified"], 2)
+        table = {(r["condition"], r["turn"]): r for r in summary["turn_summary"]}
+        self.assertEqual(table[("natural", 1)]["response_latency_mean_ms"], 120.0)
+        self.assertEqual(table[("converted", 1)]["response_latency_mean_ms"], 480.0)
+        self.assertEqual(table[("converted", 1)]["manipulation"], "vc")
+        # Condition-suffixed folders were found for transcription.
+        self.assertEqual(len(calls), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

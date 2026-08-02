@@ -97,6 +97,10 @@ export interface AuditConfig {
   responseTimeoutMs: number    // no PP speech after clip end → "no_response"
   responseLingerMs: number     // PP silent this long after response → done
   interTurnGapMs: number       // script: quiet gap after PP replies → next line
+  // Script mode: build one script per condition TAG (exactly two tags) and
+  // alternate replays A,B,A,B… so condition is not confounded with time /
+  // server drift. reps = replays PER condition.
+  interleaveByCondition: boolean
   handshakeTimeoutMs: number
   cooldownMs: number           // between conversations (PP teardown/reset)
   allowNonProductionEngines: boolean
@@ -112,6 +116,7 @@ export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
   responseTimeoutMs: 20_000,
   responseLingerMs: 1_500,
   interTurnGapMs: 500,
+  interleaveByCondition: false,
   handshakeTimeoutMs: 45_000,
   // PP (moshi) is single-connection and needs time to reset between
   // conversations; too short and the next connection never handshakes. Human
@@ -175,9 +180,18 @@ export interface AuditManifest {
   reps: number
   prompt: string
   inter_turn_gap_ms?: number    // script mode
+  // Every parameter that DEFINES a measurement is frozen here — including the
+  // energy-detection constants (what counts as PP "speaking") — so a run's
+  // artifacts fully specify how their own numbers were produced.
   timing: Pick<AuditConfig, "greetingSettleMs" | "greetingCapMs"
     | "responseTimeoutMs" | "responseLingerMs" | "cooldownMs">
-    & { interruptFireDelayMs: number; interTurnGapMs?: number }
+    & {
+      interruptFireDelayMs: number
+      interTurnGapMs?: number
+      ppEnergyThresholdRms: number
+      ppSpeakingGapMs: number
+      minPreClipMs: number
+    }
   production_engine_only: boolean
   engine_warnings: string[]
   // Matched mode only: raw_sha256 -> manipulations present; single-condition
@@ -185,7 +199,12 @@ export interface AuditManifest {
   pairing?: { raw_sha256: string; labels: string[]; manipulations: string[] }[]
   pairing_warnings?: string[]
   presentations?: AuditPresentation[]   // matched mode
-  script?: AuditScriptTurn[]            // script mode (ordered turns)
+  script?: AuditScriptTurn[]            // script mode, single script
+  // Script mode, interleaved: one script per condition tag + the alternating
+  // replay plan (condition not confounded with time).
+  interleaved?: boolean
+  scripts?: { condition: string; turns: AuditScriptTurn[] }[]
+  replay_plan?: { rep: number; condition: string; cycle: number }[]
   manifest_sha256?: string      // hash of the manifest WITHOUT this field
 }
 
@@ -209,6 +228,7 @@ export interface AuditTurnRecord {
 
 export interface AuditSessionRecord {
   rep: number
+  condition?: string | null     // interleaved script runs: this replay's script
   status: "ok" | "handshake_timeout" | "aborted" | "error"
   error?: string
   t_connect_ms: number
@@ -399,28 +419,36 @@ export function useSoundboardAudit(opts: {
       responseLingerMs: config.responseLingerMs,
       cooldownMs: config.cooldownMs,
       interruptFireDelayMs: INTERRUPT_FIRE_DELAY_MS,
+      // Detection constants: these DEFINE latency / barge-in / speaking, so
+      // they belong in the frozen record, not only in code.
+      ppEnergyThresholdRms: PP_ENERGY_THRESHOLD,
+      ppSpeakingGapMs: PP_SPEAKING_GAP_MS,
+      minPreClipMs: MIN_PRE_CLIP_MS,
     }
 
     // ---- script mode: ordered turns, replayed `reps` times --------------
     if (config.mode === "script") {
-      const script: AuditScriptTurn[] = []
-      for (const slot of eligibleSlots) {
-        const clip = slot.baked ?? slot.raw!
-        script.push({
-          turn: script.length + 1,
-          slot_id: slot.id,
-          label: slot.label,
-          condition: slot.condition,
-          manipulation: slot.manipulation,
-          engine: slot.manipulation === "vc" ? (slot.engine ?? "xvc") : null,
-          clip_sha256: await sha256Hex(clip),
-          raw_sha256: slot.raw ? await sha256Hex(slot.raw) : null,
-          clip_duration_ms: Math.round(slot.bakedDurationMs || slot.rawDurationMs),
-        })
+      const buildTurns = async (group: Slot[]): Promise<AuditScriptTurn[]> => {
+        const turns: AuditScriptTurn[] = []
+        for (const slot of group) {
+          const clip = slot.baked ?? slot.raw!
+          turns.push({
+            turn: turns.length + 1,
+            slot_id: slot.id,
+            label: slot.label,
+            condition: slot.condition,
+            manipulation: slot.manipulation,
+            engine: slot.manipulation === "vc" ? (slot.engine ?? "xvc") : null,
+            clip_sha256: await sha256Hex(clip),
+            raw_sha256: slot.raw ? await sha256Hex(slot.raw) : null,
+            clip_duration_ms: Math.round(slot.bakedDurationMs || slot.rawDurationMs),
+          })
+        }
+        return turns
       }
-      const draft: AuditManifest = {
-        schema: "hmo.soundboard-audit-manifest.v2",
-        mode: "script",
+      const common = {
+        schema: "hmo.soundboard-audit-manifest.v2" as const,
+        mode: "script" as const,
         created_at: new Date().toISOString(),
         seed: config.seed,
         reps: config.reps,
@@ -429,7 +457,36 @@ export function useSoundboardAudit(opts: {
         timing: { ...baseTiming, interTurnGapMs: config.interTurnGapMs },
         production_engine_only: engineWarnings.length === 0,
         engine_warnings: engineWarnings,
-        script,
+      }
+      let draft: AuditManifest
+      if (config.interleaveByCondition) {
+        // One script per condition TAG, replays alternating A,B,A,B… so the
+        // condition contrast is not confounded with time/server drift.
+        const groups = new Map<string, Slot[]>()
+        for (const slot of eligibleSlots) {
+          const tag = slot.condition || "(untagged)"
+          groups.set(tag, [...(groups.get(tag) ?? []), slot])
+        }
+        if (groups.size !== 2) {
+          setError("Interleave needs EXACTLY two condition tags among playable "
+            + `slots (found ${groups.size}: `
+            + `${[...groups.keys()].join(", ") || "none"}). Tag each slot's `
+            + "condition in Configure Soundboard (e.g. natural / converted).")
+          return null
+        }
+        const scripts = []
+        for (const [condition, group] of groups) {
+          scripts.push({ condition, turns: await buildTurns(group) })
+        }
+        const [a, b] = scripts.map((s) => s.condition)
+        const plan: { rep: number; condition: string; cycle: number }[] = []
+        for (let cycle = 1; cycle <= config.reps; cycle++) {
+          plan.push({ rep: plan.length + 1, condition: a, cycle })
+          plan.push({ rep: plan.length + 1, condition: b, cycle })
+        }
+        draft = { ...common, interleaved: true, scripts, replay_plan: plan }
+      } else {
+        draft = { ...common, script: await buildTurns(eligibleSlots) }
       }
       const digest = await sha256Hex(new Blob([JSON.stringify(draft)]))
       const frozen = { ...draft, manifest_sha256: digest }
@@ -803,16 +860,32 @@ export function useSoundboardAudit(opts: {
     setResultsZip(null)
     const records: (AuditRunRecord | AuditSessionRecord)[] = []
     const audio: { name: string; blob: Blob }[] = []
+    // Script mode runs a replay PLAN: either N single-script replays, or the
+    // interleaved A,B,A,B… plan from the manifest.
+    const plan = manifest.mode !== "script" ? [] : (
+      manifest.interleaved && manifest.replay_plan && manifest.scripts
+        ? manifest.replay_plan.map((entry) => ({
+            rep: entry.rep,
+            condition: entry.condition as string | null,
+            turns: manifest.scripts!.find(
+              (s) => s.condition === entry.condition)?.turns ?? [],
+          }))
+        : Array.from({ length: manifest.reps }, (_, i) => ({
+            rep: i + 1, condition: null as string | null,
+            turns: manifest.script ?? [],
+          }))
+    )
     const total = manifest.mode === "script"
-      ? manifest.reps : (manifest.presentations?.length ?? 0)
+      ? plan.length : (manifest.presentations?.length ?? 0)
     setProgress({ running: true, currentIndex: 0, total, phase: "starting", records: [] })
     try {
       if (manifest.mode === "script") {
-        const turns = manifest.script ?? []
-        for (let rep = 1; rep <= manifest.reps; rep++) {
+        for (const entry of plan) {
+          const { rep, condition, turns } = entry
           if (abortRef.current) break
           setProgress((p) => ({ ...p, currentIndex: rep,
-            phase: `replay ${rep}/${manifest.reps} — ${turns.length}-turn script` }))
+            phase: `replay ${rep}/${plan.length}`
+              + `${condition ? ` [${condition}]` : ""} — ${turns.length}-turn script` }))
           let record: AuditSessionRecord
           try {
             record = await runScriptSession(turns, rep)
@@ -826,7 +899,10 @@ export function useSoundboardAudit(opts: {
             }
             try { ws.disconnect() } catch { /* already down */ }
           }
-          const prefix = `runs/rep_${String(rep).padStart(3, "0")}`
+          record.condition = condition
+          const suffix = condition
+            ? `_${condition.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : ""
+          const prefix = `runs/rep_${String(rep).padStart(3, "0")}${suffix}`
           const ppWav = record._ppWav
           const sentWav = record._sentWav
           const timeline = record._playbackTimeline

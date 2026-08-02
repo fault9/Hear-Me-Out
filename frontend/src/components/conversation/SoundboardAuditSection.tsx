@@ -111,6 +111,7 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
               />
             </label>
             {scriptMode ? (
+              <>
               <label className="space-y-0.5 text-[10px]">
                 <span className="block text-muted-foreground">Gap between lines (ms)</span>
                 <input
@@ -120,6 +121,15 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
                   className="h-7 w-24 rounded-md border bg-background px-2 text-xs"
                 />
               </label>
+              <label className="flex items-center gap-1.5 pb-1 text-[10px]"
+                     title="Builds one script per condition tag (exactly two tags) and alternates replays A,B,A,B… so condition isn't confounded with time. Replays = per condition.">
+                <input
+                  type="checkbox" checked={config.interleaveByCondition} disabled={running}
+                  onChange={(e) => set({ interleaveByCondition: e.target.checked })}
+                />
+                Interleave by condition tag (A/B)
+              </label>
+              </>
             ) : (
               <label className="space-y-0.5 text-[10px]">
                 <span className="block text-muted-foreground">Seed</span>
@@ -210,7 +220,10 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
               <>
                 <Badge variant="outline" className="text-[9px] font-mono">
                   {manifest.mode === "script"
-                    ? `${manifest.script?.length ?? 0} turns × ${manifest.reps} replays`
+                    ? (manifest.interleaved
+                        ? `${manifest.scripts?.map((s) =>
+                            `${s.condition}:${s.turns.length}t`).join(" / ")} × ${manifest.reps} ea, interleaved`
+                        : `${manifest.script?.length ?? 0} turns × ${manifest.reps} replays`)
                     : `${manifest.presentations?.length ?? 0} runs`}
                   {" · "}{manifest.manifest_sha256?.slice(0, 8)}
                 </Badge>
@@ -288,6 +301,7 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
                       <div key={i} className="flex items-center gap-2 text-[10px]">
                         <span className="w-10 font-mono text-muted-foreground">rep {r.rep}</span>
                         <span className="truncate">
+                          {r.condition ? `[${r.condition}] ` : ""}
                           {okTurns}/{r.turns.length} turns
                           {meanLat != null && ` · ~${meanLat}ms`}
                         </span>

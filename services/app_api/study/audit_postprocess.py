@@ -107,18 +107,19 @@ def _mean_sd(values: list[float]) -> tuple[float | None, float | None]:
 
 
 # Script-mode PP "speech runs" are reconstructed from per-packet energy
-# events: consecutive energetic packets closer than this gap form one run
-# (mirrors the frontend's PP_SPEAKING_GAP_MS).
-ENERGY_RUN_GAP_MS = 350.0
+# events: consecutive energetic packets closer than the speaking gap form one
+# run. The gap is read from the frozen manifest (timing.ppSpeakingGapMs) when
+# present; these are the fallbacks for pre-constants manifests.
+DEFAULT_ENERGY_RUN_GAP_MS = 350.0
 PACKET_MS = 20.0
 
 
-def _energy_runs(events: list[dict]) -> list[tuple[float, float]]:
+def _energy_runs(events: list[dict], gap_ms: float) -> list[tuple[float, float]]:
     times = sorted(float(e.get("timestampMs") or 0) for e in events
                    if e.get("type") == "pp_energy")
     runs: list[tuple[float, float]] = []
     for ts in times:
-        if runs and ts - runs[-1][1] <= ENERGY_RUN_GAP_MS:
+        if runs and ts - runs[-1][1] <= gap_ms:
             runs[-1] = (runs[-1][0], ts)
         else:
             runs.append((ts, ts))
@@ -128,7 +129,18 @@ def _energy_runs(events: list[dict]) -> list[tuple[float, float]]:
 
 def _process_script_run(run_dir: Path, manifest: dict, log: dict,
                         transcribe: Transcriber, force: bool) -> dict:
-    script = {int(t["turn"]): t for t in manifest.get("script") or []}
+    # Scripts keyed by condition: interleaved manifests carry one per
+    # condition tag; single-script manifests use the None key.
+    scripts_by_condition: dict[str | None, dict[int, dict]] = {}
+    if manifest.get("interleaved") and manifest.get("scripts"):
+        for entry in manifest["scripts"]:
+            scripts_by_condition[entry.get("condition")] = {
+                int(t["turn"]): t for t in entry.get("turns") or []}
+    else:
+        scripts_by_condition[None] = {
+            int(t["turn"]): t for t in manifest.get("script") or []}
+    timing = manifest.get("timing") or {}
+    gap_ms = float(timing.get("ppSpeakingGapMs") or DEFAULT_ENERGY_RUN_GAP_MS)
     sessions = list(log.get("records") or [])
     transcripts_dir = run_dir / "transcripts"
     zip_path = run_dir / "results.zip"
@@ -139,8 +151,17 @@ def _process_script_run(run_dir: Path, manifest: dict, log: dict,
         names = set(archive.namelist())
         for session in sessions:
             rep = int(session.get("rep") or 0)
-            runs = _energy_runs(session.get("pp_speech_events") or [])
-            wav_name = f"runs/rep_{rep:03d}/personaplex.wav"
+            condition = session.get("condition")
+            script = (scripts_by_condition.get(condition)
+                      or scripts_by_condition.get(None) or {})
+            runs = _energy_runs(session.get("pp_speech_events") or [], gap_ms)
+            # Interleaved runs suffix the folder with the condition slug;
+            # match by prefix so both layouts resolve.
+            rep_prefix = f"runs/rep_{rep:03d}"
+            wav_name = next(
+                (n for n in sorted(names)
+                 if n.startswith(rep_prefix) and n.endswith("personaplex.wav")),
+                f"{rep_prefix}/personaplex.wav")
             transcript_path = transcripts_dir / f"rep_{rep:03d}.json"
             transcript_text = None
             if transcript_path.exists() and not force:
@@ -162,7 +183,8 @@ def _process_script_run(run_dir: Path, manifest: dict, log: dict,
                             {"text": None, "status": "failed", "error": str(exc),
                              "source": wav_name}, indent=2))
             session_rows.append({
-                "rep": rep, "status": session.get("status"),
+                "rep": rep, "condition": condition,
+                "status": session.get("status"),
                 "greeted": session.get("greeted"),
                 "turns_ok": sum(1 for t in session.get("turns") or []
                                 if t.get("status") == "ok"),
@@ -183,7 +205,7 @@ def _process_script_run(run_dir: Path, manifest: dict, log: dict,
                         max(0.0, min(b, end) - max(a, start)) for a, b in runs), 1)
                     onsets = sum(1 for a, _ in runs if start <= a < end)
                 turn_rows.append({
-                    "rep": rep, "turn": index,
+                    "rep": rep, "condition": condition, "turn": index,
                     "label": turn.get("label"),
                     "manipulation": (script.get(index) or {}).get("manipulation"),
                     "engine": (script.get(index) or {}).get("engine"),
@@ -196,20 +218,26 @@ def _process_script_run(run_dir: Path, manifest: dict, log: dict,
                     "pp_onsets_during_clip": onsets,
                 })
 
-    # Per-turn summary across replays.
-    grouped: dict[int, list[dict]] = {}
+    # Per-turn summary across replays, split by condition when interleaved
+    # (condition is None for single-script runs and sorts first).
+    grouped: dict[tuple[str, int], list[dict]] = {}
     for row in turn_rows:
-        grouped.setdefault(int(row["turn"]), []).append(row)
+        grouped.setdefault((str(row.get("condition") or ""), int(row["turn"])),
+                           []).append(row)
     summary_rows = []
-    for index in sorted(grouped):
-        items = grouped[index]
+    for (condition_key, index) in sorted(grouped):
+        items = grouped[(condition_key, index)]
+        condition = items[0].get("condition")
+        turn_spec = ((scripts_by_condition.get(condition)
+                      or scripts_by_condition.get(None) or {}).get(index) or {})
         latencies = [r["response_latency_ms"] for r in items
                      if r.get("response_latency_ms") is not None]
         mean, sd = _mean_sd(latencies)
         summary_rows.append({
+            "condition": condition,
             "turn": index,
-            "label": (script.get(index) or {}).get("label"),
-            "manipulation": (script.get(index) or {}).get("manipulation"),
+            "label": turn_spec.get("label"),
+            "manipulation": turn_spec.get("manipulation"),
             "n": len(items),
             "n_ok": sum(1 for r in items if r["status"] == "ok"),
             "n_no_response": sum(1 for r in items if r["status"] == "no_response"),
@@ -223,10 +251,20 @@ def _process_script_run(run_dir: Path, manifest: dict, log: dict,
     summary = {
         "schema": "hmo.soundboard-audit-summary.v1",
         "mode": "script",
+        "interleaved": bool(manifest.get("interleaved")),
         "run": run_dir.name,
         "manifest_sha256": manifest.get("manifest_sha256"),
         "manifest_schema": manifest.get("schema"),
         "generated_at_unix_s": time.time(),
+        # Self-describing measurement definitions (from the frozen manifest
+        # when present; defaults otherwise).
+        "detection": {
+            "energy_run_gap_ms": gap_ms,
+            "packet_ms": PACKET_MS,
+            "pp_energy_threshold_rms": timing.get("ppEnergyThresholdRms"),
+            "source": ("manifest.timing" if timing.get("ppSpeakingGapMs")
+                       else "postprocess_default"),
+        },
         "sessions": session_rows,
         "turns": turn_rows,
         "turn_summary": summary_rows,
