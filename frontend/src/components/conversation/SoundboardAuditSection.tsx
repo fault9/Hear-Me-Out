@@ -95,6 +95,29 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
             </label>
           </div>
 
+          {/* per-slot interrupt mode (corrective-interruption items) */}
+          {audit.eligibleSlots.length > 0 && (
+            <div className="space-y-0.5">
+              <p className="text-[10px] text-muted-foreground">
+                Interrupt mode — fire the clip WHILE PP is speaking (corrective
+                interruptions; yielding is measured):
+              </p>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                {audit.eligibleSlots.map((slot) => (
+                  <label key={slot.id} className="flex items-center gap-1 text-[10px]">
+                    <input
+                      type="checkbox"
+                      checked={audit.interruptSlotIds.has(slot.id)}
+                      disabled={running}
+                      onChange={() => audit.toggleInterruptSlot(slot.id)}
+                    />
+                    {slot.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* production-engine discipline */}
           {audit.engineWarnings.length > 0 && (
             <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2">
@@ -148,6 +171,18 @@ export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Pro
               </Button>
             )}
           </div>
+
+          {/* matched-pair verification (raw-source hashes) */}
+          {manifest && manifest.pairing_warnings.length > 0 && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2">
+              {manifest.pairing_warnings.map((w) => (
+                <p key={w} className="text-[10px] text-amber-600 dark:text-amber-400">
+                  {w} — matched pairs need the SAME source WAV in a natural and
+                  a converted slot.
+                </p>
+              ))}
+            </div>
+          )}
 
           {/* server persistence status (STUDY_DATA_ROOT/audit/…) */}
           {audit.uploadState.status !== "idle" && (
