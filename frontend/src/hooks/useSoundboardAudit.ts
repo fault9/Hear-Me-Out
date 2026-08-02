@@ -103,7 +103,10 @@ export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
   responseTimeoutMs: 20_000,
   responseLingerMs: 1_500,
   handshakeTimeoutMs: 45_000,
-  cooldownMs: 3_000,
+  // PP (moshi) is single-connection and needs time to reset between
+  // conversations; too short and the next connection never handshakes. Human
+  // stop→start gaps in normal use are several seconds — match that.
+  cooldownMs: 8_000,
   allowNonProductionEngines: false,
 }
 
@@ -467,18 +470,20 @@ export function useSoundboardAudit(opts: {
           record.notes.push("pp_never_spoke_before_interrupt_cap")
         }
       } else {
-        // Play once PP's greeting has finished — i.e. no energetic packet for
-        // greetingSettleMs AND at least MIN_PRE_CLIP_MS since handshake — or at
-        // the cap. With energy detection, continuous silence frames no longer
-        // read as "still speaking", so this fires promptly after "Hello."
+        // Play only AFTER PP has actually greeted (PP always does) and then
+        // gone energetically quiet for greetingSettleMs — not on a bare timer.
+        // The cap is a safety net; if it fires without PP ever speaking, note
+        // it (PP wedged / didn't greet).
         const greetingDeadline = performance.now() + config.greetingCapMs
         await waitFor(
-          () => (performance.now() - handshakeAt >= MIN_PRE_CLIP_MS
+          () => (sawEnergyRef.current
+                  && performance.now() - handshakeAt >= MIN_PRE_CLIP_MS
                   && !speakingNow()
                   && performance.now() - lastEnergeticMsRef.current >= config.greetingSettleMs)
                 || performance.now() >= greetingDeadline,
           config.greetingCapMs + 1_000,
         )
+        if (!sawEnergyRef.current) record.notes.push("pp_never_greeted")
       }
 
       const wasSpeakingAtFire = speakingNow()
