@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { getPersonaplexWsURL } from "@/lib/config"
+import { OPUS_ENCODER_CONFIG, PP_SAMPLE_RATE } from "@/lib/soundboardConfig"
 import { uploadSoundboardAudit } from "@shared/services/api"
 import { makeZip } from "@/lib/soundboardZip"
 import { assembleSentWav, getCapturedClips, resetCapture } from "@/lib/soundboardCapture"
@@ -32,6 +33,53 @@ import type { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
 
 type WsState = ReturnType<typeof useWebSocket>
 type PlaybackState = ReturnType<typeof useSoundboardPlayback>
+
+// opus-recorder is loaded globally via <script> (see useSoundboardPlayback).
+declare class Recorder {
+  constructor(opts: Record<string, unknown>)
+  start(): Promise<void>
+  stop(): Promise<void> | void
+  ondataavailable: ((buf: ArrayBuffer) => void) | null
+}
+
+// PersonaPlex is full-duplex: its generation loop is CLOCKED by incoming
+// audio frames — with no input stream it produces nothing (no greeting, no
+// response). A live conversation gets this clock from the mic; the audit
+// runner has no mic, so it must stream continuous SILENCE, gated off while a
+// clip plays (the same isMicMuted gate the live mic uses, so the clip's
+// Opus stream is the only input during playback — one coherent stream).
+async function startSilenceFeed(ws: WsState): Promise<{ stop: () => Promise<void> }> {
+  const RecorderCtor = (window as unknown as { Recorder?: typeof Recorder }).Recorder
+  if (!RecorderCtor) {
+    throw new Error("Opus encoder not available (window.Recorder missing)")
+  }
+  const ctx = new AudioContext({ sampleRate: PP_SAMPLE_RATE })
+  if (ctx.sampleRate !== PP_SAMPLE_RATE) {
+    await ctx.close()
+    throw new Error(`AudioContext refused ${PP_SAMPLE_RATE} Hz for the silence feed`)
+  }
+  const source = ctx.createConstantSource()
+  source.offset.value = 0
+  // Keep the graph pulled: a zero-gain tap to the destination guarantees the
+  // encoder's ScriptProcessor keeps firing in all browsers.
+  const sink = ctx.createGain()
+  sink.gain.value = 0
+  source.connect(sink)
+  sink.connect(ctx.destination)
+  const recorder = new RecorderCtor({ ...OPUS_ENCODER_CONFIG, sourceNode: source })
+  recorder.ondataavailable = (buf: ArrayBuffer) => {
+    if (!ws.isMicMuted()) ws.sendAudio(buf)
+  }
+  await recorder.start()
+  source.start()
+  return {
+    stop: async () => {
+      try { source.stop() } catch { /* already stopped */ }
+      try { await recorder.stop() } catch { /* noop */ }
+      try { await ctx.close() } catch { /* noop */ }
+    },
+  }
+}
 
 export interface AuditConfig {
   reps: number
@@ -374,12 +422,18 @@ export function useSoundboardAudit(opts: {
     ppEventsRef.current = []
 
     ws.connect(getPersonaplexWsURL(config.prompt))
+    let silence: { stop: () => Promise<void> } | null = null
     try {
       if (!(await waitFor(() => handshakeRef.current, config.handshakeTimeoutMs))) {
         record.status = "handshake_timeout"
         return record
       }
       record.t_handshake_ms = performance.now()
+
+      // Feed PP its input clock (continuous silence) — without this PP never
+      // generates: no greeting, and responses freeze when the clip ends.
+      ws.setMicMuted(false)
+      silence = await startSilenceFeed(ws)
 
       if (presentation.presentation_mode === "during_pp_speech") {
         // Corrective interruption: fire the clip WHILE PP is speaking, a fixed
@@ -477,8 +531,9 @@ export function useSoundboardAudit(opts: {
         record.pp_yield_latency_ms = yieldEnd
           ? +(yieldEnd.timestampMs - playStart).toFixed(1) : null
       }
-      // Collect PP audio + packet-level playback timeline BEFORE disconnect
-      // resets state, then tear down.
+      // Stop the silence feed first, then collect PP audio + the packet-level
+      // playback timeline BEFORE disconnect resets state, then tear down.
+      if (silence) await silence.stop().catch(() => undefined)
       record._ppWav = await ws.getPersonaplexWav().catch(() => null)
       record._sentWav = await assembleSentWav().catch(() => null)
       record._playbackTimeline = await ws.getClientPlaybackTimeline()
