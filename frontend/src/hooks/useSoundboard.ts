@@ -162,6 +162,38 @@ export function useSoundboard() {
     notifyChange()
   }, [refresh])
 
+  // Duplicate a slot's SOURCE: same raw bytes (and transcript), fresh id,
+  // no bake. This is the matched-pair workflow for the soundboard audit —
+  // duplicate, then bake the copy with X-VC, and the shared raw hash proves
+  // the natural/converted pair holds content and source timing constant.
+  const duplicateSlot = useCallback(async (id: string): Promise<Slot> => {
+    const source = (await listSlots()).find((s) => s.id === id)
+    if (!source) throw new Error(`Slot ${id} not found.`)
+    const now = Date.now()
+    const copy: Slot = {
+      ...source,
+      id: newId("slot"),
+      label: `${source.label} (copy)`,
+      manipulation: "unconverted",
+      targetId: undefined,
+      engine: undefined,
+      baked: null,
+      bakedDurationMs: source.rawDurationMs,
+      driftMs: 0,
+      normalized: undefined,
+      measuredLufs: undefined,
+      bakeTimestamp: undefined,
+      qualityScore: undefined,
+      createdAt: now,
+      updatedAt: now,
+      order: now,
+    }
+    await putSlot(copy)
+    await refresh()
+    notifyChange()
+    return copy
+  }, [refresh])
+
   // Move a slot one position up/down in the Configure list (and therefore in
   // the runtime panel, which uses the same order). Swaps the two slots' sort
   // keys — `order ?? createdAt`, on the createdAt scale — so the change is
@@ -651,7 +683,7 @@ export function useSoundboard() {
 
   return {
     slots, targets, loading, error,
-    createSlot, updateSlot, removeSlot, moveSlot,
+    createSlot, updateSlot, removeSlot, duplicateSlot, moveSlot,
     addUploadedTarget, removeTarget,
     startRecording, stopRecording, abortRecording, loadRawFromFile,
     bakeSlot, previewBlob, downloadSlotAudio,

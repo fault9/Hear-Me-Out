@@ -15,7 +15,7 @@ import { Spinner } from "@shared/ui/spinner"
 import { Badge } from "@shared/ui/badge"
 import {
   Mic, Square, Trash2, Play, Download, Upload, Wand2, Sparkles,
-  CheckCircle2, AlertTriangle, Pause, FileAudio, ChevronUp, ChevronDown,
+  CheckCircle2, AlertTriangle, Pause, FileAudio, ChevronUp, ChevronDown, CopyPlus,
 } from "lucide-react"
 import { useSoundboard } from "@/hooks/useSoundboard"
 import {
@@ -497,6 +497,17 @@ function SlotCard({
               <ChevronDown className="size-3" />
             </Button>
           </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!slot.raw}
+            onClick={() => void sb.duplicateSlot(slot.id).catch(onError)}
+            title={slot.raw
+              ? "Duplicate slot (same source audio, no bake) — use for matched natural/converted pairs"
+              : "Record or upload audio first"}
+          >
+            <CopyPlus className="size-3.5" />
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => sb.removeSlot(slot.id)}>
             <Trash2 className="size-3.5 text-destructive" />
           </Button>
