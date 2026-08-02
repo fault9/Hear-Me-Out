@@ -145,6 +145,15 @@ export function useWebSocket() {
     ppSpeakingRef.current = false;
   }, []);
 
+  // Live assistant-audio energy listeners (rms per decoded packet). Used by the
+  // audit runner for speech-vs-silence detection; empty in normal use.
+  const assistantAudioListenersRef = useRef<Set<(rms: number, perfMs: number) => void>>(new Set());
+  const registerAssistantAudioListener = useCallback(
+    (listener: (rms: number, perfMs: number) => void) => {
+      assistantAudioListenersRef.current.add(listener);
+      return () => { assistantAudioListenersRef.current.delete(listener); };
+    }, []);
+
   const decoderRef = useRef<OggOpusDecoder | null>(null);
   const mergedCtxRef = useRef<AudioContext | null>(null);
   const mergedDestRef = useRef<AudioNode | null>(null);
@@ -270,6 +279,12 @@ export function useWebSocket() {
         sumSquares += sample * sample;
         peakAbs = Math.max(peakAbs, Math.abs(sample));
       }
+      const packetRms = Math.sqrt(sumSquares / samplesDecoded);
+      // Live per-packet energy for callers that need real speech-vs-silence
+      // detection: PP streams continuous frames (mostly silence) while a
+      // conversation is open, so mere packet ARRIVAL is not "PP speaking".
+      assistantAudioListenersRef.current.forEach(
+        (l) => l(packetRms, performance.now()));
       assistantPlaybackRef.current.push({
         packet_sequence: packetSequence,
         timeline_start_ms: Math.max(0, scheduledPerfMs - conversationStartPerf.current),
@@ -279,7 +294,7 @@ export function useWebSocket() {
         ),
         decoded_samples: samplesDecoded,
         sample_rate_hz: ctx.sampleRate,
-        rms: Math.sqrt(sumSquares / samplesDecoded),
+        rms: packetRms,
         peak_abs: peakAbs,
         arrival_timeline_ms: arrivalTimelineMs,
         decode_completed_timeline_ms: decodeCompletedTimelineMs,
@@ -715,6 +730,7 @@ export function useWebSocket() {
     setMicMuted,
     isMicMuted,
     isReadyForAudio,
+    registerAssistantAudioListener,
     addUserTranscript,
     getConversationElapsed,
     getConversationStartPerformanceMs,

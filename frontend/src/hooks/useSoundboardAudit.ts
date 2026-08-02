@@ -110,6 +110,14 @@ export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
 // Interrupt presentations fire this far into PP's ongoing speech run, so
 // every corrective interruption lands at a comparable point of a PP turn.
 export const INTERRUPT_FIRE_DELAY_MS = 800
+// A decoded PP packet counts as speech (not silence) at/above this RMS; PP's
+// idle frames sit near zero (observed ~0.01 mean silence vs ~0.25 peak speech).
+export const PP_ENERGY_THRESHOLD = 0.02
+// PP is "speaking now" if an energetic packet arrived within this window.
+export const PP_SPEAKING_GAP_MS = 350
+// Minimum warm time after handshake before playing, so PP's brief greeting
+// isn't clipped and the encoder/graph is settled.
+export const MIN_PRE_CLIP_MS = 1200
 
 export type PresentationMode = "after_silence" | "during_pp_speech"
 
@@ -264,25 +272,31 @@ export function useSoundboardAudit(opts: {
   // PP speech-run tracking for the whole audit run, plus the COMPLETE event
   // list per presentation (overlap during the clip, premature onsets in
   // ambiguous pauses, and yielding are all derived from it downstream).
-  const ppSpeakingRef = useRef(false)
-  const ppLastStartRef = useRef(0)
-  const ppLastEndRef = useRef(0)
-  const ppSawAnyRef = useRef(false)
-  const ppEventsRef = useRef<{ type: string; timestampMs: number }[]>([])
-  const { registerPpSpeechListener } = ws
+  // Speech-vs-silence is detected by ENERGY, not packet arrival: PP streams
+  // continuous frames (mostly silence) while a conversation is open, so the
+  // arrival-based pp-speech events would report PP "speaking" forever. We key
+  // off per-packet RMS instead. Events are still logged for reference.
+  const ppEventsRef = useRef<{ type: string; timestampMs: number; rms?: number }[]>([])
+  const lastEnergeticMsRef = useRef(0)   // perf.now() of last rms>threshold packet
+  const sawEnergyRef = useRef(false)
+  const speakingNow = useCallback(
+    () => lastEnergeticMsRef.current > 0
+      && performance.now() - lastEnergeticMsRef.current < PP_SPEAKING_GAP_MS,
+    [])
+  const { registerPpSpeechListener, registerAssistantAudioListener } = ws
   useEffect(() => {
-    return registerPpSpeechListener((e) => {
+    const offEvents = registerPpSpeechListener((e) => {
       ppEventsRef.current.push({ type: e.type, timestampMs: e.timestampMs })
-      if (e.type === "pp_speech_start") {
-        ppSpeakingRef.current = true
-        ppSawAnyRef.current = true
-        ppLastStartRef.current = e.timestampMs
-      } else {
-        ppSpeakingRef.current = false
-        ppLastEndRef.current = e.timestampMs
+    })
+    const offAudio = registerAssistantAudioListener((rms, perfMs) => {
+      if (rms >= PP_ENERGY_THRESHOLD) {
+        lastEnergeticMsRef.current = perfMs
+        sawEnergyRef.current = true
+        ppEventsRef.current.push({ type: "pp_energy", timestampMs: perfMs, rms: +rms.toFixed(4) })
       }
     })
-  }, [registerPpSpeechListener])
+    return () => { offEvents(); offAudio() }
+  }, [registerPpSpeechListener, registerAssistantAudioListener])
 
   const abortRef = useRef(false)
 
@@ -415,10 +429,8 @@ export function useSoundboardAudit(opts: {
     ws.clearTranscripts()
     ws.clearResponseChunks()
     resetCapture()
-    ppSpeakingRef.current = false
-    ppSawAnyRef.current = false
-    ppLastStartRef.current = 0
-    ppLastEndRef.current = 0
+    lastEnergeticMsRef.current = 0
+    sawEnergyRef.current = false
     ppEventsRef.current = []
 
     ws.connect(getPersonaplexWsURL(config.prompt))
@@ -435,18 +447,17 @@ export function useSoundboardAudit(opts: {
       ws.setMicMuted(false)
       silence = await startSilenceFeed(ws)
 
+      const handshakeAt = record.t_handshake_ms
       if (presentation.presentation_mode === "during_pp_speech") {
-        // Corrective interruption: fire the clip WHILE PP is speaking, a fixed
-        // delay into its speech run, so every interruption lands at a
-        // comparable point of a PP turn.
-        const spoke = await waitFor(
-          () => ppSpeakingRef.current, config.greetingCapMs)
+        // Corrective interruption: fire the clip WHILE PP is speaking
+        // (energetically), a fixed delay into its speech run.
+        const spoke = await waitFor(() => speakingNow(), config.greetingCapMs)
         if (spoke) {
-          const runStart = ppLastStartRef.current
+          const runStart = lastEnergeticMsRef.current
           const fireAt = runStart + INTERRUPT_FIRE_DELAY_MS
-          await waitFor(() => performance.now() >= fireAt
-            || !ppSpeakingRef.current, INTERRUPT_FIRE_DELAY_MS + 1_000)
-          if (ppSpeakingRef.current) {
+          await waitFor(() => performance.now() >= fireAt || !speakingNow(),
+            INTERRUPT_FIRE_DELAY_MS + 1_000)
+          if (speakingNow()) {
             record.fire_offset_into_pp_speech_ms =
               +(performance.now() - runStart).toFixed(1)
           } else {
@@ -456,19 +467,21 @@ export function useSoundboardAudit(opts: {
           record.notes.push("pp_never_spoke_before_interrupt_cap")
         }
       } else {
-        // Let PP's opening greeting run its course: play once PP has spoken
-        // and then stayed silent for greetingSettleMs, or after greetingCapMs.
+        // Play once PP's greeting has finished — i.e. no energetic packet for
+        // greetingSettleMs AND at least MIN_PRE_CLIP_MS since handshake — or at
+        // the cap. With energy detection, continuous silence frames no longer
+        // read as "still speaking", so this fires promptly after "Hello."
         const greetingDeadline = performance.now() + config.greetingCapMs
         await waitFor(
-          () => (ppSawAnyRef.current
-                  && !ppSpeakingRef.current
-                  && performance.now() - ppLastEndRef.current >= config.greetingSettleMs)
+          () => (performance.now() - handshakeAt >= MIN_PRE_CLIP_MS
+                  && !speakingNow()
+                  && performance.now() - lastEnergeticMsRef.current >= config.greetingSettleMs)
                 || performance.now() >= greetingDeadline,
           config.greetingCapMs + 1_000,
         )
       }
 
-      const wasSpeakingAtFire = ppSpeakingRef.current
+      const wasSpeakingAtFire = speakingNow()
       record.t_play_start_ms = performance.now()
       await playback.playSlot(slot)
       // Yielding (interrupt mode): how long PP kept speaking after the clip
@@ -489,24 +502,27 @@ export function useSoundboardAudit(opts: {
       const playEnd = performance.now()
       record.t_play_end_ms = playEnd
 
-      // PP's response: first speech run STARTING after the clip ended.
+      // PP's response: first ENERGETIC packet after the clip ended. (The
+      // authoritative response latency is recomputed from packet RMS in the
+      // post-processor; this live value drives the runner and the UI.)
       const responded = await waitFor(
-        () => ppLastStartRef.current >= playEnd,
+        () => lastEnergeticMsRef.current > playEnd,
         config.responseTimeoutMs,
       )
       if (!responded) {
         record.status = "no_response"
       } else {
-        record.t_pp_response_start_ms = ppLastStartRef.current
-        record.response_latency_ms = +(ppLastStartRef.current - playEnd).toFixed(1)
-        // Response is over once PP has been silent for responseLingerMs.
+        record.t_pp_response_start_ms = lastEnergeticMsRef.current
+        record.response_latency_ms = +(lastEnergeticMsRef.current - playEnd).toFixed(1)
+        // Response is over once PP has been energetically silent for
+        // responseLingerMs (silence frames don't reset the timer).
         await waitFor(
-          () => !ppSpeakingRef.current
-            && ppLastEndRef.current >= playEnd
-            && performance.now() - ppLastEndRef.current >= config.responseLingerMs,
+          () => !speakingNow()
+            && lastEnergeticMsRef.current > playEnd
+            && performance.now() - lastEnergeticMsRef.current >= config.responseLingerMs,
           120_000,
         )
-        record.t_pp_response_end_ms = ppLastEndRef.current || null
+        record.t_pp_response_end_ms = lastEnergeticMsRef.current || null
         record.status = "ok"
       }
 
@@ -524,12 +540,23 @@ export function useSoundboardAudit(opts: {
       if (record.presentation_mode === "during_pp_speech"
           && record.t_play_start_ms != null
           && record.fire_offset_into_pp_speech_ms != null) {
-        // Yielding: first PP speech END at/after the clip's start.
+        // Yielding: from clip onset until PP's post-clip speech run ends —
+        // i.e. the last energetic packet before the first gap > the speaking
+        // window. (Silence frames alone don't count as still speaking.)
         const playStart = record.t_play_start_ms
-        const yieldEnd = record.pp_speech_events.find(
-          (e) => e.type === "pp_speech_end" && e.timestampMs >= playStart)
-        record.pp_yield_latency_ms = yieldEnd
-          ? +(yieldEnd.timestampMs - playStart).toFixed(1) : null
+        const energy = record.pp_speech_events
+          .filter((e) => e.type === "pp_energy" && e.timestampMs >= playStart)
+          .map((e) => e.timestampMs)
+          .sort((a, b) => a - b)
+        let yieldAt: number | null = null
+        for (let i = 0; i < energy.length; i++) {
+          if (energy[i + 1] == null || energy[i + 1] - energy[i] > PP_SPEAKING_GAP_MS) {
+            yieldAt = energy[i]
+            break
+          }
+        }
+        record.pp_yield_latency_ms = yieldAt != null
+          ? +(yieldAt - playStart).toFixed(1) : null
       }
       // Stop the silence feed first, then collect PP audio + the packet-level
       // playback timeline BEFORE disconnect resets state, then tear down.
