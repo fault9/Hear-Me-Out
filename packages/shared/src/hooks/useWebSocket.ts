@@ -103,6 +103,15 @@ async function setAudioSink(ctx: AudioContext | null, deviceId: string, label: s
 export function useWebSocket() {
   const socketRef = useRef<WebSocket | null>(null);
   const intentionalClose = useRef(false);
+  // Ref-mirror of "PP handshake done AND socket still open", for callers that
+  // must read live readiness rather than the React `connected`/`warmupComplete`
+  // state — which can be stale inside a long-lived async closure (e.g. the
+  // audit runner captures playback before the socket opens).
+  const audioReadyRef = useRef(false);
+  const isReadyForAudio = useCallback(
+    () => audioReadyRef.current && socketRef.current?.readyState === WebSocket.OPEN,
+    [],
+  );
   // When the soundboard is playing a slot, we mute the live mic's send path
   // so PP receives a single coherent Opus stream (soundboard only), not the
   // mic + soundboard interleaved at 2x packet rate. Ref (not state) so
@@ -361,6 +370,7 @@ export function useWebSocket() {
     playbackDecodeTasksRef.current = [];
     lastTranscriptEndRef.current = 0;
     intentionalClose.current = false;
+    audioReadyRef.current = false;
     setAudioReceived(false);
 
     const socket = new WebSocket(url);
@@ -431,6 +441,7 @@ export function useWebSocket() {
           mergedEndRef.current = 0;
           feedbackEnd.current = 0;
           resetPpSpeech(false);   // fresh conversation — no prior run to close
+          audioReadyRef.current = true;
           setWarmupComplete(true);
           setHandshakeReceived(true);
         } else if (tag === 1) {
@@ -525,6 +536,7 @@ export function useWebSocket() {
       new Error("disconnect trace").stack);
     runIdRef.current += 1;
     intentionalClose.current = true;
+    audioReadyRef.current = false;
     socketRef.current?.close();
     socketRef.current = null;
     setConnected(false);
@@ -702,6 +714,7 @@ export function useWebSocket() {
     setMergedOutput,
     setMicMuted,
     isMicMuted,
+    isReadyForAudio,
     addUserTranscript,
     getConversationElapsed,
     getConversationStartPerformanceMs,
