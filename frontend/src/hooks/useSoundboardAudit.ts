@@ -26,7 +26,7 @@ import { getPersonaplexWsURL } from "@/lib/config"
 import { OPUS_ENCODER_CONFIG, PP_SAMPLE_RATE } from "@/lib/soundboardConfig"
 import { uploadSoundboardAudit } from "@shared/services/api"
 import { makeZip } from "@/lib/soundboardZip"
-import { assembleSentWav, getCapturedClips, resetCapture } from "@/lib/soundboardCapture"
+import { assembleSentWav, assembleSentTimelineWav, getCapturedClips, resetCapture } from "@/lib/soundboardCapture"
 import type { Slot } from "@/lib/soundboardDb"
 import type { useWebSocket } from "@shared/hooks/useWebSocket"
 import type { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
@@ -81,27 +81,37 @@ async function startSilenceFeed(ws: WsState): Promise<{ stop: () => Promise<void
   }
 }
 
+// "matched": §3.3 audit — shuffled single-turn presentations, matched
+// natural/converted pairs. "script": a full ordered multi-turn conversation
+// (all slots, soundboard order) replayed as-is, N times in fresh
+// conversations, with a fixed quiet gap between turns.
+export type AuditMode = "matched" | "script"
+
 export interface AuditConfig {
-  reps: number
+  mode: AuditMode
+  reps: number                 // matched: reps per slot · script: whole-script replays
   seed: number
   prompt: string
   greetingSettleMs: number     // PP silent this long after its greeting → play
   greetingCapMs: number        // play anyway after this long post-handshake
   responseTimeoutMs: number    // no PP speech after clip end → "no_response"
   responseLingerMs: number     // PP silent this long after response → done
+  interTurnGapMs: number       // script: quiet gap after PP replies → next line
   handshakeTimeoutMs: number
-  cooldownMs: number           // between presentations (PP teardown)
+  cooldownMs: number           // between conversations (PP teardown/reset)
   allowNonProductionEngines: boolean
 }
 
 export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
-  reps: 2,
+  mode: "script",
+  reps: 3,
   seed: 0,
   prompt: "You enjoy having a good conversation.",
   greetingSettleMs: 900,
   greetingCapMs: 10_000,
   responseTimeoutMs: 20_000,
   responseLingerMs: 1_500,
+  interTurnGapMs: 500,
   handshakeTimeoutMs: 45_000,
   // PP (moshi) is single-connection and needs time to reset between
   // conversations; too short and the next connection never handshakes. Human
@@ -143,23 +153,73 @@ export interface AuditPresentation {
   presentation_mode: PresentationMode
 }
 
+// One line of a scripted conversation (script mode). The script is the
+// eligible slots in soundboard order; reps replay the whole script.
+export interface AuditScriptTurn {
+  turn: number                  // 1-based position in the script
+  slot_id: string
+  label: string
+  condition: string
+  manipulation: string
+  engine: string | null
+  clip_sha256: string
+  raw_sha256: string | null
+  clip_duration_ms: number
+}
+
 export interface AuditManifest {
   schema: "hmo.soundboard-audit-manifest.v2"
+  mode: AuditMode
   created_at: string
   seed: number
   reps: number
   prompt: string
+  inter_turn_gap_ms?: number    // script mode
   timing: Pick<AuditConfig, "greetingSettleMs" | "greetingCapMs"
     | "responseTimeoutMs" | "responseLingerMs" | "cooldownMs">
-    & { interruptFireDelayMs: number }
+    & { interruptFireDelayMs: number; interTurnGapMs?: number }
   production_engine_only: boolean
   engine_warnings: string[]
-  // Matched-pair accounting: raw_sha256 -> the manipulations present. Items
-  // whose source appears in only one condition are listed as warnings.
-  pairing: { raw_sha256: string; labels: string[]; manipulations: string[] }[]
-  pairing_warnings: string[]
-  presentations: AuditPresentation[]
+  // Matched mode only: raw_sha256 -> manipulations present; single-condition
+  // items are warned about.
+  pairing?: { raw_sha256: string; labels: string[]; manipulations: string[] }[]
+  pairing_warnings?: string[]
+  presentations?: AuditPresentation[]   // matched mode
+  script?: AuditScriptTurn[]            // script mode (ordered turns)
   manifest_sha256?: string      // hash of the manifest WITHOUT this field
+}
+
+// Script mode records: one AuditSessionRecord per replay, each holding a
+// per-turn AuditTurnRecord. The whole-conversation PP energy events let the
+// post-processor slice per-turn overlap / barge-in / response windows.
+export interface AuditTurnRecord {
+  turn: number
+  slot_id: string
+  label: string
+  status: "ok" | "no_response" | "clip_error"
+  t_play_start_ms: number | null
+  t_play_end_ms: number | null
+  t_pp_response_start_ms: number | null
+  t_pp_response_end_ms: number | null
+  response_latency_ms: number | null
+  pp_spoke_during_clip: boolean   // PP energy inside the clip window = barge-in
+  sent_clip_sha256: string | null
+  notes: string[]
+}
+
+export interface AuditSessionRecord {
+  rep: number
+  status: "ok" | "handshake_timeout" | "aborted" | "error"
+  error?: string
+  t_connect_ms: number
+  t_handshake_ms: number | null
+  greeted: boolean
+  turns: AuditTurnRecord[]
+  pp_speech_events: { type: string; timestampMs: number; rms?: number }[]
+  pp_transcript: { text: string; speaker: string }[]
+  _ppWav?: Blob | null
+  _sentWav?: Blob | null
+  _playbackTimeline?: unknown
 }
 
 export interface AuditRunRecord {
@@ -198,10 +258,10 @@ export interface AuditRunRecord {
 
 export interface AuditProgress {
   running: boolean
-  currentIndex: number          // 1-based presentation being run (0 = none)
+  currentIndex: number          // 1-based presentation/rep being run (0 = none)
   total: number
   phase: string                 // human-readable current step
-  records: AuditRunRecord[]
+  records: (AuditRunRecord | AuditSessionRecord)[]
 }
 
 // Deterministic PRNG (mulberry32) + Fisher-Yates so the presentation order is
@@ -331,6 +391,53 @@ export function useSoundboardAudit(opts: {
         + "explicitly mark this run exploratory.")
       return null
     }
+
+    const baseTiming = {
+      greetingSettleMs: config.greetingSettleMs,
+      greetingCapMs: config.greetingCapMs,
+      responseTimeoutMs: config.responseTimeoutMs,
+      responseLingerMs: config.responseLingerMs,
+      cooldownMs: config.cooldownMs,
+      interruptFireDelayMs: INTERRUPT_FIRE_DELAY_MS,
+    }
+
+    // ---- script mode: ordered turns, replayed `reps` times --------------
+    if (config.mode === "script") {
+      const script: AuditScriptTurn[] = []
+      for (const slot of eligibleSlots) {
+        const clip = slot.baked ?? slot.raw!
+        script.push({
+          turn: script.length + 1,
+          slot_id: slot.id,
+          label: slot.label,
+          condition: slot.condition,
+          manipulation: slot.manipulation,
+          engine: slot.manipulation === "vc" ? (slot.engine ?? "xvc") : null,
+          clip_sha256: await sha256Hex(clip),
+          raw_sha256: slot.raw ? await sha256Hex(slot.raw) : null,
+          clip_duration_ms: Math.round(slot.bakedDurationMs || slot.rawDurationMs),
+        })
+      }
+      const draft: AuditManifest = {
+        schema: "hmo.soundboard-audit-manifest.v2",
+        mode: "script",
+        created_at: new Date().toISOString(),
+        seed: config.seed,
+        reps: config.reps,
+        prompt: config.prompt,
+        inter_turn_gap_ms: config.interTurnGapMs,
+        timing: { ...baseTiming, interTurnGapMs: config.interTurnGapMs },
+        production_engine_only: engineWarnings.length === 0,
+        engine_warnings: engineWarnings,
+        script,
+      }
+      const digest = await sha256Hex(new Blob([JSON.stringify(draft)]))
+      const frozen = { ...draft, manifest_sha256: digest }
+      setManifest(frozen)
+      return frozen
+    }
+
+    // ---- matched mode (§3.3): shuffled single-turn presentations --------
     const base: Omit<AuditPresentation, "index">[] = []
     const pairing = new Map<string, { labels: string[]; manipulations: string[] }>()
     for (const slot of eligibleSlots) {
@@ -373,18 +480,12 @@ export function useSoundboardAudit(opts: {
       .map((p, i) => ({ index: i + 1, ...p }))
     const draft: AuditManifest = {
       schema: "hmo.soundboard-audit-manifest.v2",
+      mode: "matched",
       created_at: new Date().toISOString(),
       seed: config.seed,
       reps: config.reps,
       prompt: config.prompt,
-      timing: {
-        greetingSettleMs: config.greetingSettleMs,
-        greetingCapMs: config.greetingCapMs,
-        responseTimeoutMs: config.responseTimeoutMs,
-        responseLingerMs: config.responseLingerMs,
-        cooldownMs: config.cooldownMs,
-        interruptFireDelayMs: INTERRUPT_FIRE_DELAY_MS,
-      },
+      timing: baseTiming,
       production_engine_only: engineWarnings.length === 0,
       engine_warnings: engineWarnings,
       pairing: pairingRows,
@@ -574,6 +675,119 @@ export function useSoundboardAudit(opts: {
     }
   }, [slots, ws, playback, config, waitFor])
 
+  // ---- script mode: one full ordered conversation, replayed per rep ------
+  const runScriptSession = useCallback(async (
+    turns: AuditScriptTurn[], rep: number,
+  ): Promise<AuditSessionRecord> => {
+    const record: AuditSessionRecord = {
+      rep, status: "error", t_connect_ms: performance.now(), t_handshake_ms: null,
+      greeted: false, turns: [], pp_speech_events: [], pp_transcript: [],
+    }
+    ws.clearTranscripts()
+    ws.clearResponseChunks()
+    resetCapture()
+    lastEnergeticMsRef.current = 0
+    sawEnergyRef.current = false
+    ppEventsRef.current = []
+
+    ws.connect(getPersonaplexWsURL(config.prompt))
+    let silence: { stop: () => Promise<void> } | null = null
+    const gap = config.interTurnGapMs
+    try {
+      if (!(await waitFor(() => handshakeRef.current, config.handshakeTimeoutMs))) {
+        record.status = "handshake_timeout"
+        return record
+      }
+      record.t_handshake_ms = performance.now()
+      ws.setMicMuted(false)
+      silence = await startSilenceFeed(ws)
+
+      // Wait for PP's greeting, then quiet for the inter-turn gap.
+      const handshakeAt = record.t_handshake_ms
+      const greetingDeadline = performance.now() + config.greetingCapMs
+      await waitFor(
+        () => (sawEnergyRef.current
+                && performance.now() - handshakeAt >= MIN_PRE_CLIP_MS
+                && !speakingNow()
+                && performance.now() - lastEnergeticMsRef.current >= gap)
+              || performance.now() >= greetingDeadline,
+        config.greetingCapMs + 1_000,
+      )
+      record.greeted = sawEnergyRef.current
+
+      for (const turn of turns) {
+        if (abortRef.current) throw new Error("aborted")
+        const slot = slots.find((s) => s.id === turn.slot_id)
+        const tr: AuditTurnRecord = {
+          turn: turn.turn, slot_id: turn.slot_id, label: turn.label,
+          status: "clip_error",
+          t_play_start_ms: null, t_play_end_ms: null,
+          t_pp_response_start_ms: null, t_pp_response_end_ms: null,
+          response_latency_ms: null, pp_spoke_during_clip: false,
+          sent_clip_sha256: null, notes: [],
+        }
+        if (!slot || !(slot.baked ?? slot.raw)) {
+          tr.notes.push("slot missing or has no audio")
+          record.turns.push(tr)
+          continue
+        }
+        tr.t_play_start_ms = performance.now()
+        await playback.playSlot(slot)
+        await waitFor(() => playingRef.current === turn.slot_id, 3_000)
+        if (!(await waitFor(() => playingRef.current === null,
+                            turn.clip_duration_ms + 10_000))) {
+          tr.status = "clip_error"
+          tr.notes.push("clip did not finish within budget")
+          record.turns.push(tr)
+          continue
+        }
+        const playEnd = performance.now()
+        tr.t_play_end_ms = playEnd
+        // Response: first energetic PP packet after the clip ends; done once PP
+        // is energetically quiet for the inter-turn gap (= "500ms between lines").
+        if (await waitFor(() => lastEnergeticMsRef.current > playEnd, config.responseTimeoutMs)) {
+          tr.t_pp_response_start_ms = lastEnergeticMsRef.current
+          tr.response_latency_ms = +(lastEnergeticMsRef.current - playEnd).toFixed(1)
+          await waitFor(
+            () => !speakingNow()
+              && lastEnergeticMsRef.current > playEnd
+              && performance.now() - lastEnergeticMsRef.current >= gap,
+            120_000,
+          )
+          tr.t_pp_response_end_ms = lastEnergeticMsRef.current || null
+          tr.status = "ok"
+        } else {
+          tr.status = "no_response"
+        }
+        const captured = getCapturedClips()
+        if (captured.length > 0) {
+          tr.sent_clip_sha256 = await sha256Hex(captured[captured.length - 1].sentBlob)
+        }
+        record.turns.push(tr)
+      }
+      record.status = "ok"
+      record.pp_transcript = transcriptsRef.current.map(
+        (t) => ({ text: t.text, speaker: t.speaker }))
+      return record
+    } finally {
+      record.pp_speech_events = ppEventsRef.current.slice()
+      // PP barge-in per turn: any energetic packet inside that turn's clip window.
+      for (const tr of record.turns) {
+        if (tr.t_play_start_ms != null && tr.t_play_end_ms != null) {
+          tr.pp_spoke_during_clip = record.pp_speech_events.some(
+            (e) => e.type === "pp_energy"
+              && e.timestampMs >= tr.t_play_start_ms!
+              && e.timestampMs <= tr.t_play_end_ms!)
+        }
+      }
+      if (silence) await silence.stop().catch(() => undefined)
+      record._ppWav = await ws.getPersonaplexWav().catch(() => null)
+      record._sentWav = await assembleSentTimelineWav().catch(() => null)
+      record._playbackTimeline = await ws.getClientPlaybackTimeline().catch(() => null)
+      ws.disconnect()
+    }
+  }, [slots, ws, playback, config, waitFor, speakingNow])
+
   const start = useCallback(async () => {
     if (!manifest) {
       setError("Generate and freeze the manifest first.")
@@ -587,15 +801,54 @@ export function useSoundboardAudit(opts: {
     abortRef.current = false
     setError(null)
     setResultsZip(null)
-    const records: AuditRunRecord[] = []
+    const records: (AuditRunRecord | AuditSessionRecord)[] = []
     const audio: { name: string; blob: Blob }[] = []
-    setProgress({ running: true, currentIndex: 0,
-                  total: manifest.presentations.length, phase: "starting", records: [] })
+    const total = manifest.mode === "script"
+      ? manifest.reps : (manifest.presentations?.length ?? 0)
+    setProgress({ running: true, currentIndex: 0, total, phase: "starting", records: [] })
     try {
-      for (const presentation of manifest.presentations) {
+      if (manifest.mode === "script") {
+        const turns = manifest.script ?? []
+        for (let rep = 1; rep <= manifest.reps; rep++) {
+          if (abortRef.current) break
+          setProgress((p) => ({ ...p, currentIndex: rep,
+            phase: `replay ${rep}/${manifest.reps} — ${turns.length}-turn script` }))
+          let record: AuditSessionRecord
+          try {
+            record = await runScriptSession(turns, rep)
+          } catch (e) {
+            record = {
+              rep, status: abortRef.current ? "aborted" : "error",
+              error: String((e as Error).message ?? e),
+              t_connect_ms: performance.now(), t_handshake_ms: null,
+              greeted: false, turns: [],
+              pp_speech_events: ppEventsRef.current.slice(), pp_transcript: [],
+            }
+            try { ws.disconnect() } catch { /* already down */ }
+          }
+          const prefix = `runs/rep_${String(rep).padStart(3, "0")}`
+          const ppWav = record._ppWav
+          const sentWav = record._sentWav
+          const timeline = record._playbackTimeline
+          delete record._ppWav
+          delete record._sentWav
+          delete record._playbackTimeline
+          if (ppWav) audio.push({ name: `${prefix}/personaplex.wav`, blob: ppWav })
+          if (sentWav) audio.push({ name: `${prefix}/sent.wav`, blob: sentWav })
+          if (timeline) {
+            audio.push({ name: `${prefix}/playback_timeline.json`,
+              blob: new Blob([JSON.stringify(timeline)]) })
+          }
+          records.push(record)
+          setProgress((p) => ({ ...p, records: records.slice() }))
+          if (abortRef.current) break
+          await sleep(config.cooldownMs)
+        }
+      } else {
+      for (const presentation of (manifest.presentations ?? [])) {
         if (abortRef.current) break
         setProgress((p) => ({ ...p, currentIndex: presentation.index,
-                              phase: `run ${presentation.index}/${manifest.presentations.length}: ${presentation.label}` }))
+                              phase: `run ${presentation.index}/${total}: ${presentation.label}` }))
         let record: AuditRunRecord
         try {
           record = await runPresentation(presentation)
@@ -635,6 +888,7 @@ export function useSoundboardAudit(opts: {
         setProgress((p) => ({ ...p, records: records.slice() }))
         if (abortRef.current) break
         await sleep(config.cooldownMs)
+      }
       }
     } finally {
       setProgress((p) => ({ ...p, running: false, phase: abortRef.current ? "aborted" : "finished" }))
