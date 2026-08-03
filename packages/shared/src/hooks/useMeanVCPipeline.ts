@@ -148,12 +148,24 @@ export function useMeanVCPipeline(
     });
     pcmStreamRef.current = stream;
 
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+    // Chrome/Safari resample the mic into a fixed 16 kHz context. Firefox
+    // ignores the sampleRate mic constraint and throws NotSupportedError when
+    // a device-rate stream connects to a different-rate context, so fall back
+    // to a device-rate context — the proxy resamples from the reported source_sr.
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    let audioCtx: AudioContext | null = null;
+    let source: MediaStreamAudioSourceNode;
+    try {
+      audioCtx = new AudioContextCtor({ sampleRate: 16000 });
+      source = audioCtx.createMediaStreamSource(stream);
+    } catch {
+      audioCtx?.close().catch(() => { /* already closed */ });
+      audioCtx = new AudioContextCtor();
+      source = audioCtx.createMediaStreamSource(stream);
+    }
     pcmContextRef.current = audioCtx;
     captureSampleRateRef.current = audioCtx.sampleRate;
     await audioCtx.resume();
-
-    const source = audioCtx.createMediaStreamSource(stream);
     const processor = audioCtx.createScriptProcessor(2048, 1, 1);
     processorRef.current = processor;
     sendingRef.current = false;
@@ -243,8 +255,8 @@ export function useMeanVCPipeline(
     };
   }, [state.vcTargetId, initialSteps, options.voicePrompt, options.studyTimeline]);
 
-  // Assemble the captured raw mic into a 16 kHz WAV (the "Original" side of the
-  // voice-change comparison). Returns null if nothing was captured.
+  // Assemble the captured raw mic into a WAV at the capture rate (the "Original"
+  // side of the voice-change comparison). Returns null if nothing was captured.
   const getOriginalUserWav = useCallback((): Blob | null => {
     const parts = originalPcmRef.current;
     if (!parts.length) return null;

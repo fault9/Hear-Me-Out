@@ -101,6 +101,7 @@ export function useStudyConversation() {
     const modelWav = await ws.getPersonaplexWav()
     const clientTimeline = {
       schema: "hmo.client-timeline.v1",
+      user_agent: navigator.userAgent,
       capture: clientCapture,
       playback: clientPlayback,
     }
