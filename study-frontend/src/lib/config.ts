@@ -4,7 +4,6 @@
 import { traceparent } from "@/lib/trace";
 
 export function getStudyChatProxyWsUrl(sessionId: string, sourceSr: number): string {
-  const host = (import.meta as any).env?.VITE_MEANVC_HOST || window.location.hostname;
   const params = new URLSearchParams({
     session_id: sessionId,
     source_sr: String(sourceSr),
@@ -12,5 +11,11 @@ export function getStudyChatProxyWsUrl(sessionId: string, sourceSr: number): str
     // param; the VC proxy reads it to continue the session's distributed trace.
     traceparent: traceparent(),
   });
-  return `wss://${host}:5002/api/meanvc/chat-proxy?${params.toString()}`;
+  // Same-origin by default: the app-api relays this socket to the VC proxy, so
+  // the audio connection shares the page's port and certificate — first-party
+  // to ad blockers, and no second certificate acceptance in Firefox. Setting
+  // VITE_MEANVC_HOST (dev) connects straight to the engine on :5002 instead.
+  const devHost = (import.meta as any).env?.VITE_MEANVC_HOST;
+  if (devHost) return `wss://${devHost}:5002/api/meanvc/chat-proxy?${params.toString()}`;
+  return `wss://${window.location.host}/api/meanvc/chat-proxy?${params.toString()}`;
 }

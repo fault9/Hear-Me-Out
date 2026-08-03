@@ -955,6 +955,11 @@ def create_app():
         logger.info(f"Serving recording file: {file_path}")
         return FileResponse(file_path, media_type="audio/wav")
 
+    # Same-origin relay for the VC proxy's audio socket (registered before the
+    # static mount so the websocket route wins).
+    from ws_relay import register_chat_relay
+    register_chat_relay(app)
+
     # Serve static frontend files (with SPA fallback for client-side routes).
     app.mount("/", SPAStaticFiles(directory=str(STATIC_PATH), html=True))
 
