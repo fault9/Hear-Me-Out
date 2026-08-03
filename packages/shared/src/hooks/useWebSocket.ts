@@ -421,9 +421,11 @@ export function useWebSocket() {
       setConnected(false);
       if (!intentionalClose.current) {
         if (event.code === 1006) {
-          setError("Server disconnected unexpectedly. The model may be overloaded.");
+          setError("Connection lost. Wait about 10 seconds and try again. If this repeats, "
+            + "disable ad blockers or privacy extensions for this site and avoid university or corporate networks.");
         } else if (event.code !== 1000 && event.code !== 1005) {
-          setError(`Connection closed (code ${event.code}). ${event.reason || ""}`.trim());
+          setError(`Connection failed (code ${event.code}). ${event.reason || ""} `.trimStart()
+            + "If this repeats, disable ad blockers or privacy extensions for this site, then retry.");
         }
       }
       intentionalClose.current = false;
