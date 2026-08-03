@@ -273,12 +273,15 @@ function ParticipantsPanel({ token, studyId, participants, hasScenarios, onChang
   )
 }
 
+type SessionView = "included" | "analytical" | "all"
+
 function DataPanel({ token, studyId }: any) {
   const [runs, setRuns] = useState<any[]>([])
   const [sessions, setSessions] = useState<any[]>([])
   const [status, setStatus] = useState<any>(null)
   const [vcStatus, setVcStatus] = useState<any>(null)
   const [vcScope, setVcScope] = useState("all")
+  const [sessionView, setSessionView] = useState<SessionView>("analytical")
   const load = () => {
     adminApi.runs(token, studyId).then(r => setRuns(r.runs || [])).catch(() => {})
     adminApi.sessions(token, studyId).then(r => setSessions(r.sessions || [])).catch(() => {})
@@ -328,6 +331,16 @@ function DataPanel({ token, studyId }: any) {
   }
   const participants = Array.from(new Set(
     analyticalSessions.map(s => s.participant_id)))
+  const includedSessions = analyticalSessions.filter(s => s.analysis_included)
+  // "pending" = analytical but not yet decidable (unanalyzed, or its run is still open)
+  const pendingSessions = analyticalSessions.filter(s => !s.analysis_included
+    && (s.analysis_exclusion_reasons || []).some(
+      (r: string) => r === "technical_validity_pending" || r === "no_submitted_run"))
+  const excludedCount = analyticalSessions.length - includedSessions.length - pendingSessions.length
+  const practiceCount = sessions.length - analyticalSessions.length
+  const visibleSessions = sessionView === "all" ? sessions
+    : sessionView === "analytical" ? analyticalSessions
+    : includedSessions
 
   return (
     <div>
@@ -379,7 +392,9 @@ function DataPanel({ token, studyId }: any) {
         <Table title="Runs" head={["Participant", "Status", "Left"]}
           rows={runs.map(r => [r.participant_id, r.status, r.remaining_seconds ? `${Math.floor(r.remaining_seconds / 60)}m` : "—"])} />
         <Table title="Sessions" head={["Session", "Condition", "Preprocess", "VC quality", "Technical", "Dataset"]}
-          rows={sessions.map(s => {
+          controls={<ViewToggle value={sessionView} onChange={setSessionView} />}
+          footer={`${includedSessions.length} included · ${excludedCount} excluded · ${pendingSessions.length} pending · ${practiceCount} practice`}
+          rows={visibleSessions.map(s => {
             const excluded = s.analysis_eligible === false
             const validity = s.technical_validity?.status || "pending"
             const reviewLabels = validity === "valid" ? [
@@ -405,10 +420,29 @@ function DataPanel({ token, studyId }: any) {
   )
 }
 
-function Table({ title, head, rows }: { title: string; head: string[]; rows: any[][] }) {
+function ViewToggle({ value, onChange }: { value: SessionView; onChange: (v: SessionView) => void }) {
+  const views: [SessionView, string][] = [["included", "Included"], ["analytical", "Analytical"], ["all", "All"]]
+  return (
+    <div className="flex overflow-hidden rounded-md border">
+      {views.map(([id, label]) => (
+        <button key={id} onClick={() => onChange(id)}
+          className={`px-2 py-0.5 text-xs ${value === id ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}>
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Table({ title, head, rows, controls, footer }: {
+  title: string; head: string[]; rows: any[][]; controls?: ReactNode; footer?: string
+}) {
   return (
     <div>
-      <h3 className="mb-1 text-sm font-medium">{title}</h3>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">{title}</h3>
+        {controls}
+      </div>
       <div className="max-h-72 overflow-auto rounded-md border text-sm">
         <table className="w-full">
           <thead className="bg-muted/50 text-left"><tr>{head.map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
@@ -417,6 +451,7 @@ function Table({ title, head, rows }: { title: string; head: string[]; rows: any
           </tbody>
         </table>
       </div>
+      {footer && <p className="mt-1 text-xs text-muted-foreground">{footer}</p>}
     </div>
   )
 }
