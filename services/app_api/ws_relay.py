@@ -91,6 +91,9 @@ async def _relay(browser: WebSocket) -> None:
             {up_task, down_task}, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
+        # Retrieve every task's outcome — including a racing loser that failed
+        # simultaneously — so asyncio never logs "exception was never retrieved".
+        for task in (*pending, *done):
             with contextlib.suppress(BaseException):
                 await task
         if up_task in done:
@@ -101,8 +104,6 @@ async def _relay(browser: WebSocket) -> None:
                 await upstream.close(code=_sendable_code(browser_code))
         else:
             # Upstream ended (or its pump failed): mirror its close to the browser.
-            with contextlib.suppress(Exception):
-                down_task.result()
             with contextlib.suppress(Exception):
                 await browser.close(code=_sendable_code(getattr(upstream, "close_code", None)))
     finally:
