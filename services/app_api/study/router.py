@@ -630,6 +630,12 @@ def build_study_router() -> APIRouter:
         study = backend.get_study(p["study_id"])
         if not study:
             raise HTTPException(status_code=404, detail="Study not found")
+        # Intake lock applies at the door: while paused, codes are refused
+        # here so nobody reads the welcome page before being turned away.
+        if (study.get("settings") or {}).get("intake_paused"):
+            raise HTTPException(status_code=423, detail=(
+                "The study is temporarily closed. "
+                "Please come back later or contact the researcher."))
         order = p.get("scenario_order") or []
         scenarios = []
         for i, sid in enumerate(order):
@@ -650,16 +656,12 @@ def build_study_router() -> APIRouter:
     async def run_start(body: RunStartRequest):
         p = _require_participant(body.code)
         study = backend.get_study(p["study_id"]) or {}
-        # Admin-controlled intake lock: blocks NEW runs only. Resuming an
-        # existing run stays allowed so a lock never strands someone mid-study.
+        # Admin-controlled intake lock: while paused, no run starts or resumes.
+        # Participants already inside a run window continue unaffected.
         if (study.get("settings") or {}).get("intake_paused"):
-            latest = backend.get_latest_run(p["participant_id"])
-            resuming = (body.mode == "resume" and latest
-                        and latest.get("status") in ("in_progress", "expired"))
-            if not resuming:
-                raise HTTPException(status_code=423, detail=(
-                    "The study is temporarily closed for new sessions. "
-                    "Please try again later or contact the researcher."))
+            raise HTTPException(status_code=423, detail=(
+                "The study is temporarily closed for new sessions. "
+                "Please try again later or contact the researcher."))
         live = backend.get_live_run(p["study_id"])
         if live and live["participant_id"] != p["participant_id"]:
             raise HTTPException(status_code=409,
