@@ -187,12 +187,14 @@ class VCEngineManager:
               with _span("vc.ensure_engine", study_id=study_id, engine=target_engine,
                          force_restart=force, targets=len(targets)):
                 if force or not (self.is_engine_up() and self._current_engine == target_engine):
-                    s = self._step(f"Starting {target_engine} voice engine")
+                    # Step labels reach participants via /run/prepare/stream, so
+                    # they must not name engines or targets (condition blinding).
+                    s = self._step("Starting audio services")
                     with _span("vc.restart_engine", engine=target_engine):
                         self._restart_to(target_engine)
                     self._finish_step(s)
 
-                s = self._step(f"Loading {len(targets)} target voice(s)")
+                s = self._step("Loading session resources")
                 backend.clear_engine_target_ids(study_id, target_engine)
                 with _span("vc.load_targets", targets=len(targets)):
                     self._load_targets(backend, targets)

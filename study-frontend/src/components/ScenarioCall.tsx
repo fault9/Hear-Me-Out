@@ -6,7 +6,7 @@ import { Spinner } from "@shared/ui/spinner"
 import { Phone, AlertTriangle, CheckCircle2, XCircle, Target, MessageCircle, Info } from "lucide-react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import { useStudyConversation } from "@/hooks/useStudyConversation"
-import { api, streamPrepare, type ScenarioInfo, type PrepareState } from "@/api"
+import { api, streamPrepare, type ScenarioInfo } from "@/api"
 
 function fmt(s: number) {
   const m = Math.floor(s / 60), r = s % 60
@@ -20,7 +20,6 @@ export function ScenarioCall({ code, scenario, onDone }: {
 }) {
   const conv = useStudyConversation()
   const [phase, setPhase] = useState<Phase>("preparing")
-  const [prepare, setPrepare] = useState<PrepareState | null>(null)
   const [remaining, setRemaining] = useState(scenario.time_limit_s)
   const [errMsg, setErrMsg] = useState<string | null>(null)
   const [readyConfirmed, setReadyConfirmed] = useState(false)
@@ -42,11 +41,11 @@ export function ScenarioCall({ code, scenario, onDone }: {
         const res = await api.sessionStart(code, scenario.scenario_order)
         sessionIdRef.current = res.session_id
         if (res.prepare?.status === "ready") { setPhase("ready"); return }
-        setPrepare(res.prepare)
         stop = streamPrepare((s) => {
-          setPrepare(s)
           if (s.status === "ready") setPhase("ready")
-          if (s.status === "error") { setErrMsg(s.error || "Preparation failed"); setPhase("error") }
+          // Server error details can name engines/targets — keep them out of
+          // the participant-facing message (condition blinding).
+          if (s.status === "error") { setErrMsg("We could not prepare your session. Please try again."); setPhase("error") }
         })
       } catch (e: any) {
         setErrMsg(e?.message || "Could not start the session."); setPhase("error")
@@ -201,15 +200,9 @@ export function ScenarioCall({ code, scenario, onDone }: {
 
         {phase === "preparing" && (
           <div className="flex flex-col gap-2 py-2">
+            {/* Single neutral indicator: step labels name engines/targets, which
+                must stay hidden from participants (condition blinding). */}
             <div className="flex items-center gap-2 text-base text-muted-foreground"><Spinner /> Preparing your session…</div>
-            {(prepare?.steps || []).map((s, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
-                {s.state === "done" ? <CheckCircle2 className="size-3.5 text-primary" />
-                  : s.state === "error" ? <XCircle className="size-3.5 text-destructive" />
-                  : <Spinner className="size-3.5" />}
-                <span className={s.state === "error" ? "text-destructive" : ""}>{s.label}</span>
-              </div>
-            ))}
           </div>
         )}
 

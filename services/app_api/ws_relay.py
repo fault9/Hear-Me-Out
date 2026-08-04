@@ -78,7 +78,8 @@ async def _relay(browser: WebSocket) -> None:
     except Exception as exc:  # noqa: BLE001 - any dial failure ends the same way
         logger.warning(f"[relay] upstream connect failed session={sid}: {exc}")
         with contextlib.suppress(Exception):
-            await browser.close(code=1011, reason="VC engine unreachable")
+            # Reason text reaches the participant's browser — keep it engine-agnostic.
+            await browser.close(code=1011, reason="audio service unavailable")
         return
 
     logger.info(f"[relay] chat-proxy open session={sid} -> {upstream_base}")

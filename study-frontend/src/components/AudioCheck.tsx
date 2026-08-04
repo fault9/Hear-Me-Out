@@ -51,7 +51,8 @@ export function AudioCheck({ code, items, onDone }: {
       if (res.prepare?.status === "ready") begin()
       else stopPrepare.current = streamPrepare(s => {
         if (s.status === "ready") { stopPrepare.current(); begin() }
-        if (s.status === "error") { setErr(s.error || "Preparation failed"); setPhase("error") }
+        // Neutral copy: server error details can name engines/targets (blinding).
+        if (s.status === "error") { setErr("We could not prepare the audio check. Please try again."); setPhase("error") }
       })
     } catch (e: any) { setErr(e?.message || "Could not start the audio check."); setPhase("error") }
   }, [code, conv])

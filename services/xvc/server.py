@@ -599,7 +599,9 @@ async def handle_chat_proxy(request: web.Request) -> web.WebSocketResponse:
     if unavailable_targets:
         logger.error("[xvc proxy] VC schedule has unavailable target(s) for %s: %s",
                      session_id or "legacy session", unavailable_targets)
-        await browser_ws.send_json({"error": "VC target is unavailable for this session"})
+        # Participant-facing copy stays engine-agnostic (condition blinding);
+        # the log line above carries the real ids for diagnosis.
+        await browser_ws.send_json({"error": "The session audio could not be prepared. Please try again in a moment."})
         await browser_ws.close()
         return browser_ws
 
