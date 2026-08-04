@@ -410,8 +410,16 @@ function DataPanel({ token, studyId }: any) {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Table title="Runs" head={["Participant", "Status", "Left"]}
-          rows={runs.map(r => [r.participant_id, r.status, r.remaining_seconds ? `${Math.floor(r.remaining_seconds / 60)}m` : "—"])} />
+        <Table title="Runs" head={["Participant", "Status", "Left", ""]}
+          rows={runs.map(r => [r.participant_id, r.status,
+            r.remaining_seconds ? `${Math.floor(r.remaining_seconds / 60)}m` : "—",
+            r.status === "in_progress" && r.remaining_seconds > 0 ? (
+              <Button size="sm" variant="ghost" onClick={async () => {
+                if (!window.confirm(`Release ${r.participant_id}'s session window? Their progress is kept and they can resume later.`)) return
+                try { await adminApi.releaseRun(token, studyId, r.id); load() }
+                catch (e: any) { setOpErr(e?.message || String(e)) }
+              }}>Release</Button>
+            ) : ""])} />
         <Table title="Sessions" head={["Session", "Condition", "Preprocess", "VC quality", "Technical", "Dataset"]}
           controls={<ViewToggle value={sessionView} onChange={setSessionView} />}
           footer={`${includedSessions.length} included · ${excludedCount} excluded · ${pendingSessions.length} pending · ${practiceCount} practice`}
@@ -468,7 +476,7 @@ function Table({ title, head, rows, controls, footer }: {
         <table className="w-full">
           <thead className="bg-muted/50 text-left"><tr>{head.map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
           <tbody>
-            {rows.map((r, i) => <tr key={i} className="border-t">{r.map((c, j) => <td key={j} className="p-2 font-mono text-xs">{String(c)}</td>)}</tr>)}
+            {rows.map((r, i) => <tr key={i} className="border-t">{r.map((c, j) => <td key={j} className="p-2 font-mono text-xs">{c}</td>)}</tr>)}
           </tbody>
         </table>
       </div>

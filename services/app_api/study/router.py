@@ -508,6 +508,16 @@ def build_study_router() -> APIRouter:
     async def list_runs(study_id: int):
         return {"runs": backend.list_runs(study_id)}
 
+    @router.post("/studies/{study_id}/runs/{run_id}/release",
+                 dependencies=[Depends(require_admin)])
+    async def release_run(study_id: int, run_id: int):
+        """Expire a live run window so the single-participant slot frees up.
+        Progress is untouched; the participant may resume later."""
+        if not any(int(r["id"]) == run_id for r in backend.list_runs(study_id)):
+            raise HTTPException(status_code=404, detail="Run is not part of this study")
+        backend.release_run(run_id)
+        return {"ok": True}
+
     @router.get("/studies/{study_id}/sessions", dependencies=[Depends(require_admin)])
     async def list_sessions(study_id: int):
         return {"sessions": annotate_analysis_scopes(

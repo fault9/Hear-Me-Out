@@ -80,7 +80,17 @@ export function Admin() {
               <Button size="sm" variant="secondary" onClick={() => setSelected(s.id)}>Open</Button>
               {!s.archived && (
                 <Button size="sm" variant="ghost" onClick={async () => {
-                  if (!window.confirm(`Archive “${s.name}”? Participant codes for this study will stop working, but its data will be preserved.`)) return
+                  // Type-to-confirm: archiving kills every participant code for a
+                  // possibly-live study, so a click-through confirm is not enough.
+                  const typed = window.prompt(
+                    `Archiving “${s.name}” stops ALL of its participant codes from working. `
+                    + `Its data is preserved and it can be restored later.\n\n`
+                    + `Type the study name to confirm:`)
+                  if (typed === null) return
+                  if (typed.trim() !== s.name) {
+                    window.alert("Name did not match — archive cancelled.")
+                    return
+                  }
                   await adminApi.archiveStudy(token, s.id); loadStudies(token)
                 }}>Archive</Button>
               )}

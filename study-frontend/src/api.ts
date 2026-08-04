@@ -174,6 +174,8 @@ export const adminApi = {
   getStudy: (t: string, id: number) => jget(`/studies/${id}`, adminHeaders(t)),
   updateStudy: (t: string, id: number, body: { name?: string; description?: string; settings?: any }) => jput(`/studies/${id}`, body, adminHeaders(t)),
   archiveStudy: (t: string, id: number) => jdel(`/studies/${id}`, adminHeaders(t)),
+  releaseRun: (t: string, id: number, runId: number) =>
+    jpost(`/studies/${id}/runs/${runId}/release`, {}, adminHeaders(t)),
   restoreStudy: (t: string, id: number) => jpost(`/studies/${id}/restore`, {}, adminHeaders(t)),
   setQuestionnaires: (t: string, id: number, questionnaires: unknown) =>
     jput(`/studies/${id}/questionnaires`, { questionnaires }, adminHeaders(t)),

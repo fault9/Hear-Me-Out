@@ -87,6 +87,8 @@ class StorageBackend(abc.ABC):
     @abc.abstractmethod
     def submit_run(self, run_id: int) -> None: ...
     @abc.abstractmethod
+    def release_run(self, run_id: int) -> None: ...
+    @abc.abstractmethod
     def get_live_run(self, study_id: int) -> Optional[dict]: ...
     @abc.abstractmethod
     def list_runs(self, study_id: int) -> list[dict]: ...
@@ -504,6 +506,13 @@ class SqliteBackend(StorageBackend):
     def submit_run(self, run_id) -> None:
         with self._conn() as c:
             c.execute("UPDATE run SET status='submitted', submitted_at=? WHERE id=?", (_now(), run_id))
+
+    def release_run(self, run_id) -> None:
+        # Expire the window without touching progress; the participant can
+        # resume later and completed scenarios are kept.
+        with self._conn() as c:
+            c.execute("UPDATE run SET expires_at=? WHERE id=? AND status='in_progress'",
+                      (_now(), run_id))
 
     def get_live_run(self, study_id) -> Optional[dict]:
         # A live run holds the single-GPU lock regardless of which study it belongs to.
