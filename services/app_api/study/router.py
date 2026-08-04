@@ -513,6 +513,16 @@ def build_study_router() -> APIRouter:
         return {"sessions": annotate_analysis_scopes(
             backend.list_sessions(study_id), backend.list_runs(study_id))}
 
+    def _refuse_during_live_run(study_id: int) -> None:
+        # Batch jobs contend with a live call for the GPU and inject timing
+        # noise into measured variables — refuse instead of degrading a session.
+        live = backend.get_live_run(study_id)
+        if live:
+            remaining = max(0, int(((live.get("expires_at") or 0) - time.time()) / 60))
+            raise HTTPException(status_code=409, detail=(
+                f"Participant {live.get('participant_id')} has an active session window "
+                f"(~{remaining} min left). Run this after it ends, or release the run."))
+
     @router.post("/studies/{study_id}/analyze", dependencies=[Depends(require_admin)])
     async def analyze(study_id: int, force: bool = False):
         """Run Whisper transcription + VC-quality metrics over the study's saved
@@ -523,6 +533,7 @@ def build_study_router() -> APIRouter:
         if get_vc_quality_runner().get_status().get("running"):
             raise HTTPException(status_code=409,
                                 detail="VC-quality analysis is already running")
+        _refuse_during_live_run(study_id)
         return get_runner().start(backend, study_id, force)
 
     @router.get("/studies/{study_id}/analyze/status", dependencies=[Depends(require_admin)])
@@ -538,6 +549,7 @@ def build_study_router() -> APIRouter:
         if get_runner().get_status().get("running"):
             raise HTTPException(status_code=409,
                                 detail="The full analysis pipeline is already running")
+        _refuse_during_live_run(study_id)
         participant_id = body.get("participant_id") or None
         session_id = body.get("session_id") or None
         if participant_id and session_id:
@@ -637,6 +649,17 @@ def build_study_router() -> APIRouter:
     @router.post("/run/start")
     async def run_start(body: RunStartRequest):
         p = _require_participant(body.code)
+        study = backend.get_study(p["study_id"]) or {}
+        # Admin-controlled intake lock: blocks NEW runs only. Resuming an
+        # existing run stays allowed so a lock never strands someone mid-study.
+        if (study.get("settings") or {}).get("intake_paused"):
+            latest = backend.get_latest_run(p["participant_id"])
+            resuming = (body.mode == "resume" and latest
+                        and latest.get("status") in ("in_progress", "expired"))
+            if not resuming:
+                raise HTTPException(status_code=423, detail=(
+                    "The study is temporarily closed for new sessions. "
+                    "Please try again later or contact the researcher."))
         live = backend.get_live_run(p["study_id"])
         if live and live["participant_id"] != p["participant_id"]:
             raise HTTPException(status_code=409,

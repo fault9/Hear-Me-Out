@@ -40,6 +40,16 @@ export function StudyEditor({ token, studyId, onBack }: {
 
   const targets: any[] = study.targets || []
   const scenarios: any[] = study.scenarios || []
+  const intakePaused = Boolean(study.settings?.intake_paused)
+  const toggleIntake = async () => {
+    try {
+      await adminApi.updateStudy(token, studyId, {
+        name: study.name,
+        settings: { ...(study.settings || {}), intake_paused: !intakePaused },
+      })
+      reload()
+    } catch (e: any) { setErr(e?.message || String(e)) }
+  }
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6">
@@ -47,6 +57,11 @@ export function StudyEditor({ token, studyId, onBack }: {
         <Button size="sm" variant="ghost" onClick={onBack}>← Studies</Button>
         <h1 className="text-xl font-bold">{study.name}</h1>
         <span className="text-xs text-muted-foreground">#{study.id}</span>
+        {intakePaused && <Badge variant="destructive">Intake paused</Badge>}
+        <Button size="sm" variant={intakePaused ? "default" : "ghost"} className="ml-auto"
+          onClick={toggleIntake}>
+          {intakePaused ? "Reopen intake" : "Pause intake"}
+        </Button>
       </div>
       {err && <p className="mb-3 text-sm text-destructive">{err}</p>}
 
@@ -313,8 +328,11 @@ function DataPanel({ token, studyId }: any) {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob)
     a.download = `study${studyId}_export.${fmt}`; a.click(); URL.revokeObjectURL(a.href)
   }
+  const [opErr, setOpErr] = useState<string | null>(null)
   const runAnalysis = async (force: boolean) => {
-    setStatus(await adminApi.analyze(token, studyId, force))
+    setOpErr(null)
+    try { setStatus(await adminApi.analyze(token, studyId, force)) }
+    catch (e: any) { setOpErr(e?.message || String(e)) }
   }
   const analyticalSessions = sessions.filter(s => s.analysis_eligible !== false)
   const pending = analyticalSessions.filter(
@@ -327,7 +345,9 @@ function DataPanel({ token, studyId }: any) {
     const body: { participant_id?: string; session_id?: string; force?: boolean } = { force }
     if (vcScope.startsWith("participant:")) body.participant_id = vcScope.slice("participant:".length)
     if (vcScope.startsWith("session:")) body.session_id = vcScope.slice("session:".length)
-    setVcStatus(await adminApi.vcQuality(token, studyId, body))
+    setOpErr(null)
+    try { setVcStatus(await adminApi.vcQuality(token, studyId, body)) }
+    catch (e: any) { setOpErr(e?.message || String(e)) }
   }
   const participants = Array.from(new Set(
     analyticalSessions.map(s => s.participant_id)))
@@ -349,6 +369,7 @@ function DataPanel({ token, studyId }: any) {
         <Button size="sm" variant="secondary" onClick={() => download("zip")}>Export ZIP</Button>
         <Button size="sm" variant="ghost" onClick={() => adminApi.stopEngine(token)}>Stop VC engine</Button>
       </div>
+      {opErr && <p className="mb-3 text-sm text-destructive">{opErr}</p>}
 
       <div className="mb-4 rounded-lg border p-3">
         <div className="mb-1 text-sm font-semibold">Analysis pipeline</div>
