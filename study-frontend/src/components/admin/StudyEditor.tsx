@@ -16,6 +16,24 @@ export function StudyEditor({ token, studyId, onBack }: {
   const [engines, setEngines] = useState<string[]>([])
   const [tab, setTab] = useState<Tab>("settings")
   const [err, setErr] = useState<string | null>(null)
+  const [liveRun, setLiveRun] = useState<any>(null)
+
+  // Keep the header's slot indicator fresh: whoever holds the single session
+  // window shows up here, releasable from any tab.
+  useEffect(() => {
+    let stop = false
+    const check = async () => {
+      try {
+        const r = await adminApi.runs(token, studyId)
+        const live = (r.runs || []).find(
+          (x: any) => x.status === "in_progress" && x.remaining_seconds > 0)
+        if (!stop) setLiveRun(live || null)
+      } catch { /* header indicator is best-effort */ }
+    }
+    check()
+    const t = setInterval(check, 15000)
+    return () => { stop = true; clearInterval(t) }
+  }, [token, studyId])
 
   const reload = useCallback(async () => {
     try {
@@ -41,6 +59,13 @@ export function StudyEditor({ token, studyId, onBack }: {
   const targets: any[] = study.targets || []
   const scenarios: any[] = study.scenarios || []
   const intakePaused = Boolean(study.settings?.intake_paused)
+  const releaseLive = async () => {
+    if (!liveRun) return
+    if (!window.confirm(`Release ${liveRun.participant_id}'s session window? `
+      + `Their progress is kept and they can resume later.`)) return
+    try { await adminApi.releaseRun(token, studyId, liveRun.id); setLiveRun(null) }
+    catch (e: any) { setErr(e?.message || String(e)) }
+  }
   const toggleIntake = async () => {
     try {
       await adminApi.updateStudy(token, studyId, {
@@ -58,10 +83,16 @@ export function StudyEditor({ token, studyId, onBack }: {
         <h1 className="text-xl font-bold">{study.name}</h1>
         <span className="text-xs text-muted-foreground">#{study.id}</span>
         {intakePaused && <Badge variant="destructive">Intake paused</Badge>}
-        <Button size="sm" variant={intakePaused ? "default" : "ghost"} className="ml-auto"
-          onClick={toggleIntake}>
-          {intakePaused ? "Reopen intake" : "Pause intake"}
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {liveRun && (
+            <Button size="sm" variant="secondary" onClick={releaseLive}>
+              Release {liveRun.participant_id}
+            </Button>
+          )}
+          <Button size="sm" variant={intakePaused ? "default" : "ghost"} onClick={toggleIntake}>
+            {intakePaused ? "Reopen intake" : "Pause intake"}
+          </Button>
+        </div>
       </div>
       {err && <p className="mb-3 text-sm text-destructive">{err}</p>}
 
