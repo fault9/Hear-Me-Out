@@ -372,7 +372,7 @@ function DataPanel({ token, studyId }: any) {
   const pending = analyticalSessions.filter(
     s => s.ended_at != null
       && (s.technical_validity?.status || "pending") !== "incomplete"
-      && (!s.metrics || s.vc_quality_status !== "complete"
+      && (!s.metrics || !["complete", "skipped"].includes(s.vc_quality_status || "")
           || (s.technical_validity?.status || "pending") === "pending")).length
   const running = status?.running
   const vcRunning = vcStatus?.running

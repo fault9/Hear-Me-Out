@@ -223,6 +223,10 @@ def main() -> None:
                     # the same KeyError on every pass.
                     stage_errors["timing"] = "raw microphone audio was never captured"
                     timing = _latest_analysis_result(s, "timing_latest")
+                    if s.get("vc_quality_status") == "pending":
+                        backend.update_session_vc_quality(
+                            s["session_id"], "skipped",
+                            {"reason": "no captured audio to score"})
                 elif force or _needs_timing(s):
                     timing = prepare_timing_analysis(s, STUDY_DATA_DIR, analysis_id)
                     latest = backend.get_session(s["session_id"]) or s
