@@ -36,6 +36,8 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
+import soundfile as sf  # noqa: E402
+
 from study.analysis import (STUDY_DATA_DIR, TRANSCRIPT_SCHEMA, _session_paths,
                             run_session_analysis, status_path)  # noqa: E402
 from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA,
@@ -150,6 +152,20 @@ def _analysis_candidates(sessions: list[dict], force: bool) -> list[dict]:
                  or _needs_validity(session))]
 
 
+def _probe_media(path) -> str | None:
+    if not path:
+        return "captured audio is missing"
+    try:
+        info = sf.info(path)
+    except Exception as exc:  # noqa: BLE001
+        return f"captured audio is unreadable: {exc}"
+    if not info.frames:
+        return "captured audio is empty"
+    if os.path.getsize(path) < info.frames * max(1, info.channels):
+        return "captured audio is truncated"
+    return None
+
+
 def main() -> None:
     study_id = int(sys.argv[1])
     force = "--force" in sys.argv[2:]
@@ -181,12 +197,19 @@ def main() -> None:
                 f"{time.time_ns() % 1_000_000_000:09d}Z"
             )
             if files.get("participant") and (force or _needs_preprocessing(s)):
-                try:
-                    run_session_analysis(s["session_id"], conv, raw, mt)
-                except Exception as exc:  # noqa: BLE001
-                    stage_errors["preprocessing"] = str(exc)
-                    print(f"[analysis_worker] preprocessing error for {s['session_id']}: {exc}",
+                # Header-only probe; decoding a truncated upload can hang forever.
+                probe_error = _probe_media(conv) or (_probe_media(raw) if raw else None)
+                if probe_error:
+                    stage_errors["preprocessing"] = probe_error
+                    print(f"[analysis_worker] skipping {s['session_id']}: {probe_error}",
                           file=sys.stderr)
+                else:
+                    try:
+                        run_session_analysis(s["session_id"], conv, raw, mt)
+                    except Exception as exc:  # noqa: BLE001
+                        stage_errors["preprocessing"] = str(exc)
+                        print(f"[analysis_worker] preprocessing error for {s['session_id']}: {exc}",
+                              file=sys.stderr)
             elif not files.get("participant"):
                 stage_errors["preprocessing"] = "participant audio is missing"
 
