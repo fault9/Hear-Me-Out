@@ -40,6 +40,7 @@ import soundfile as sf  # noqa: E402
 
 from study.analysis import (STUDY_DATA_DIR, TRANSCRIPT_SCHEMA, _session_paths,
                             run_session_analysis, status_path)  # noqa: E402
+from study.continuity import run_for_session_dir as run_continuity_check  # noqa: E402
 from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA,
                                        prepare_dialogue_transcript)  # noqa: E402
 from study.session_scope import analysis_eligible  # noqa: E402
@@ -150,6 +151,14 @@ def _analysis_candidates(sessions: list[dict], force: bool) -> list[dict]:
                  or _needs_dialogue_transcript(session)
                  or _needs_transmitted_transcript(session)
                  or _needs_validity(session))]
+
+
+def _session_dir_path(session: dict) -> Path:
+    return (STUDY_DATA_DIR / "sessions" / f"study_{session['study_id']}"
+            / session["participant_id"]
+            / f"run_{int(session.get('run_attempt') or 1):02d}"
+            / f"scenario_{int(session['scenario_order']):02d}"
+            / f"attempt_{int(session.get('scenario_attempt') or 1):02d}_{session['session_id']}")
 
 
 def _probe_media(path) -> str | None:
@@ -322,6 +331,24 @@ def main() -> None:
                 backend.update_session_artifacts(s["session_id"], manifest)
             except Exception as exc:  # noqa: BLE001
                 print(f"[analysis_worker] technical-validity error for {s['session_id']}: {exc}",
+                      file=sys.stderr)
+
+            try:
+                latest = backend.get_session(s["session_id"]) or s
+                manifest = copy.deepcopy(latest.get("artifact_manifest") or {})
+                summary = (manifest.get("analysis") or {}).get("technical_validity_summary") or {}
+                codes = {f.get("code") for f in summary.get("failures") or []}
+                # Records a verdict for the analysis-time admissibility rule;
+                # never mutates the frozen validity status.
+                if "proxy_artifacts_present" in codes and not (
+                        manifest.get("analysis") or {}).get("continuity_summary"):
+                    result = run_continuity_check(str(_session_dir_path(latest)))
+                    manifest.setdefault("analysis", {})["continuity_summary"] = result
+                    backend.update_session_artifacts(s["session_id"], manifest)
+                    print(f"[analysis_worker] continuity check for {s['session_id']}: "
+                          f"{result['verdict']}", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[analysis_worker] continuity-check error for {s['session_id']}: {exc}",
                       file=sys.stderr)
         done += 1
         _write(running=True, phase="preprocessing", done=done, total=total,
