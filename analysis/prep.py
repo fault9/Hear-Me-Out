@@ -8,6 +8,7 @@ Usage: python3 prep.py
 """
 
 import csv
+import json
 import os
 import sys
 
@@ -56,12 +57,32 @@ def write_frame(name, rows, columns):
 def main():
     scenarios = read_rows("scenarios.csv")
     included = [r for r in scenarios if truthy(r.get("analysis_included"))]
-    print(f"scenarios: {len(scenarios)} rows, {len(included)} included")
-    write_frame("scenario_level.csv", included, SCENARIO_KEEP)
 
+    # Sessions admitted under dated validity amendments (analysis-time rule;
+    # the export's frozen inclusion flags are never rewritten).
+    admitted = []
+    amendments_path = os.path.join(HERE, "amendments.json")
+    if os.path.exists(amendments_path):
+        with open(amendments_path, encoding="utf-8") as handle:
+            admitted_ids = {a["session_id"] for a in json.load(handle)}
+        admitted = [r for r in scenarios if r["session_id"] in admitted_ids
+                    and not truthy(r.get("analysis_included"))]
+        missing = admitted_ids - {r["session_id"] for r in scenarios}
+        if missing:
+            print("WARNING: amended session(s) not in export:", sorted(missing))
+
+    print(f"scenarios: {len(scenarios)} rows, {len(included)} included, "
+          f"{len(admitted)} amended in")
+    write_frame("scenario_level.csv", included, SCENARIO_KEEP)
+    write_frame("scenario_level_amended.csv", included + admitted, SCENARIO_KEEP)
+
+    units = read_rows("units.csv")
     keep_ids = {r["session_id"] for r in included}
-    units = [r for r in read_rows("units.csv") if r["session_id"] in keep_ids]
-    write_frame("unit_level.csv", units, UNIT_KEEP)
+    amended_ids = keep_ids | {r["session_id"] for r in admitted}
+    write_frame("unit_level.csv",
+                [u for u in units if u["session_id"] in keep_ids], UNIT_KEEP)
+    write_frame("unit_level_amended.csv",
+                [u for u in units if u["session_id"] in amended_ids], UNIT_KEEP)
 
     by_participant = {}
     for r in included:

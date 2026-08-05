@@ -19,13 +19,16 @@ suppressMessages({
 args <- commandArgs(trailingOnly = TRUE)
 permute <- "--permute" %in% args
 confirmatory <- "--confirmatory" %in% args
+amended <- "--amended" %in% args
 if (!xor(permute, confirmatory)) {
   stop("pass exactly one of --permute or --confirmatory")
 }
 
 here <- dirname(sub("--file=", "", grep("--file=", commandArgs(), value = TRUE)))
 frames <- file.path(here, "output", "frames")
-dat <- read.csv(file.path(frames, "scenario_level.csv"), stringsAsFactors = FALSE)
+frame_file <- if (amended) "scenario_level_amended.csv" else "scenario_level.csv"
+dat <- read.csv(file.path(frames, frame_file), stringsAsFactors = FALSE)
+if (amended) cat("(amended frame: includes sessions admitted per analysis/amendments.json)\n")
 
 dat$grounding <- as.integer(dat$demonstrated_grounding %in% c("1", "true", "True", "TRUE"))
 dat$repairs_post <- suppressWarnings(as.integer(dat$repair_post_boundary))
@@ -99,8 +102,9 @@ for (name in names(contrasts)) {
 }
 
 results$p_holm <- p.adjust(results$p, method = "holm")
-out <- file.path(here, "output",
-                 if (permute) "smoke_results.csv" else "confirmatory_results.csv")
+stem <- if (permute) "smoke_results" else "confirmatory_results"
+if (amended) stem <- paste0(stem, "_amended")
+out <- file.path(here, "output", paste0(stem, ".csv"))
 dir.create(dirname(out), showWarnings = FALSE, recursive = TRUE)
 write.csv(results, out, row.names = FALSE)
 print(results[, c("contrast", "outcome", "model", "estimate", "p", "p_holm", "n_obs")])
