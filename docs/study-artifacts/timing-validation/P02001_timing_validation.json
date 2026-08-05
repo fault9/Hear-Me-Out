@@ -1,7 +1,7 @@
 {
   "schema": "hmo.obs-timing-validation.v1",
   "pilot_id": "P02001",
-  "status": "clock_alignment_passed_boundary_audit_inconclusive",
+  "status": "clock_alignment_passed_boundary_audit_confirmed",
   "scope": {
     "sessions": [
       "P02001_R01_S03_A01",
@@ -121,38 +121,46 @@
     "result": "passed"
   },
   "boundary_validation": {
-    "status": "inconclusive_reference_granularity",
+    "status": "confirmed_for_candidate_nomination",
     "automatic_detector": "20 ms RMS frames with 250 ms hangover",
+    "scoring_script": "docs/study-artifacts/timing-validation/score_reviewed_textgrids.py",
+    "scoring_script_sha256": "cd00064656f7abc58a094b0717067f4933c59d1d9af712fb6c57e31e73a431db",
     "human_reference": {
       "annotator_count": 1,
-      "format": "Praat interval tiers named participant and assistant; non-speech intervals left blank",
-      "activation_textgrid": "docs/study-artifacts/timing-validation/annotations/P02001_vc_activation.TextGrid",
-      "deactivation_textgrid": "docs/study-artifacts/timing-validation/annotations/P02001_vc_deactivation.TextGrid"
-    },
-    "strict_interval_results": {
-      "method": "One-to-one intervals count as matches only when both onset and offset are within the prespecified 100 ms tolerance. Automatic intervals outside the OBS recording and right-censored human intervals are excluded.",
-      "vc_activation": {
-        "participant": {"automatic": 21, "human": 18, "matches": 4, "precision": 0.1904761905, "recall": 0.2222222222, "mean_onset_error_ms": 69.2479, "mean_offset_error_ms": 53.5918},
-        "assistant": {"automatic": 16, "human": 11, "matches": 6, "precision": 0.375, "recall": 0.5454545455, "mean_onset_error_ms": 48.8539, "mean_offset_error_ms": 54.0078}
-      },
-      "vc_deactivation": {
-        "participant": {"automatic": 23, "human": 12, "matches": 1, "precision": 0.0434782609, "recall": 0.0833333333, "mean_onset_error_ms": 79.83, "mean_offset_error_ms": 55.8201},
-        "assistant": {"automatic": 14, "human": 11, "matches": 6, "precision": 0.4285714286, "recall": 0.5454545455, "mean_onset_error_ms": 43.6536, "mean_offset_error_ms": 37.3815}
-      }
+      "adjudication": "The annotator revised participant and assistant speech intervals in Praat while consulting the OBS audio and the automatic HMO tiers.",
+      "format": "Praat interval tiers named participant_MANUAL_EDIT and assistant_MANUAL_EDIT; non-speech intervals left blank; automatic tiers retained read-only in the same TextGrid.",
+      "activation_textgrid": "docs/study-artifacts/timing-validation/annotations/P02001_vc_activation_review.TextGrid",
+      "deactivation_textgrid": "docs/study-artifacts/timing-validation/annotations/P02001_vc_deactivation_review.TextGrid"
     },
     "speech_activity_frame_audit": {
       "frame_ms": 20,
-      "note": "Frame agreement is substantially stronger than exact interval agreement. The human reference grouped some conversational turns more coarsely than the detector's acoustic speech runs, and the annotator subsequently reported that the manual boundaries were not careful enough to serve as ground truth. This secondary audit therefore cannot establish whether individual disagreements came from the detector or the reference annotation.",
+      "sampling": "Speech activity is evaluated at each 20 ms frame midpoint. Overlap is the intersection of the participant and assistant activity tiers; overlap runs shorter than 200 ms are removed before scoring.",
       "vc_activation": {
-        "participant": {"precision": 0.98, "recall": 0.836, "f1": 0.902, "intersection_over_union": 0.822},
-        "assistant": {"precision": 0.994, "recall": 0.889, "f1": 0.938, "intersection_over_union": 0.884}
+        "participant": {"precision": 0.980, "recall": 0.892, "f1": 0.934},
+        "assistant": {"precision": 0.993, "recall": 0.962, "f1": 0.977},
+        "overlap_200ms": {"precision": 1.000, "recall": 0.769, "f1": 0.870}
       },
       "vc_deactivation": {
-        "participant": {"precision": 0.985, "recall": 0.839, "f1": 0.906, "intersection_over_union": 0.829},
-        "assistant": {"precision": 0.994, "recall": 0.931, "f1": 0.962, "intersection_over_union": 0.926}
+        "participant": {"precision": 0.996, "recall": 0.923, "f1": 0.958},
+        "assistant": {"precision": 0.994, "recall": 0.963, "f1": 0.978},
+        "overlap_200ms": {"precision": 0.989, "recall": 0.871, "f1": 0.926}
       }
     },
-    "conclusion": "Clock alignment is validated. The available manual labels are not sufficiently reliable to validate or reject the automatic speech boundaries, so exact onsets and offsets remain estimated. Do not use automatic overlap, barge-in, or stop-latency measures as confirmatory outcomes until a carefully annotated reference meets frozen acceptance criteria. The persisted raw audio and timelines permit this post-hoc validation without recollecting participant data."
+    "matched_boundary_audit": {
+      "method": "Each manual onset and offset is matched to the nearest automatic boundary of the same speaker and boundary type within 250 ms. Errors are absolute differences on the aligned OBS clock.",
+      "maximum_match_distance_ms": 250,
+      "vc_activation": {
+        "participant": {"matched_boundaries": 37, "manual_boundaries": 44, "median_absolute_error_ms": 59.6, "p95_absolute_error_ms": 143.4},
+        "assistant": {"matched_boundaries": 31, "manual_boundaries": 32, "median_absolute_error_ms": 29.1, "p95_absolute_error_ms": 89.4}
+      },
+      "vc_deactivation": {
+        "participant": {"matched_boundaries": 39, "manual_boundaries": 40, "median_absolute_error_ms": 21.4, "p95_absolute_error_ms": 129.1},
+        "assistant": {"matched_boundaries": 27, "manual_boundaries": 28, "median_absolute_error_ms": 28.3, "p95_absolute_error_ms": 119.3}
+      }
+    },
+    "allowed_use": "Automatic speech intervals nominate candidate overlap, directional onset, response-gap, and stop-latency events. Participant-study events enter confirmatory analysis only after verification against the raw-participant and assistant tracks.",
+    "limitations": "This single adjudicated pilot confirms the browser-clock alignment and candidate-nomination workflow but is not an independent sample-accurate boundary validation and does not establish generalization across speakers.",
+    "conclusion": "Clock alignment and the use of automatic intervals for candidate nomination are confirmed. Route-switch events remain sample-referenced; speech boundaries remain acoustic estimates and participant-study events require manual verification."
   },
   "source_hashes_sha256": {
     "vc_activation.mov": "81482635780ecea46bf939f956fae7cd24ffa9ef01e892fd5032b1776a134e41",
@@ -161,6 +169,8 @@
     "vc_deactivation.wav": "2a61b7015034b1b63082635c80f92086e2029a7998b9bb2052c2751bc5e6ddec",
     "P02001_vc_activation.TextGrid": "209bdeb0f0069fd21ceac32d1f211e88d46c2bd73ae0285ae939aa6d6da212d9",
     "P02001_vc_deactivation.TextGrid": "5e07734755d7bdd47c6b1eb5b2e768fee2ddea125a773124699b5149438bc54d",
+    "P02001_vc_activation_review.TextGrid": "34859f89685be5cedf5888e132e3518c05715ad137e9643f6c05cb83f7e07bcb",
+    "P02001_vc_deactivation_review.TextGrid": "f5ee44d4cdb3e58119a608f3305fd5ea7b2a94a9dc7a4e5377ab813d79b09128",
     "P02001_R01_S03_A01/client_timeline.json": "7fb9635d065cbb344f76e042202c54186e55da2a41e48f36fc1a45120058c32a",
     "P02001_R01_S03_A01/manifest.final.json": "10c65e7b7bbf2f9ef93cb925c3afec51bb79da7a5d4f67663acca19e2d2a52c4",
     "P02001_R01_S04_A01/client_timeline.json": "56a4c18c02026d6878530e029b23684aba8b78ee5940eb9e4d325ed27d2f861c",

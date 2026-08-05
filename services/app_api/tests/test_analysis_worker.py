@@ -59,7 +59,7 @@ class AnalysisWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifacts = {
-                "timing_latest": ("timing.json", "hmo.timing-analysis.v4", {}),
+                "timing_latest": ("timing.json", "hmo.timing-analysis.v5", {}),
                 "dialogue_transcript_latest": (
                     "dialogue.json", "hmo.dialogue-transcript.v1", {}),
                 "technical_validity_latest": (

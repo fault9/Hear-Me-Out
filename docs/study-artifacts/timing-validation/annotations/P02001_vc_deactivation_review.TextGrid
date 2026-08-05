@@ -1,0 +1,770 @@
+File type = "ooTextFile"
+Object class = "TextGrid"
+
+xmin = 0
+xmax = 102.846666666667
+tiers? <exists>
+size = 8
+item []:
+    item [1]:
+        class = "IntervalTier"
+        name = "participant_MANUAL_EDIT"
+        xmin = 0
+        xmax = 102.846666666667
+        intervals: size = 41
+        intervals [1]:
+            xmin = 0
+            xmax = 16.157688769160316
+            text = ""
+        intervals [2]:
+            xmin = 16.157688769160316
+            xmax = 21.626822225549915
+            text = "speech"
+        intervals [3]:
+            xmin = 21.626822225549915
+            xmax = 28.56053484127364
+            text = ""
+        intervals [4]:
+            xmin = 28.56053484127364
+            xmax = 34.26445663598528
+            text = "speech"
+        intervals [5]:
+            xmin = 34.26445663598528
+            xmax = 34.520904277024414
+            text = ""
+        intervals [6]:
+            xmin = 34.520904277024414
+            xmax = 36.14905015135806
+            text = "speech"
+        intervals [7]:
+            xmin = 36.14905015135806
+            xmax = 38.1809500260755
+            text = ""
+        intervals [8]:
+            xmin = 38.1809500260755
+            xmax = 40.9652998544372
+            text = "speech"
+        intervals [9]:
+            xmin = 40.9652998544372
+            xmax = 42.11909377658197
+            text = ""
+        intervals [10]:
+            xmin = 42.11909377658197
+            xmax = 42.79098659610449
+            text = "speech"
+        intervals [11]:
+            xmin = 42.79098659610449
+            xmax = 43.596232188967356
+            text = ""
+        intervals [12]:
+            xmin = 43.596232188967356
+            xmax = 44.0532783416437
+            text = "speech"
+        intervals [13]:
+            xmin = 44.0532783416437
+            xmax = 44.31998388832439
+            text = ""
+        intervals [14]:
+            xmin = 44.31998388832439
+            xmax = 44.48923933141021
+            text = "speech"
+        intervals [15]:
+            xmin = 44.48923933141021
+            xmax = 45.11781354549854
+            text = ""
+        intervals [16]:
+            xmin = 45.11781354549854
+            xmax = 45.39990595064158
+            text = "speech"
+        intervals [17]:
+            xmin = 45.39990595064158
+            xmax = 46.16067508209454
+            text = ""
+        intervals [18]:
+            xmin = 46.16067508209454
+            xmax = 47.16594983496793
+            text = "speech"
+        intervals [19]:
+            xmin = 47.16594983496793
+            xmax = 47.709618833970886
+            text = ""
+        intervals [20]:
+            xmin = 47.709618833970886
+            xmax = 48.336475416817976
+            text = "speech"
+        intervals [21]:
+            xmin = 48.336475416817976
+            xmax = 48.618567821961015
+            text = ""
+        intervals [22]:
+            xmin = 48.618567821961015
+            xmax = 49.664874197400664
+            text = "speech"
+        intervals [23]:
+            xmin = 49.664874197400664
+            xmax = 53.76685465714799
+            text = ""
+        intervals [24]:
+            xmin = 53.76685465714799
+            xmax = 53.93611010023381
+            text = "speech"
+        intervals [25]:
+            xmin = 53.93611010023381
+            xmax = 54.223331458197634
+            text = ""
+        intervals [26]:
+            xmin = 54.223331458197634
+            xmax = 54.41310271256659
+            text = "speech"
+        intervals [27]:
+            xmin = 54.41310271256659
+            xmax = 54.73109778745511
+            text = ""
+        intervals [28]:
+            xmin = 54.73109778745511
+            xmax = 56.3098636911802
+            text = "speech"
+        intervals [29]:
+            xmin = 56.3098636911802
+            xmax = 62.838776035691936
+            text = ""
+        intervals [30]:
+            xmin = 62.838776035691936
+            xmax = 63.6689128428266
+            text = "speech"
+        intervals [31]:
+            xmin = 63.6689128428266
+            xmax = 71.2138915866245
+            text = ""
+        intervals [32]:
+            xmin = 71.2138915866245
+            xmax = 73.7974551179636
+            text = "speech"
+        intervals [33]:
+            xmin = 73.7974551179636
+            xmax = 74.4766918281208
+            text = ""
+        intervals [34]:
+            xmin = 74.4766918281208
+            xmax = 75.2498873684687
+            text = "speech"
+        intervals [35]:
+            xmin = 75.2498873684687
+            xmax = 81.5035314577905
+            text = ""
+        intervals [36]:
+            xmin = 81.5035314577905
+            xmax = 86.2258618783166
+            text = "speech"
+        intervals [37]:
+            xmin = 86.2258618783166
+            xmax = 91.2820757702252
+            text = ""
+        intervals [38]:
+            xmin = 91.2820757702252
+            xmax = 93.3932120253437
+            text = "speech"
+        intervals [39]:
+            xmin = 93.3932120253437
+            xmax = 94.9426448581626
+            text = ""
+        intervals [40]:
+            xmin = 94.9426448581626
+            xmax = 100.15635917347481
+            text = "speech"
+        intervals [41]:
+            xmin = 100.15635917347481
+            xmax = 102.846666666667
+            text = ""
+    item [2]:
+        class = "IntervalTier"
+        name = "assistant_MANUAL_EDIT"
+        xmin = 0
+        xmax = 102.846666666667
+        intervals: size = 29
+        intervals [1]:
+            xmin = 0
+            xmax = 10.609908177398344
+            text = ""
+        intervals [2]:
+            xmin = 10.609908177398344
+            xmax = 15.81586875
+            text = "speech"
+        intervals [3]:
+            xmin = 15.81586875
+            xmax = 22.8604368832172
+            text = ""
+        intervals [4]:
+            xmin = 22.8604368832172
+            xmax = 27.772403314475532
+            text = "speech"
+        intervals [5]:
+            xmin = 27.772403314475532
+            xmax = 37.75382387991397
+            text = ""
+        intervals [6]:
+            xmin = 37.75382387991397
+            xmax = 40.1888946138363
+            text = "speech"
+        intervals [7]:
+            xmin = 40.1888946138363
+            xmax = 42.5361765112716
+            text = ""
+        intervals [8]:
+            xmin = 42.5361765112716
+            xmax = 44.0240411081904
+            text = "speech"
+        intervals [9]:
+            xmin = 44.0240411081904
+            xmax = 47.2204579412783
+            text = ""
+        intervals [10]:
+            xmin = 47.2204579412783
+            xmax = 47.4822419109053
+            text = "speech"
+        intervals [11]:
+            xmin = 47.4822419109053
+            xmax = 51.6360942310073
+            text = ""
+        intervals [12]:
+            xmin = 51.6360942310073
+            xmax = 51.639492304318345
+            text = "speech"
+        intervals [13]:
+            xmin = 51.639492304318345
+            xmax = 51.9164557566406
+            text = "speech"
+        intervals [14]:
+            xmin = 51.9164557566406
+            xmax = 51.94324401217846
+            text = ""
+        intervals [15]:
+            xmin = 51.94324401217846
+            xmax = 52.3740760491242
+            text = ""
+        intervals [16]:
+            xmin = 52.3740760491242
+            xmax = 54.375850313958
+            text = "speech"
+        intervals [17]:
+            xmin = 54.375850313958
+            xmax = 57.87567691277679
+            text = ""
+        intervals [18]:
+            xmin = 57.87567691277679
+            xmax = 61.27617263295564
+            text = "speech"
+        intervals [19]:
+            xmin = 61.27617263295564
+            xmax = 75.3740718540639
+            text = ""
+        intervals [20]:
+            xmin = 75.3740718540639
+            xmax = 75.99499428204
+            text = "speech"
+        intervals [21]:
+            xmin = 75.99499428204
+            xmax = 76.8375891210759
+            text = ""
+        intervals [22]:
+            xmin = 76.8375891210759
+            xmax = 84.6429351339668
+            text = "speech"
+        intervals [23]:
+            xmin = 84.6429351339668
+            xmax = 87.7338926069939
+            text = ""
+        intervals [24]:
+            xmin = 87.7338926069939
+            xmax = 90.6842451207826
+            text = "speech"
+        intervals [25]:
+            xmin = 90.6842451207826
+            xmax = 94.4930746889469
+            text = ""
+        intervals [26]:
+            xmin = 94.4930746889469
+            xmax = 97.4884268128643
+            text = "speech"
+        intervals [27]:
+            xmin = 97.4884268128643
+            xmax = 101.59246596329393
+            text = ""
+        intervals [28]:
+            xmin = 101.59246596329393
+            xmax = 102.814166768302
+            text = "speech"
+        intervals [29]:
+            xmin = 102.814166768302
+            xmax = 102.846666666667
+            text = ""
+    item [3]:
+        class = "IntervalTier"
+        name = "participant_HMO_AUTO_do_not_edit"
+        xmin = 0
+        xmax = 102.846666666667
+        intervals: size = 47
+        intervals [1]:
+            xmin = 0
+            xmax = 16.20768
+            text = ""
+        intervals [2]:
+            xmin = 16.20768
+            xmax = 21.60768
+            text = "speech"
+        intervals [3]:
+            xmin = 21.60768
+            xmax = 28.60768
+            text = ""
+        intervals [4]:
+            xmin = 28.60768
+            xmax = 34.24768
+            text = "speech"
+        intervals [5]:
+            xmin = 34.24768
+            xmax = 34.54768
+            text = ""
+        intervals [6]:
+            xmin = 34.54768
+            xmax = 36.12768
+            text = "speech"
+        intervals [7]:
+            xmin = 36.12768
+            xmax = 38.10768
+            text = ""
+        intervals [8]:
+            xmin = 38.10768
+            xmax = 41.02768
+            text = "speech"
+        intervals [9]:
+            xmin = 41.02768
+            xmax = 42.14768
+            text = ""
+        intervals [10]:
+            xmin = 42.14768
+            xmax = 42.76768
+            text = "speech"
+        intervals [11]:
+            xmin = 42.76768
+            xmax = 43.60768
+            text = ""
+        intervals [12]:
+            xmin = 43.60768
+            xmax = 44.04768
+            text = "speech"
+        intervals [13]:
+            xmin = 44.04768
+            xmax = 44.32768
+            text = ""
+        intervals [14]:
+            xmin = 44.32768
+            xmax = 44.48768
+            text = "speech"
+        intervals [15]:
+            xmin = 44.48768
+            xmax = 45.12768
+            text = ""
+        intervals [16]:
+            xmin = 45.12768
+            xmax = 45.40768
+            text = "speech"
+        intervals [17]:
+            xmin = 45.40768
+            xmax = 46.22768
+            text = ""
+        intervals [18]:
+            xmin = 46.22768
+            xmax = 47.16768
+            text = "speech"
+        intervals [19]:
+            xmin = 47.16768
+            xmax = 47.72768
+            text = ""
+        intervals [20]:
+            xmin = 47.72768
+            xmax = 48.32768
+            text = "speech"
+        intervals [21]:
+            xmin = 48.32768
+            xmax = 48.62768
+            text = ""
+        intervals [22]:
+            xmin = 48.62768
+            xmax = 49.58768
+            text = "speech"
+        intervals [23]:
+            xmin = 49.58768
+            xmax = 53.76856750020862
+            text = ""
+        intervals [24]:
+            xmin = 53.76856750020862
+            xmax = 53.92768
+            text = "speech"
+        intervals [25]:
+            xmin = 53.92768
+            xmax = 54.24768
+            text = ""
+        intervals [26]:
+            xmin = 54.24768
+            xmax = 54.40768
+            text = "speech"
+        intervals [27]:
+            xmin = 54.40768
+            xmax = 54.76768
+            text = ""
+        intervals [28]:
+            xmin = 54.76768
+            xmax = 56.28768
+            text = "speech"
+        intervals [29]:
+            xmin = 56.28768
+            xmax = 62.96768
+            text = ""
+        intervals [30]:
+            xmin = 62.96768
+            xmax = 63.66768
+            text = "speech"
+        intervals [31]:
+            xmin = 63.66768
+            xmax = 71.38768
+            text = ""
+        intervals [32]:
+            xmin = 71.38768
+            xmax = 71.72768
+            text = "speech"
+        intervals [33]:
+            xmin = 71.72768
+            xmax = 71.98768
+            text = ""
+        intervals [34]:
+            xmin = 71.98768
+            xmax = 72.68768
+            text = "speech"
+        intervals [35]:
+            xmin = 72.68768
+            xmax = 73.10768
+            text = ""
+        intervals [36]:
+            xmin = 73.10768
+            xmax = 73.80768
+            text = "speech"
+        intervals [37]:
+            xmin = 73.80768
+            xmax = 74.60768
+            text = ""
+        intervals [38]:
+            xmin = 74.60768
+            xmax = 75.22768
+            text = "speech"
+        intervals [39]:
+            xmin = 75.22768
+            xmax = 81.60768
+            text = ""
+        intervals [40]:
+            xmin = 81.60768
+            xmax = 83.04768
+            text = "speech"
+        intervals [41]:
+            xmin = 83.04768
+            xmax = 83.66768
+            text = ""
+        intervals [42]:
+            xmin = 83.66768
+            xmax = 86.22768
+            text = "speech"
+        intervals [43]:
+            xmin = 86.22768
+            xmax = 91.40768
+            text = ""
+        intervals [44]:
+            xmin = 91.40768
+            xmax = 93.00768
+            text = "speech"
+        intervals [45]:
+            xmin = 93.00768
+            xmax = 95.00768
+            text = ""
+        intervals [46]:
+            xmin = 95.00768
+            xmax = 100.14768
+            text = "speech"
+        intervals [47]:
+            xmin = 100.14768
+            xmax = 102.846666666667
+            text = ""
+    item [4]:
+        class = "IntervalTier"
+        name = "assistant_HMO_AUTO_do_not_edit"
+        xmin = 0
+        xmax = 102.846666666667
+        intervals: size = 30
+        intervals [1]:
+            xmin = 0
+            xmax = 10.6678466666608
+            text = ""
+        intervals [2]:
+            xmin = 10.6678466666608
+            xmax = 15.8138800000119
+            text = "speech"
+        intervals [3]:
+            xmin = 15.8138800000119
+            xmax = 22.8757466666667
+            text = ""
+        intervals [4]:
+            xmin = 22.8757466666667
+            xmax = 27.7621133333213
+            text = "speech"
+        intervals [5]:
+            xmin = 27.7621133333213
+            xmax = 37.8089133333333
+            text = ""
+        intervals [6]:
+            xmin = 37.8089133333333
+            xmax = 40.1313800000119
+            text = "speech"
+        intervals [7]:
+            xmin = 40.1313800000119
+            xmax = 42.5303133333392
+            text = ""
+        intervals [8]:
+            xmin = 42.5303133333392
+            xmax = 43.9643466666605
+            text = "speech"
+        intervals [9]:
+            xmin = 43.9643466666605
+            xmax = 44.6861133333213
+            text = ""
+        intervals [10]:
+            xmin = 44.6861133333213
+            xmax = 44.8502466666665
+            text = "speech"
+        intervals [11]:
+            xmin = 44.8502466666665
+            xmax = 47.2487799999878
+            text = ""
+        intervals [12]:
+            xmin = 47.2487799999878
+            xmax = 47.4827133333449
+            text = "speech"
+        intervals [13]:
+            xmin = 47.4827133333449
+            xmax = 51.661679999994
+            text = ""
+        intervals [14]:
+            xmin = 51.661679999994
+            xmax = 51.8985466666787
+            text = "speech"
+        intervals [15]:
+            xmin = 51.8985466666787
+            xmax = 52.3863800000119
+            text = ""
+        intervals [16]:
+            xmin = 52.3863800000119
+            xmax = 54.2997466666665
+            text = "speech"
+        intervals [17]:
+            xmin = 54.2997466666665
+            xmax = 57.9049133333333
+            text = ""
+        intervals [18]:
+            xmin = 57.9049133333333
+            xmax = 61.2621133333211
+            text = "speech"
+        intervals [19]:
+            xmin = 61.2621133333211
+            xmax = 75.4137799999876
+            text = ""
+        intervals [20]:
+            xmin = 75.4137799999876
+            xmax = 75.978646666672
+            text = "speech"
+        intervals [21]:
+            xmin = 75.978646666672
+            xmax = 76.9419133333328
+            text = ""
+        intervals [22]:
+            xmin = 76.9419133333328
+            xmax = 77.3433133333387
+            text = "speech"
+        intervals [23]:
+            xmin = 77.3433133333387
+            xmax = 77.6632799999876
+            text = ""
+        intervals [24]:
+            xmin = 77.6632799999876
+            xmax = 84.6225799999993
+            text = "speech"
+        intervals [25]:
+            xmin = 84.6225799999993
+            xmax = 87.8235133333266
+            text = ""
+        intervals [26]:
+            xmin = 87.8235133333266
+            xmax = 90.696480000005
+            text = "speech"
+        intervals [27]:
+            xmin = 90.696480000005
+            xmax = 94.6187799999871
+            text = ""
+        intervals [28]:
+            xmin = 94.6187799999871
+            xmax = 97.3412133333442
+            text = "speech"
+        intervals [29]:
+            xmin = 97.3412133333442
+            xmax = 101.669313333338
+            text = ""
+        intervals [30]:
+            xmin = 101.669313333338
+            xmax = 102.846666666667
+            text = "speech"
+    item [5]:
+        class = "IntervalTier"
+        name = "overlap_MANUAL_200ms"
+        xmin = 0
+        xmax = 102.846666666667
+        intervals: size = 11
+        intervals [1]:
+            xmin = 0
+            xmax = 38.15559025481509
+            text = ""
+        intervals [2]:
+            xmin = 38.15559025481509
+            xmax = 40.1888946138363
+            text = "overlap"
+        intervals [3]:
+            xmin = 40.1888946138363
+            xmax = 42.5361765112716
+            text = ""
+        intervals [4]:
+            xmin = 42.5361765112716
+            xmax = 44.0240411081904
+            text = "overlap"
+        intervals [5]:
+            xmin = 44.0240411081904
+            xmax = 47.2204579412783
+            text = ""
+        intervals [6]:
+            xmin = 47.2204579412783
+            xmax = 47.4822419109053
+            text = "overlap"
+        intervals [7]:
+            xmin = 47.4822419109053
+            xmax = 81.5035314577905
+            text = ""
+        intervals [8]:
+            xmin = 81.5035314577905
+            xmax = 84.6429351339668
+            text = "overlap"
+        intervals [9]:
+            xmin = 84.6429351339668
+            xmax = 94.9426448581626
+            text = ""
+        intervals [10]:
+            xmin = 94.9426448581626
+            xmax = 97.4884268128643
+            text = "overlap"
+        intervals [11]:
+            xmin = 97.4884268128643
+            xmax = 102.846666666667
+            text = ""
+    item [6]:
+        class = "IntervalTier"
+        name = "overlap_HMO_AUTO_200ms"
+        xmin = 0
+        xmax = 102.846666666667
+        intervals: size = 13
+        intervals [1]:
+            xmin = 0
+            xmax = 38.10768
+            text = ""
+        intervals [2]:
+            xmin = 38.10768
+            xmax = 40.1313800000119
+            text = "overlap"
+        intervals [3]:
+            xmin = 40.1313800000119
+            xmax = 42.5303133333392
+            text = ""
+        intervals [4]:
+            xmin = 42.5303133333392
+            xmax = 42.76768
+            text = "overlap"
+        intervals [5]:
+            xmin = 42.76768
+            xmax = 43.60768
+            text = ""
+        intervals [6]:
+            xmin = 43.60768
+            xmax = 43.9643466666605
+            text = "overlap"
+        intervals [7]:
+            xmin = 43.9643466666605
+            xmax = 81.60768
+            text = ""
+        intervals [8]:
+            xmin = 81.60768
+            xmax = 83.04768
+            text = "overlap"
+        intervals [9]:
+            xmin = 83.04768
+            xmax = 83.66768
+            text = ""
+        intervals [10]:
+            xmin = 83.66768
+            xmax = 84.6225799999993
+            text = "overlap"
+        intervals [11]:
+            xmin = 84.6225799999993
+            xmax = 95.00768
+            text = ""
+        intervals [12]:
+            xmin = 95.00768
+            xmax = 97.3412133333442
+            text = "overlap"
+        intervals [13]:
+            xmin = 97.3412133333442
+            xmax = 102.846666666667
+            text = ""
+    item [7]:
+        class = "TextTier"
+        name = "barge_in_MANUAL"
+        xmin = 0
+        xmax = 102.846666666667
+        points: size = 3
+        points [1]:
+            number = 38.1809500260755
+            mark = "barge-in; stop latency=2008 ms"
+        points [2]:
+            number = 81.5035314577905
+            mark = "barge-in; stop latency=3139 ms"
+        points [3]:
+            number = 94.9426448581626
+            mark = "barge-in; stop latency=2546 ms"
+    item [8]:
+        class = "TextTier"
+        name = "barge_in_HMO_AUTO"
+        xmin = 0
+        xmax = 102.846666666667
+        points: size = 7
+        points [1]:
+            number = 38.10768
+            mark = "barge-in; stop latency=2024 ms"
+        points [2]:
+            number = 43.60768
+            mark = "barge-in; stop latency=357 ms"
+        points [3]:
+            number = 53.78768
+            mark = "barge-in; stop latency=512 ms"
+        points [4]:
+            number = 54.24768
+            mark = "barge-in; stop latency=52 ms"
+        points [5]:
+            number = 81.60768
+            mark = "barge-in; stop latency=3015 ms"
+        points [6]:
+            number = 83.66768
+            mark = "barge-in; stop latency=955 ms"
+        points [7]:
+            number = 95.00768
+            mark = "barge-in; stop latency=2334 ms"

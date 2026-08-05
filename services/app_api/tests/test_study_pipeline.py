@@ -24,8 +24,10 @@ from study.router import (_load_session_json_artifact,
                           _playback_sessions_for_condition)
 from study.storage import SqliteBackend
 from study.timing_analysis import (assistant_intervals, capture_gap_diagnostics,
+                                   BOUNDARY_CONFIRMATION_STATUS,
                                    playback_underrun_diagnostics,
                                    prepare_timing_analysis, speech_intervals,
+                                   resolve_boundary_validation,
                                    validate_intervals)
 from study.transcript_timing import (whisper_longform_segments,
                                      whisper_timestamp_segments)
@@ -841,11 +843,16 @@ class TimingAnalysisTests(unittest.TestCase):
             self.assertEqual(
                 result["route_switches"][0]["participant_timeline_ms"], 128)
             self.assertEqual(result["summary"]["barge_in_attempts"], 1)
+            self.assertEqual(result["summary"]["participant_barge_in_attempts"], 1)
+            self.assertEqual(result["summary"]["assistant_premature_onsets"], 0)
+            self.assertEqual(len(result["turn_episodes"]), 1)
+            self.assertTrue(
+                result["turn_episodes"][0]["participant_barge_in_candidate"])
             self.assertEqual(
                 result["integrity"]["playback"]["decode_strategy"], "serialized")
             self.assertEqual(
                 result["integrity"]["playback"]["initial_jitter_buffer_ms"], 120)
-            self.assertEqual(result["schema"], "hmo.timing-analysis.v4")
+            self.assertEqual(result["schema"], "hmo.timing-analysis.v5")
             self.assertEqual(result["status"], "estimated_pending_validation")
             self.assertTrue((session_dir / "analysis" / "timing" / "analysis-1"
                              / "timing.json").exists())
@@ -889,6 +896,14 @@ class TimingAnalysisTests(unittest.TestCase):
     def test_validated_boundary_configuration_unlocks_confirmatory_status(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            boundary_artifact = root / "boundary-audit.json"
+            boundary_artifact.write_text(json.dumps({
+                "pilot_id": "pilot-test",
+                "boundary_validation": {
+                    "status": BOUNDARY_CONFIRMATION_STATUS,
+                    "allowed_use": "candidate nomination",
+                },
+            }))
             session_dir = root / "sessions" / "attempt"
             session_dir.mkdir(parents=True)
             write_wav(session_dir / "participant_raw.wav", seconds=1)
@@ -908,20 +923,41 @@ class TimingAnalysisTests(unittest.TestCase):
                 "files": {"participant_raw": "sessions/attempt/participant_raw.wav"},
                 "config_snapshot": {"study": {"settings": {"timing": {
                     "speech_boundary_validation": {
-                        "status": "validated", "tolerance_ms": 100,
-                        "artifact": "boundary-audit.json",
-                        "artifact_sha256": "abc123",
+                        "status": BOUNDARY_CONFIRMATION_STATUS,
+                        "artifact": str(boundary_artifact),
+                        "artifact_sha256": sha256_file(boundary_artifact),
                     },
                 }}}},
             }
 
             result = prepare_timing_analysis(session, root, "analysis-1")
 
-        self.assertEqual(result["status"], "validated")
+        self.assertEqual(result["status"], BOUNDARY_CONFIRMATION_STATUS)
         self.assertEqual(
-            result["integrity"]["speech_boundary_validation"]["tolerance_ms"],
-            100,
+            result["integrity"]["speech_boundary_validation"]["pilot_id"],
+            "pilot-test",
         )
+
+    def test_frozen_posthoc_audit_resolves_for_legacy_pending_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / "combined-audit.json"
+            artifact.write_text(json.dumps({
+                "pilot_id": "P02001",
+                "boundary_validation": {
+                    "status": BOUNDARY_CONFIRMATION_STATUS,
+                    "allowed_use": "candidate nomination",
+                },
+            }))
+            expected_sha = sha256_file(artifact)
+
+            resolved = resolve_boundary_validation({
+                "clock_alignment_validation": {"artifact": str(artifact)},
+                "speech_boundary_validation": {"status": "pending_manual_audit"},
+            })
+
+        self.assertEqual(resolved["status"], BOUNDARY_CONFIRMATION_STATUS)
+        self.assertEqual(resolved["pilot_id"], "P02001")
+        self.assertEqual(resolved["artifact_sha256"], expected_sha)
 
     def test_capture_gaps_use_sample_boundaries_not_legacy_callback_sum(self):
         diagnostics = capture_gap_diagnostics({

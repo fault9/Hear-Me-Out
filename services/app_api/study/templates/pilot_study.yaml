@@ -138,12 +138,15 @@ settings:
       between_session_relative_offset_range_ms: 13.12
       artifact: docs/study-artifacts/timing-validation/P02001_timing_validation.json
     speech_boundary_validation:
-      status: pending_manual_audit
-      tolerance_ms: 100
-      minimum_precision: 0.90
-      minimum_recall: 0.90
-      maximum_mean_onset_error_ms: 100
-      maximum_mean_offset_error_ms: 100
+      status: confirmed_for_candidate_nomination
+      pilot_id: P02001
+      conditions: [vc_activation, vc_deactivation]
+      frame_ms: 20
+      minimum_overlap_ms: 200
+      maximum_boundary_match_distance_ms: 250
+      require_manual_event_verification: true
+      artifact: docs/study-artifacts/timing-validation/P02001_timing_validation.json
+      artifact_sha256: 600ec7bce4a9bfd84c8bcd4bd1ed79de7fc43f1f1179d4841d097de5acaa5805
   estimated_duration: 20-30 minutes
   welcome_text: |
     Welcome

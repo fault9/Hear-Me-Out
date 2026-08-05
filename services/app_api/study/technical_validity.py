@@ -10,7 +10,8 @@ from typing import Any
 from .artifacts import atomic_write_json, file_record, sha256_file
 from .transition_analysis import read_events
 
-TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v3"
+TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v4"
+BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
 
 DEFAULT_THRESHOLDS = {
     "max_route_activation_lag_ms": 250.0,
@@ -378,8 +379,12 @@ def evaluate_technical_validity(session: dict, data_root: Path,
         condition_valid and capture.get("valid_for_timing") is True
         and capture_gap_valid)
     timing_status = (timing or {}).get("status")
-    confirmatory_timing_valid = bool(
-        timing_reconstruction_valid and timing_status == "validated")
+    manual_turn_verification_valid = bool(
+        timing_reconstruction_valid
+        and timing_status == BOUNDARY_CONFIRMATION_STATUS)
+    # This is session-level eligibility only. Individual automatic candidates
+    # still require the event-level verification recorded by dataset_export.
+    confirmatory_timing_valid = manual_turn_verification_valid
     post_checkpoint_valid = bool(condition_valid and checkpoint_reached_valid)
     if not ended or (not evaluation_complete and not failures):
         status = "incomplete"
@@ -393,6 +398,7 @@ def evaluate_technical_validity(session: dict, data_root: Path,
         "valid_for_condition_analysis": condition_valid,
         "valid_for_post_checkpoint_analysis": post_checkpoint_valid,
         "valid_for_timing_reconstruction": timing_reconstruction_valid,
+        "valid_for_manual_turn_verification": manual_turn_verification_valid,
         "valid_for_confirmatory_timing_analysis": confirmatory_timing_valid,
         "speech_boundary_validation_status": timing_status or "unavailable",
         "analysis_checkpoint_s": checkpoint_s,

@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 from study.artifacts import file_record
-from study.technical_validity import evaluate_technical_validity
+from study.technical_validity import (BOUNDARY_CONFIRMATION_STATUS,
+                                      evaluate_technical_validity)
 
 
 class TechnicalValidityTests(unittest.TestCase):
@@ -95,7 +96,22 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertTrue(result["valid_for_condition_analysis"])
         self.assertTrue(result["valid_for_timing_reconstruction"])
         self.assertFalse(result["valid_for_confirmatory_timing_analysis"])
+        self.assertFalse(result["valid_for_manual_turn_verification"])
         self.assertEqual(result["failures"], [])
+
+    def test_confirmed_boundary_audit_unlocks_manual_turn_verification(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._fixture(Path(temp))
+            timing["status"] = BOUNDARY_CONFIRMATION_STATUS
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertTrue(result["valid_for_manual_turn_verification"])
+        self.assertTrue(result["valid_for_confirmatory_timing_analysis"])
+        self.assertEqual(
+            result["speech_boundary_validation_status"],
+            BOUNDARY_CONFIRMATION_STATUS,
+        )
 
     def test_matched_analysis_checkpoint_is_a_separate_post_checkpoint_gate(self):
         with tempfile.TemporaryDirectory() as temp:

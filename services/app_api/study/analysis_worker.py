@@ -323,6 +323,7 @@ def main() -> None:
                         "valid_for_condition_analysis",
                         "valid_for_post_checkpoint_analysis",
                         "valid_for_timing_reconstruction",
+                        "valid_for_manual_turn_verification",
                         "valid_for_confirmatory_timing_analysis",
                         "speech_boundary_validation_status", "analysis_checkpoint_s",
                         "failures", "warnings",

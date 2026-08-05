@@ -11,10 +11,57 @@ from typing import Any
 
 import numpy as np
 
-from .artifacts import atomic_write_json, file_record
+from .artifacts import atomic_write_json, file_record, sha256_file
 from .transition_analysis import read_events
+from .turn_taking import (OVERLAP_MINIMUM_MS, build_positive_response_gaps,
+                          build_turn_episodes)
 
-TIMING_SCHEMA = "hmo.timing-analysis.v4"
+TIMING_SCHEMA = "hmo.timing-analysis.v5"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
+
+
+def resolve_boundary_validation(timing_settings: dict) -> dict:
+    """Resolve the frozen post-hoc boundary audit for old and new sessions.
+
+    Early session snapshots recorded the pilot artifact under the clock audit
+    while the Praat boundary review was still pending. Reanalysis may use the
+    subsequently frozen audit without rewriting those immutable snapshots.
+    """
+    configured = dict(timing_settings.get("speech_boundary_validation") or {})
+    clock = timing_settings.get("clock_alignment_validation") or {}
+    candidates = [configured.get("artifact"), clock.get("artifact")]
+    for artifact in dict.fromkeys(value for value in candidates if value):
+        path = Path(str(artifact)).expanduser()
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        try:
+            payload = json.loads(path.read_text())
+            actual_sha = sha256_file(path)
+        except (OSError, ValueError):
+            continue
+        expected_sha = (configured.get("artifact_sha256")
+                        if configured.get("artifact") == artifact else None)
+        if expected_sha and expected_sha != actual_sha:
+            return {
+                **configured,
+                "status": "validation_artifact_hash_mismatch",
+                "artifact": str(artifact),
+                "artifact_sha256": actual_sha,
+                "expected_artifact_sha256": expected_sha,
+            }
+        audit = payload.get("boundary_validation") or {}
+        if audit.get("status") == BOUNDARY_CONFIRMATION_STATUS:
+            return {
+                **configured,
+                "status": BOUNDARY_CONFIRMATION_STATUS,
+                "artifact": str(artifact),
+                "artifact_sha256": actual_sha,
+                "pilot_id": payload.get("pilot_id") or configured.get("pilot_id"),
+                "require_manual_event_verification": True,
+                "allowed_use": audit.get("allowed_use"),
+            }
+    return configured
 
 
 def _mono_float(path: Path) -> tuple[int, np.ndarray]:
@@ -163,36 +210,6 @@ def playback_underrun_diagnostics(playback: dict, *, speech_threshold: float = 0
     }
 
 
-def _overlaps(participant: list[dict], assistant: list[dict], minimum_ms: float) -> list[dict]:
-    rows = []
-    for p_index, p in enumerate(participant):
-        for a_index, a in enumerate(assistant):
-            start = max(p["start_ms"], a["start_ms"])
-            end = min(p["end_ms"], a["end_ms"])
-            if end - start >= minimum_ms:
-                rows.append({"participant_interval": p_index, "assistant_interval": a_index,
-                             "start_ms": start, "end_ms": end,
-                             "duration_ms": end - start})
-    return rows
-
-
-def _barge_ins(participant: list[dict], assistant: list[dict]) -> list[dict]:
-    rows = []
-    for p_index, p in enumerate(participant):
-        active = next(((index, item) for index, item in enumerate(assistant)
-                       if item["start_ms"] <= p["start_ms"] < item["end_ms"]), None)
-        if active:
-            a_index, item = active
-            rows.append({
-                "participant_interval": p_index,
-                "assistant_interval": a_index,
-                "participant_onset_ms": p["start_ms"],
-                "assistant_stop_ms": item["end_ms"],
-                "stop_latency_ms": item["end_ms"] - p["start_ms"],
-            })
-    return rows
-
-
 def _route_switches(events: list[dict], chunks: dict[int, dict],
                     participant_capture_latency_ms: float = 0.0) -> list[dict]:
     input_chunks = [row for row in events if row.get("event") == "input_chunk"]
@@ -320,11 +337,10 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
     timing_settings = ((study.get("settings") or {}).get("timing") or {})
     participant_capture_latency_ms = float(
         timing_settings.get("participant_capture_latency_correction_ms") or 0.0)
-    boundary_validation = timing_settings.get("speech_boundary_validation") or {}
+    boundary_validation = resolve_boundary_validation(timing_settings)
     timing_status = (
-        "validated"
-        if (boundary_validation.get("status") == "validated"
-            and boundary_validation.get("artifact")
+        BOUNDARY_CONFIRMATION_STATUS
+        if (boundary_validation.get("status") == BOUNDARY_CONFIRMATION_STATUS
             and boundary_validation.get("artifact_sha256"))
         else "estimated_pending_validation"
     )
@@ -393,23 +409,61 @@ def prepare_timing_analysis(session: dict, data_root: Path, analysis_id: str) ->
         "underrun_diagnostics": playback_underrun_diagnostics(
             playback, speech_threshold=assistant_threshold),
     }
-    overlaps = _overlaps(participant, assistant, 200.0)
-    barge_ins = _barge_ins(participant, assistant)
+    turn_episodes = build_turn_episodes(participant, assistant)
+    positive_response_gaps = build_positive_response_gaps(participant, assistant)
+    # Preserve the v4 fields for downstream compatibility. Their rows now
+    # point back to the single linked episode from which they were derived.
+    overlaps = [{
+        "episode_id": row["episode_id"],
+        "participant_interval": row["participant_interval"],
+        "assistant_interval": row["assistant_interval"],
+        "start_ms": row["overlap_start_ms"],
+        "end_ms": row["overlap_end_ms"],
+        "duration_ms": row["overlap_duration_ms"],
+    } for row in turn_episodes if row["overlap_200ms_candidate"]]
+    barge_ins = [{
+        "episode_id": row["episode_id"],
+        "participant_interval": row["participant_interval"],
+        "assistant_interval": row["assistant_interval"],
+        "participant_onset_ms": row["participant_onset_ms"],
+        "assistant_stop_ms": row["assistant_offset_ms"],
+        "stop_latency_ms": row["assistant_stop_latency_ms"],
+    } for row in turn_episodes if row["participant_barge_in_candidate"]]
+    premature_onsets = [
+        row for row in turn_episodes
+        if row["assistant_premature_onset_candidate"]
+    ]
+    assistant_response_gaps = [
+        row for row in positive_response_gaps
+        if row["direction"] == "participant_to_assistant"
+    ]
+    participant_response_gaps = [
+        row for row in positive_response_gaps
+        if row["direction"] == "assistant_to_participant"
+    ]
     result: dict[str, Any] = {
         "schema": TIMING_SCHEMA, "analysis_id": analysis_id,
         "session_id": session.get("session_id"),
         "status": timing_status,
         "participant_intervals": participant, "assistant_intervals": assistant,
         "overlaps": overlaps, "barge_ins": barge_ins,
+        "turn_episodes": turn_episodes,
+        "positive_response_gaps": positive_response_gaps,
         "route_switches": _route_switches(
             events, chunks, participant_capture_latency_ms),
         "summary": {
             "participant_speech_intervals": len(participant),
             "assistant_speech_intervals": len(assistant),
             "overlap_events_200ms": len(overlaps),
+            "participant_barge_in_attempts": len(barge_ins),
             "barge_in_attempts": len(barge_ins),
+            "assistant_premature_onsets": len(premature_onsets),
+            "positive_response_gaps": len(positive_response_gaps),
+            "assistant_response_gaps": len(assistant_response_gaps),
+            "participant_response_gaps": len(participant_response_gaps),
             "mean_stop_latency_ms": (sum(row["stop_latency_ms"] for row in barge_ins)
                                      / len(barge_ins) if barge_ins else None),
+            "overlap_minimum_ms": OVERLAP_MINIMUM_MS,
         },
         "integrity": {
             "client_chunks": len(client_sequences), "proxy_chunks": len(proxy_sequences),
