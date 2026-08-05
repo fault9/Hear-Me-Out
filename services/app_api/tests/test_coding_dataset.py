@@ -358,6 +358,34 @@ class PacketTests(FixtureCase):
         self.assertTrue(all(row["reason"].startswith("analysis_excluded:")
                             for row in summary["skipped"]))
 
+    def test_frozen_content_amendment_builds_one_scoped_packet(self):
+        sessions = self._sessions()
+        for session in sessions:
+            session["analysis_included"] = False
+            session["analysis_exclusion_reasons"] = ["technical:route_mismatch"]
+        scenarios = {str(r["id"]): r
+                     for r in self.backend.list_scenarios(self.study_id)}
+
+        summary = write_packets(
+            sessions,
+            self.data_root,
+            self.study_id,
+            scenarios,
+            amended_content_session_ids={self.session_id},
+        )
+
+        self.assertEqual(summary["written"], 1)
+        self.assertEqual(summary["amended_content_written"], 1)
+        index = read_index(self._root())
+        self.assertEqual(index[0]["analysis_scope"], "amended_content")
+        meta = json.loads(
+            (self._root() / "meta" / f"{index[0]['packet_id']}.json").read_text())
+        self.assertEqual(meta["analysis_scope"], "amended_content")
+        packet = json.loads(
+            (self._root() / "packets" / f"{index[0]['packet_id']}.json").read_text())
+        assert_blinded(packet)
+        self.assertNotIn("analysis_scope", packet)
+
     def test_blinding_guard_rejects_leaks(self):
         with self.assertRaises(BlindingError):
             assert_blinded({"utterances": [{"id": "x", "voice_mode": "vc"}]})

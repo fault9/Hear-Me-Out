@@ -66,7 +66,12 @@ def main():
     amendments_path = os.path.join(HERE, "amendments.json")
     if os.path.exists(amendments_path):
         with open(amendments_path, encoding="utf-8") as handle:
-            admitted_ids = {a["session_id"] for a in json.load(handle)}
+            amendments = json.load(handle)
+            admitted_ids = {
+                amendment["session_id"]
+                for amendment in amendments
+                if "content" in amendment.get("analysis_scopes", ["content"])
+            }
         admitted = [r for r in scenarios if r["session_id"] in admitted_ids
                     and not truthy(r.get("analysis_included"))]
         missing = admitted_ids - {r["session_id"] for r in scenarios}

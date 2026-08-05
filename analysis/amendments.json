@@ -2,6 +2,7 @@
   {
     "session_id": "P01017_R01_S03_A01",
     "date": "2026-08-05",
+    "analysis_scopes": ["content"],
     "rule": "Infrastructure delivery failure at teardown; condition delivery evidenced in live event stream (route_activated vc at sample 0, 2482 gapless transmitted windows, 2327 inference batches); monitor-copy continuity verified by scripts/continuity_check.py (PASS). Amended before any outcome inspection; applied uniformly to this failure mode.",
     "scope": "Content-based measures only; clock-precision turn-taking measures remain excluded per the existing synchronization gate."
   }
