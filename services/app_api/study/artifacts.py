@@ -109,6 +109,60 @@ def file_record(path: str | Path, *, relative_to: str | Path | None = None) -> d
     return result
 
 
+# Analysis stages record artifact paths with file_record(relative_to=data_root)
+# where that data_root is the MEDIA directory (STUDY_DATA_DIR, normally
+# <study data root>/media), so a stored path reads "sessions/study_1/...".
+# Readers hold either the study data root or the media directory, and offline
+# copies relocate both, so resolution tries the media directory first and the
+# study data root second (which also keeps older "media/..."-prefixed paths
+# working). Candidates must stay inside the base they resolve against.
+def artifact_bases(data_root: str | Path) -> list[Path]:
+    root = Path(os.path.expanduser(str(data_root)))
+    if root.name == "media":
+        return [root, root.parent]
+    return [root / "media", root]
+
+
+def resolve_artifact_path(data_root: str | Path,
+                          path: str | Path | None) -> Path | None:
+    """Locate a manifest-recorded artifact under an approved study-data root.
+
+    Returns None when no path is recorded, when nothing exists at any approved
+    base, or when the path escapes the base it resolves against.
+    """
+    if not path:
+        return None
+    candidate = Path(os.path.expanduser(str(path)))
+    bases = [base.resolve() for base in artifact_bases(data_root)]
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+        within = any(resolved == base or base in resolved.parents for base in bases)
+        return resolved if within and resolved.exists() else None
+    for base in bases:
+        resolved = (base / candidate).resolve()
+        if not (resolved == base or base in resolved.parents):
+            continue
+        if resolved.exists():
+            return resolved
+    return None
+
+
+def load_manifest_artifact(session: dict, data_root: str | Path,
+                           key: str) -> dict | None:
+    """Read one analysis artifact recorded in a session's artifact manifest."""
+    analysis = (session.get("artifact_manifest") or {}).get("analysis") or {}
+    record = analysis.get(key) or {}
+    path = record.get("path") if isinstance(record, dict) else None
+    resolved = resolve_artifact_path(data_root, path)
+    if resolved is None:
+        return None
+    try:
+        loaded = json.loads(resolved.read_text())
+    except (OSError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 def git_revision(repo_root: str | Path) -> str | None:
     override = os.environ.get("HMO_GIT_COMMIT")
     if override:

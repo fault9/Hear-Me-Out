@@ -32,10 +32,12 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from study.artifacts import load_manifest_artifact  # noqa: E402
 from study.coding.packets import coding_root  # noqa: E402
 from study.session_scope import annotate_analysis_scopes  # noqa: E402
 from study.storage import get_backend  # noqa: E402
@@ -63,16 +65,26 @@ def _write_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
             writer.writerow({key: _cell(row.get(key)) for key in columns})
 
 
-def _load_artifact(data_root: Path, session: dict, key: str) -> dict | None:
-    analysis = (session.get("artifact_manifest") or {}).get("analysis") or {}
-    record = analysis.get(key) or {}
-    path = record.get("path") if isinstance(record, dict) else None
-    if not path:
-        return None
-    try:
-        return json.loads((data_root / path).read_text())
-    except (OSError, ValueError):
-        return None
+def _load_artifact(data_root: Path, session: dict, key: str,
+                   coverage: Counter | None = None) -> dict | None:
+    """Load one manifest artifact, tallying whether it was recorded and read.
+
+    The tally separates "never produced" from "recorded but unreadable" so an
+    export cannot silently present a path/layout problem as valid zero data.
+    """
+    loaded = load_manifest_artifact(session, data_root, key)
+    if coverage is not None:
+        analysis = (session.get("artifact_manifest") or {}).get("analysis") or {}
+        record = analysis.get(key) or {}
+        recorded = bool(record.get("path")) if isinstance(record, dict) else False
+        coverage[f"{key}.sessions"] += 1
+        if loaded is not None:
+            coverage[f"{key}.loaded"] += 1
+        elif recorded:
+            coverage[f"{key}.unreadable"] += 1
+        else:
+            coverage[f"{key}.not_recorded"] += 1
+    return loaded
 
 
 def _final_labels_by_session(data_root: Path, study_id: int) -> dict[str, dict]:
@@ -141,6 +153,31 @@ def _analytical_positions(sessions: list[dict]) -> dict[str, int]:
     }
 
 
+def _coverage_warnings(coverage: Counter, analytical_count: int) -> list[str]:
+    """Flag artifact-loading shortfalls so an empty export is never mistaken
+    for a study with genuinely no timing or events."""
+    warnings: list[str] = []
+    if not analytical_count:
+        return warnings
+    loaded = coverage.get("timing_latest.loaded", 0)
+    unreadable = coverage.get("timing_latest.unreadable", 0)
+    if not loaded:
+        warnings.append(
+            f"no timing artifact could be loaded for any of {analytical_count} "
+            "analytical sessions: timing columns and turn-event candidates are "
+            "empty. Check that STUDY_DATA_ROOT is the data root that contains "
+            "media/ (artifact paths are recorded relative to media/).")
+    elif loaded < analytical_count:
+        warnings.append(
+            f"timing artifact loaded for {loaded}/{analytical_count} analytical "
+            "sessions")
+    if unreadable:
+        warnings.append(
+            f"{unreadable} session(s) record a timing artifact path that could "
+            "not be resolved or read")
+    return warnings
+
+
 def build_dataset(study_id: int, out_dir: Path) -> dict:
     data_root = Path(os.path.expanduser(os.environ.get("STUDY_DATA_ROOT", "/workspace/data")))
     backend = get_backend()
@@ -182,6 +219,14 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
 
     # ---- scenarios.csv (analytical sessions, all attempts) ----
     analytical = [s for s in sessions if s.get("study_role") != "practice"]
+    # Load each session's timing artifact once; scenarios.csv and turn_events.csv
+    # both read it, and one pass keeps the coverage tally per session.
+    coverage: Counter = Counter()
+    timing_by_session = {
+        str(session["session_id"]):
+            (_load_artifact(data_root, session, "timing_latest", coverage) or {})
+        for session in analytical
+    }
     post_keys: list[str] = []
     for session in analytical:
         payload = by_session.get((str(session["session_id"]), "post"), {})
@@ -192,7 +237,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
     for session in analytical:
         sid = str(session["session_id"])
         validity = session.get("technical_validity") or {}
-        timing = _load_artifact(data_root, session, "timing_latest") or {}
+        timing = timing_by_session.get(sid, {})
         timing_summary = timing.get("summary") or {}
         integrity = timing.get("integrity") or {}
         capture_gaps = integrity.get("capture_gaps") or {}
@@ -332,7 +377,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
     event_rows = []
     for session in analytical:
         sid = str(session["session_id"])
-        timing = _load_artifact(data_root, session, "timing_latest") or {}
+        timing = timing_by_session.get(sid, {})
         for kind, events in (("overlap", timing.get("overlaps") or []),
                              ("barge_in", timing.get("barge_ins") or [])):
             for i, event in enumerate(events, start=1):
@@ -367,10 +412,16 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
     _write_csv(out_dir / "answers_long.csv", long_rows, answer_columns)
     (out_dir / "DATA_DICTIONARY.md").write_text(_data_dictionary(study))
 
+    warnings = _coverage_warnings(coverage, len(analytical))
+    for warning in warnings:
+        print(f"[dataset_export] WARNING: {warning}", file=sys.stderr)
+
     summary = {
         "study_id": study_id,
         "study_name": study.get("name"),
         "out_dir": str(out_dir),
+        "artifact_coverage": dict(sorted(coverage.items())),
+        "warnings": warnings,
         "participants": len(participant_rows),
         "analytical_sessions": len(scenario_rows),
         "analysis_included_sessions": sum(

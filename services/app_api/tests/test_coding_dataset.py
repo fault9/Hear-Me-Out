@@ -4,6 +4,7 @@ is faked)."""
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import sys
@@ -14,6 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import study.storage as storage  # noqa: E402
+from study.artifacts import (load_manifest_artifact,
+                             resolve_artifact_path)  # noqa: E402
 from study.coding import agreement, freeze, review, runner  # noqa: E402
 from study.coding.packets import (BlindingError, assert_blinded, build_packet,
                                   classify_delivery_timing, coding_root,
@@ -132,6 +135,16 @@ class FakeClient:
 class FixtureCase(unittest.TestCase):
     """Creates a study DB + on-disk artifacts in a temp data root."""
 
+    # Production manifests record artifact paths relative to the media dir
+    # (file_record(relative_to=STUDY_DATA_DIR)), e.g. "sessions/...". Older
+    # fixtures wrote "media/sessions/..."; both must resolve, so the default
+    # keeps the legacy form and ProductionLayoutTests flips it.
+    manifest_paths_relative_to_media = False
+
+    def _manifest_rel(self) -> str:
+        prefix = "" if self.manifest_paths_relative_to_media else "media/"
+        return f"{prefix}sessions/{self.session_id}/analysis"
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.data_root = Path(self._tmp.name)
@@ -237,7 +250,7 @@ class FixtureCase(unittest.TestCase):
         }
         (analysis_dir / "dialogue_transcript.json").write_text(json.dumps(dialogue))
         self._write_transmitted_artifact()   # faithful by default
-        rel = f"media/sessions/{self.session_id}/analysis"
+        rel = self._manifest_rel()
         manifest = {"analysis": {
             "timing_latest": {"path": f"{rel}/timing.json"},
             "dialogue_transcript_latest": {"path": f"{rel}/dialogue_transcript.json"},
@@ -706,6 +719,143 @@ class AgreementMathTests(unittest.TestCase):
 
     def test_kappa_degenerate_single_category(self):
         self.assertIsNone(agreement.cohen_kappa([(1, 1), (1, 1)]))
+
+
+class ProductionLayoutTests(FixtureCase):
+    """The real container layout: data_root/media/sessions/... with manifest
+    paths recorded relative to the media dir ("sessions/..."). Readers hold
+    STUDY_DATA_ROOT, so joining it directly to the path silently produced
+    empty timing, no turn events, and packets without transcripts."""
+
+    manifest_paths_relative_to_media = True
+
+    def test_export_loads_timing_and_emits_turn_events(self):
+        out_dir = self.data_root / "exports" / "production"
+        summary = build_dataset(self.study_id, out_dir)
+        self.assertEqual(summary["turn_event_candidates"], 2)
+        self.assertEqual(summary["artifact_coverage"]["timing_latest.loaded"], 1)
+        self.assertEqual(summary["warnings"], [])
+        with (out_dir / "scenarios.csv").open() as handle:
+            row = list(csv.DictReader(handle))[0]
+        self.assertEqual(row["overlap_candidates_200ms"], "1")
+        self.assertEqual(row["barge_in_candidates"], "1")
+        self.assertEqual(row["crosswalk_complete"], "1")
+        self.assertEqual(row["capture_gap_total_ms"], "12.0")
+
+    def test_packets_load_dialogue_timing_and_transmitted(self):
+        summary = self._write_all_packets()
+        self.assertEqual(summary["written"], 1)
+        packet_id = read_index(self._root())[0]["packet_id"]
+        packet = json.loads(
+            (self._root() / "packets" / f"{packet_id}.json").read_text())
+        meta = json.loads(
+            (self._root() / "meta" / f"{packet_id}.json").read_text())
+        self.assertTrue(packet["utterances"])                       # dialogue
+        self.assertEqual(meta["switch_participant_timeline_ms"], 45000.0)  # timing
+        self.assertEqual(meta["boundary_kind"], "switch")
+        self.assertTrue(meta["transmitted"]["available"])           # transmitted
+        self.assertTrue(meta["transmitted"]["texts"])
+
+    def test_absolute_manifest_path_inside_root_resolves(self):
+        session = self._analytical_session()
+        absolute = str(self.data_root / "media" / "sessions" / self.session_id
+                       / "analysis" / "timing.json")
+        session["artifact_manifest"]["analysis"]["timing_latest"]["path"] = absolute
+        loaded = load_manifest_artifact(session, self.data_root, "timing_latest")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded["schema"], "hmo.timing-analysis.v4")
+
+    def _analytical_session(self) -> dict:
+        return next(s for s in self._sessions()
+                    if s["session_id"] == self.session_id)
+
+
+class LegacyLayoutCompatibilityTests(FixtureCase):
+    """Fixtures and any older manifests using "media/sessions/..." keep working."""
+
+    def test_legacy_prefixed_path_still_loads(self):
+        session = next(s for s in self._sessions()
+                       if s["session_id"] == self.session_id)
+        self.assertTrue(
+            session["artifact_manifest"]["analysis"]["timing_latest"]["path"]
+            .startswith("media/"))
+        loaded = load_manifest_artifact(session, self.data_root, "timing_latest")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded["schema"], "hmo.timing-analysis.v4")
+
+    def test_media_dir_as_data_root_also_resolves(self):
+        """Offline copies may hand readers the media dir itself."""
+        session = next(s for s in self._sessions()
+                       if s["session_id"] == self.session_id)
+        loaded = load_manifest_artifact(
+            session, self.data_root / "media", "timing_latest")
+        self.assertIsNotNone(loaded)
+
+
+class ArtifactResolverTests(unittest.TestCase):
+    """Resolution rules independent of the study fixture."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        target = self.root / "media" / "sessions" / "s1" / "analysis"
+        target.mkdir(parents=True)
+        (target / "timing.json").write_text(json.dumps({"ok": True}))
+        self.outside = self.root.parent / "outside_root.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_resolves_production_and_legacy_forms(self):
+        for path in ("sessions/s1/analysis/timing.json",
+                     "media/sessions/s1/analysis/timing.json"):
+            self.assertIsNotNone(resolve_artifact_path(self.root, path), path)
+
+    def test_missing_file_returns_none(self):
+        self.assertIsNone(
+            resolve_artifact_path(self.root, "sessions/s1/analysis/nope.json"))
+
+    def test_empty_path_returns_none(self):
+        self.assertIsNone(resolve_artifact_path(self.root, None))
+        self.assertIsNone(resolve_artifact_path(self.root, ""))
+
+    def test_traversal_outside_root_is_rejected(self):
+        self.outside.write_text(json.dumps({"secret": True}))
+        try:
+            self.assertIsNone(
+                resolve_artifact_path(self.root, "../../outside_root.json"))
+            self.assertIsNone(
+                resolve_artifact_path(self.root, str(self.outside)))
+        finally:
+            self.outside.unlink()
+
+
+class MissingArtifactVisibilityTests(FixtureCase):
+    """A path/layout problem must never read as valid zero-event data."""
+
+    manifest_paths_relative_to_media = True
+
+    def test_unreadable_timing_is_counted_and_warned(self):
+        (self.data_root / "media" / "sessions" / self.session_id
+         / "analysis" / "timing.json").unlink()
+        summary = build_dataset(self.study_id,
+                                self.data_root / "exports" / "broken")
+        self.assertEqual(summary["turn_event_candidates"], 0)
+        self.assertEqual(summary["artifact_coverage"].get("timing_latest.loaded", 0), 0)
+        self.assertEqual(summary["artifact_coverage"]["timing_latest.unreadable"], 1)
+        self.assertTrue(any("no timing artifact could be loaded" in w
+                            for w in summary["warnings"]))
+
+    def test_session_without_timing_is_not_reported_as_unreadable(self):
+        session_id = self.session_id
+        manifest = next(s for s in self._sessions()
+                        if s["session_id"] == session_id)["artifact_manifest"]
+        manifest["analysis"].pop("timing_latest")
+        self.backend.update_session_artifacts(session_id, manifest)
+        summary = build_dataset(self.study_id,
+                                self.data_root / "exports" / "notiming")
+        self.assertEqual(summary["artifact_coverage"]["timing_latest.not_recorded"], 1)
+        self.assertEqual(summary["artifact_coverage"].get("timing_latest.unreadable", 0), 0)
 
 
 if __name__ == "__main__":

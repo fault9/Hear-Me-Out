@@ -23,6 +23,8 @@ import secrets
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..artifacts import load_manifest_artifact
+
 PACKET_SCHEMA = "hmo.coding-packet.v1"
 FINAL_PROBE_MATCH_THRESHOLD = 0.55
 # Mechanical transmitted-presence rule (codebook §3): content-word recall of
@@ -65,15 +67,7 @@ def packet_id_for(session_id: str, salt: str) -> str:
 
 
 def _load_analysis_artifact(session: dict, data_root: Path, key: str) -> dict | None:
-    analysis = (session.get("artifact_manifest") or {}).get("analysis") or {}
-    record = analysis.get(key) or {}
-    path = record.get("path") if isinstance(record, dict) else None
-    if not path:
-        return None
-    try:
-        return json.loads((Path(data_root) / path).read_text())
-    except (OSError, ValueError):
-        return None
+    return load_manifest_artifact(session, data_root, key)
 
 
 def _scenario_spec(session: dict, scenario_row: dict | None) -> dict:
