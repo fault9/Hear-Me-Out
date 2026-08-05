@@ -366,10 +366,12 @@ function DataPanel({ token, studyId }: any) {
     catch (e: any) { setOpErr(e?.message || String(e)) }
   }
   const analyticalSessions = sessions.filter(s => s.analysis_eligible !== false)
-  // "incomplete" validity is terminal (capture never produced audio) — those
-  // sessions can never finish the pipeline, so they don't count as pending.
+  // Only sessions that actually ended can be analyzed: abnormal terminations
+  // never send the end call, and "incomplete" validity is terminal — neither
+  // can ever finish the pipeline, so they don't count as pending.
   const pending = analyticalSessions.filter(
-    s => (s.technical_validity?.status || "pending") !== "incomplete"
+    s => s.ended_at != null
+      && (s.technical_validity?.status || "pending") !== "incomplete"
       && (!s.metrics || s.vc_quality_status !== "complete"
           || (s.technical_validity?.status || "pending") === "pending")).length
   const running = status?.running
