@@ -258,6 +258,14 @@ def write_packets(sessions: list[dict], data_root: Path, study_id: int,
     salt = load_salt(root)
     index_rows, skipped = [], []
     for session in sessions:
+        if ("analysis_included" in session
+                and session.get("analysis_included") is not True):
+            reasons = session.get("analysis_exclusion_reasons") or ["not_included"]
+            skipped.append({
+                "session_id": session.get("session_id"),
+                "reason": "analysis_excluded:" + ";".join(map(str, reasons)),
+            })
+            continue
         scenario_row = (scenarios_by_id or {}).get(str(session.get("scenario_id")))
         built = build_packet(session, data_root, salt, scenario_row)
         if built is None:
@@ -276,6 +284,8 @@ def write_packets(sessions: list[dict], data_root: Path, study_id: int,
             "voice_condition": session.get("voice_condition"),
             "scenario_title": meta["scenario_title"],
             "scenario_order": session.get("scenario_order"),
+            "analysis_included": session.get("analysis_included", True),
+            "technical_status": (session.get("technical_validity") or {}).get("status"),
         })
     with (root / "index.jsonl").open("w") as handle:
         for row in index_rows:

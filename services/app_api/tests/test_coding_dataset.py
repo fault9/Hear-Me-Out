@@ -25,6 +25,7 @@ from study.coding.packets import (BlindingError, assert_blinded, build_packet,
 from study.coding.schema import (consistency_issues, derive_scenario_labels,
                                  low_confidence_fields, validate_labels)  # noqa: E402
 from study.dataset_export import build_dataset  # noqa: E402
+from study.turn_verification import finalize as finalize_turn_verification  # noqa: E402
 
 FINAL_PROMPT = ("Please tell me what information is now recorded, whether a "
                 "review was opened, and what happens next.")
@@ -222,7 +223,17 @@ class FixtureCase(unittest.TestCase):
             "route_switches": [{"participant_timeline_ms": 45000.0,
                                 "from_mode": "natural", "to_mode": "vc",
                                 "lag_ms": 56.0}],
-            "participant_intervals": [], "assistant_intervals": [],
+            # Existing production artifacts are v4. The exporter must derive
+            # linked directional episodes from these retained intervals.
+            "participant_intervals": [
+                {"start_ms": 1000.0, "end_ms": 2000.0},
+                {"start_ms": 4000.0, "end_ms": 5000.0},
+                {"start_ms": 7000.0, "end_ms": 7500.0},
+            ],
+            "assistant_intervals": [
+                {"start_ms": 500.0, "end_ms": 1500.0},
+                {"start_ms": 4500.0, "end_ms": 5500.0},
+            ],
             "overlaps": [{"start_ms": 46000.0, "end_ms": 46400.0,
                           "duration_ms": 400.0}],
             "barge_ins": [{"start_ms": 60000.0, "end_ms": 60500.0,
@@ -331,6 +342,21 @@ class PacketTests(FixtureCase):
         meta = json.loads((self._root() / "meta" / f"{pid}.json").read_text())
         self.assertEqual(meta["boundary_kind"], "switch")
         self.assertEqual(meta["boundary_participant_timeline_ms"], 45000.0)
+
+    def test_explicitly_excluded_session_never_becomes_a_coding_packet(self):
+        sessions = self._sessions()
+        for session in sessions:
+            session["analysis_included"] = False
+            session["analysis_exclusion_reasons"] = ["technical:route_mismatch"]
+        scenarios = {str(r["id"]): r
+                     for r in self.backend.list_scenarios(self.study_id)}
+
+        summary = write_packets(
+            sessions, self.data_root, self.study_id, scenarios)
+
+        self.assertEqual(summary["written"], 0)
+        self.assertTrue(all(row["reason"].startswith("analysis_excluded:")
+                            for row in summary["skipped"]))
 
     def test_blinding_guard_rejects_leaks(self):
         with self.assertRaises(BlindingError):
@@ -499,6 +525,23 @@ class ReviewAndExportTests(FixtureCase):
         self.assertEqual(report["unit_labels"]["incorporation"]["raw_agreement"], 1.0)
         self.assertEqual(report["outcome_level"]["raw_agreement"], 0.0)
         self.assertEqual(report["repair_total"]["n"], 1)
+        self.assertIn("outcome_level", report["reliability"]["failed_fields"])
+
+    def test_failed_reliability_queues_every_remaining_valid_packet(self):
+        self._write_all_packets()
+        root = self._root()
+        freeze.freeze(root, {"model": "fake", "temperature": 0.0,
+                             "max_tokens": 1})
+        runner.run_judging(root, FakeClient(make_judge_labels()), pilot=False)
+        report = agreement.agreement_report(root)
+
+        expansion = review.expand_for_reliability(root)
+        exported = review.export_review(root)
+
+        self.assertTrue(report["reliability"]["requires_full_human_review"])
+        self.assertEqual(expansion["packet_ids"],
+                         [read_index(root)[0]["packet_id"]])
+        self.assertEqual(exported["queued"], 1)
 
     def test_dataset_export_merges_everything(self):
         root, pid, *_ = self._run_pipeline(human_outcome_level=4)
@@ -511,6 +554,13 @@ class ReviewAndExportTests(FixtureCase):
         self.assertEqual(summary["unit_rows"], 2)
         self.assertEqual(summary["repair_rows"], 1)
         self.assertEqual(summary["turn_event_candidates"], 2)
+        self.assertEqual(summary["turn_verification_candidates"], 2)
+        self.assertEqual(summary["turn_gap_verification_candidates"], 1)
+        self.assertEqual(summary["turn_sessions_requiring_full_review"], 1)
+        self.assertEqual(summary["overlap_200ms_candidates"], 2)
+        self.assertEqual(summary["participant_barge_in_candidates"], 1)
+        self.assertEqual(summary["assistant_premature_onset_candidates"], 1)
+        self.assertEqual(summary["positive_response_gap_candidates"], 1)
 
         import csv as csv_module
         with (out_dir / "scenarios.csv").open() as handle:
@@ -525,7 +575,11 @@ class ReviewAndExportTests(FixtureCase):
         self.assertEqual(row["repair_post_boundary"], "1")
         self.assertEqual(row["coding_label_source"], "human")
         self.assertEqual(row["post_effort"], "3")
-        self.assertEqual(row["overlap_candidates_200ms"], "1")
+        self.assertEqual(row["overlap_candidates_200ms"], "2")
+        self.assertEqual(row["participant_barge_in_candidates"], "1")
+        self.assertEqual(row["assistant_premature_onset_candidates"], "1")
+        self.assertEqual(row["assistant_response_gap_candidates"], "0")
+        self.assertEqual(row["participant_response_gap_candidates"], "1")
 
         with (out_dir / "units.csv").open() as handle:
             unit_rows = list(csv_module.DictReader(handle))
@@ -541,9 +595,88 @@ class ReviewAndExportTests(FixtureCase):
 
         with (out_dir / "turn_events.csv").open() as handle:
             event_rows = list(csv_module.DictReader(handle))
-        self.assertEqual({r["event_type"] for r in event_rows},
-                         {"overlap", "barge_in"})
-        self.assertTrue(all(r["verified"] == "" for r in event_rows))
+        self.assertEqual(len(event_rows), 2)
+        self.assertEqual(
+            sum(r["participant_barge_in_candidate"] == "1" for r in event_rows),
+            1,
+        )
+        self.assertEqual(
+            sum(r["assistant_premature_onset_candidate"] == "1"
+                for r in event_rows),
+            1,
+        )
+        self.assertTrue(all(r["verified_overlap"] == "" for r in event_rows))
+        self.assertTrue(all(r["successful_assistant_yielding"] == ""
+                            for r in event_rows))
+        self.assertTrue(all(r["disruptive_assistant_interruption"] == ""
+                            for r in event_rows))
+
+        with (out_dir / "turn_verification_queue.csv").open() as handle:
+            verification_rows = list(csv_module.DictReader(handle))
+        self.assertEqual(len(verification_rows), 2)
+
+        with (out_dir / "turn_gaps.csv").open() as handle:
+            gap_rows = list(csv_module.DictReader(handle))
+        self.assertEqual(
+            {r["direction"] for r in gap_rows},
+            {"assistant_to_participant"},
+        )
+
+    def test_turn_verification_finalizes_only_completed_manual_review(self):
+        out_dir = self.data_root / "exports" / "turn-finalize"
+        build_dataset(self.study_id, out_dir)
+
+        def edit(name, update):
+            path = out_dir / name
+            with path.open() as handle:
+                reader = csv.DictReader(handle)
+                fields, rows = list(reader.fieldnames or []), list(reader)
+            for row in rows:
+                update(row)
+            with path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
+
+        def verify_event(row):
+            row["verifier_initials"] = "AB"
+            if row["overlap_200ms_candidate"] == "1":
+                row["verified_overlap"] = "yes"
+            if row["participant_barge_in_candidate"] == "1":
+                row["verified_participant_barge_in"] = "yes"
+                row["successful_assistant_yielding"] = "yes"
+            if row["assistant_premature_onset_candidate"] == "1":
+                row["verified_assistant_premature_onset"] = "yes"
+                row["disruptive_assistant_interruption"] = "no"
+
+        edit("turn_verification_queue.csv", verify_event)
+        edit("turn_gap_verification_queue.csv", lambda row: row.update({
+            "verified_positive_gap": "yes", "verifier_initials": "AB",
+        }))
+        edit("turn_session_review_queue.csv", lambda row: row.update({
+            "full_session_reviewed": "yes", "additional_event_count": "0",
+            "verifier_initials": "AB",
+        }))
+
+        manifest = finalize_turn_verification(out_dir)
+
+        self.assertEqual(manifest["status"], "complete")
+        self.assertEqual(manifest["verified_events"], 2)
+        self.assertEqual(manifest["verified_gaps"], 1)
+        with (out_dir / "turn_session_summary_verified.csv").open() as handle:
+            summary = list(csv.DictReader(handle))[0]
+        self.assertEqual(summary["participant_barge_in_count"], "1")
+        self.assertEqual(summary["assistant_premature_onset_count"], "1")
+
+    def test_turn_verification_rejects_incomplete_full_track_review(self):
+        out_dir = self.data_root / "exports" / "turn-incomplete"
+        build_dataset(self.study_id, out_dir)
+
+        result = finalize_turn_verification(out_dir)
+
+        self.assertEqual(result["status"], "invalid_or_incomplete")
+        self.assertTrue(result["errors"])
+        self.assertFalse((out_dir / "turn_events_verified.csv").exists())
 
     def test_dataset_export_before_coding(self):
         # Tables must build with coding columns empty before any coding runs.
@@ -555,6 +688,114 @@ class ReviewAndExportTests(FixtureCase):
             row = list(csv_module.DictReader(handle))[0]
         self.assertEqual(row["outcome_level"], "")
         self.assertEqual(row["repair_total"], "")
+
+    def test_dataset_export_preserves_vc_quality_scores_and_failures(self):
+        self.backend.update_session_vc_quality(self.session_id, "complete", {
+            "status": "complete",
+            "analysis_id": "VCQ1",
+            "metric_profile": "xvc_objective_v2",
+            "inputs": {
+                "source_audio": {"sample_rate_hz": 16000},
+                "target_audio": {
+                    "path": "targets/p279.wav", "sha256": "target-hash",
+                    "duration_s": 10.0,
+                },
+                "regions": [{
+                    "index": 2, "mode": "vc", "input_start_sample": 720000,
+                    "input_end_sample": 1440000,
+                    "transmitted_start_sample": 719000,
+                    "transmitted_end_sample": 1439000, "windows": 300,
+                    "stable_guard_s": 0.5,
+                    "score_source": {
+                        "path": "source-speech.wav", "sha256": "source-hash",
+                        "duration_s": 12.5,
+                    },
+                    "score_transmitted": {
+                        "path": "converted-speech.wav", "sha256": "converted-hash",
+                        "duration_s": 12.5,
+                    },
+                    "score_selection": {
+                        "mode": "participant_rms_speech_concatenation",
+                        "speech_intervals": 4, "boundary_padding_s": 0.2,
+                    },
+                }],
+            },
+            "scores": [{
+                "region": 2,
+                "metrics": {
+                    "wer": 0.1, "wer_status": "complete",
+                    "ref_kind": "source_asr_free_speech",
+                    "sim": 0.61, "sim_status": "complete",
+                    "utmos": 3.17, "utmos_status": "complete",
+                },
+            }],
+            "unavailable_metrics": [],
+            "result_artifact": {
+                "path": "sessions/sess-analytical/analysis/vc_quality/VCQ1/results.json",
+                "sha256": "result-hash",
+            },
+        })
+        complete_dir = self.data_root / "exports" / "vc-complete"
+        summary = build_dataset(self.study_id, complete_dir)
+
+        with (complete_dir / "vc_quality_regions.csv").open() as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["target_ref"], "masculine_presenting")
+        self.assertEqual(row["target_speaker_id"], "p279")
+        self.assertEqual(row["region_index"], "2")
+        self.assertEqual(row["input_start_s"], "45.0")
+        self.assertEqual(row["score_selection"],
+                         "participant_rms_speech_concatenation")
+        self.assertEqual(row["wer_reference_kind"], "source_asr_free_speech")
+        self.assertEqual(row["wer"], "0.1")
+        self.assertEqual(row["sim"], "0.61")
+        self.assertEqual(row["utmos"], "3.17")
+        self.assertEqual(summary["vc_quality_region_rows"], 1)
+        self.assertEqual(summary["vc_quality_complete_region_rows"], 1)
+        self.assertEqual(summary["vc_quality_included_incomplete_sessions"], 0)
+
+        self.backend.update_session_vc_quality(self.session_id, "failed", {
+            "status": "failed", "analysis_id": "VCQ2",
+            "error": "RuntimeError: scorer unavailable",
+        })
+        failed_dir = self.data_root / "exports" / "vc-failed"
+        failed_summary = build_dataset(self.study_id, failed_dir)
+        with (failed_dir / "vc_quality_regions.csv").open() as handle:
+            failed_rows = list(csv.DictReader(handle))
+        self.assertEqual(len(failed_rows), 1)
+        self.assertEqual(failed_rows[0]["vc_quality_result_status"], "failed")
+        self.assertEqual(failed_rows[0]["session_error"],
+                         "RuntimeError: scorer unavailable")
+        self.assertEqual(failed_rows[0]["wer"], "")
+        self.assertEqual(failed_summary["vc_quality_complete_region_rows"], 0)
+        self.assertEqual(
+            failed_summary["vc_quality_included_incomplete_sessions"], 1)
+
+    def test_verification_queue_excludes_technically_invalid_session(self):
+        session = self.backend.get_session(self.session_id)
+        manifest = session["artifact_manifest"]
+        validity = manifest["analysis"]["technical_validity_summary"]
+        validity.update({
+            "status": "invalid",
+            "valid_for_condition_analysis": False,
+            "valid_for_confirmatory_timing_analysis": False,
+            "failures": [{"code": "capture_crosswalk"}],
+        })
+        self.backend.update_session_artifacts(self.session_id, manifest)
+
+        out_dir = self.data_root / "exports" / "invalid-timing"
+        summary = build_dataset(self.study_id, out_dir)
+
+        self.assertEqual(summary["turn_event_candidates"], 2)
+        self.assertEqual(summary["turn_verification_candidates"], 0)
+        with (out_dir / "turn_events.csv").open() as handle:
+            event_rows = list(csv.DictReader(handle))
+        with (out_dir / "turn_verification_queue.csv").open() as handle:
+            verification_rows = list(csv.DictReader(handle))
+        self.assertTrue(event_rows)
+        self.assertEqual(verification_rows, [])
 
 
 class TransmittedGatingTests(FixtureCase):
@@ -737,8 +978,9 @@ class ProductionLayoutTests(FixtureCase):
         self.assertEqual(summary["warnings"], [])
         with (out_dir / "scenarios.csv").open() as handle:
             row = list(csv.DictReader(handle))[0]
-        self.assertEqual(row["overlap_candidates_200ms"], "1")
+        self.assertEqual(row["overlap_candidates_200ms"], "2")
         self.assertEqual(row["barge_in_candidates"], "1")
+        self.assertEqual(row["assistant_premature_onset_candidates"], "1")
         self.assertEqual(row["crosswalk_complete"], "1")
         self.assertEqual(row["capture_gap_total_ms"], "12.0")
 

@@ -96,6 +96,8 @@ def stratified_sample(root: Path, seed: int, fraction: float = SAMPLE_FRACTION) 
     Strata come from the unblinded index (condition x scenario)."""
     strata: dict[tuple[str, str], list[str]] = {}
     for row in read_index(root):
+        if row.get("analysis_included") is not True:
+            continue
         pid = row["packet_id"]
         judge = _read_json(root / "labels" / "judge" / f"{pid}.json") or {}
         if judge.get("labels") is None or judge.get("schema_errors"):
@@ -120,11 +122,16 @@ def export_review(root: Path) -> dict:
     """Write the review queue and one blinded coding sheet per queued packet."""
     flags = _read_json(root / "review" / "flags.json") or {}
     sample = _read_json(root / "review" / "sample.json") or {}
+    expansion = _read_json(root / "review" / "reliability_expansion.json") or {}
     queue: dict[str, list[str]] = {}
     for pid, reasons in flags.items():
         queue.setdefault(pid, []).extend(f"flag:{reason}" for reason in reasons)
     for pid in sample.get("selected") or []:
         queue.setdefault(pid, []).append("stratified_sample")
+    failed_fields = expansion.get("failed_fields") or []
+    for pid in expansion.get("packet_ids") or []:
+        queue.setdefault(pid, []).append(
+            "reliability_expansion:" + ",".join(failed_fields))
     sheets = root / "review" / "sheets"
     sheets.mkdir(parents=True, exist_ok=True)
     with (root / "review" / "queue.jsonl").open("w") as handle:
@@ -150,6 +157,38 @@ def export_review(root: Path) -> dict:
         }
         sheet_path.write_text(json.dumps(sheet, indent=2, sort_keys=True))
     return {"queued": len(queue), "sheets_dir": str(sheets)}
+
+
+def expand_for_reliability(root: Path) -> dict:
+    """Queue every not-yet-human-coded valid packet when a frozen reliability
+    threshold fails. Sheets contain the full label structure, which is a
+    conservative superset of reviewing only the affected variable."""
+    report = _read_json(root / "agreement" / "report.json")
+    if report is None:
+        raise FileNotFoundError(
+            "run `python -m study.coding agreement` before reliability expansion")
+    reliability = report.get("reliability") or {}
+    failed = list(reliability.get("failed_fields") or [])
+    packet_ids = []
+    if failed:
+        for row in read_index(root):
+            if row.get("analysis_included") is not True:
+                continue
+            pid = row["packet_id"]
+            if not (root / "labels" / "human" / f"{pid}.json").exists():
+                packet_ids.append(pid)
+    result = {
+        "failed_fields": failed,
+        "packet_ids": sorted(packet_ids),
+        "requires_full_human_review": bool(failed),
+        "note": ("Full coding sheets are queued as a conservative superset of "
+                 "reviewing only the affected variables."),
+    }
+    out = root / "review"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "reliability_expansion.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True))
+    return result
 
 
 def import_human(root: Path) -> dict:

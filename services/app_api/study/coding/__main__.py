@@ -46,14 +46,17 @@ def main() -> None:
     sub.add_parser("import-human")
     sub.add_parser("finalize")
     sub.add_parser("agreement")
+    sub.add_parser("reliability-expand")
 
     args = parser.parse_args()
     root = _root(args)
 
     if args.command == "packets":
+        from study.session_scope import annotate_analysis_scopes
         from study.storage import get_backend
         backend = get_backend()
-        sessions = backend.list_sessions(args.study_id)
+        sessions = annotate_analysis_scopes(
+            backend.list_sessions(args.study_id), backend.list_runs(args.study_id))
         scenarios = {str(row["id"]): row for row in backend.list_scenarios(args.study_id)}
         _print(packets.write_packets(sessions, _data_root(), args.study_id, scenarios))
     elif args.command == "freeze":
@@ -78,6 +81,10 @@ def main() -> None:
         _print(review.finalize(root))
     elif args.command == "agreement":
         _print(agreement.agreement_report(root))
+    elif args.command == "reliability-expand":
+        expansion = review.expand_for_reliability(root)
+        exported = review.export_review(root)
+        _print({"expansion": expansion, "export": exported})
 
 
 if __name__ == "__main__":

@@ -13,9 +13,20 @@ Tables (empty cell = missing/inapplicable; observed failures are explicit 0):
   units.csv          one row per critical unit per session (delivery +
                      grounding codes, zero-vs-missing semantics preserved)
   repairs.csv        one row per coded repair move
-  turn_events.csv    nominated overlap/barge-in candidates with an empty
-                     `verified` column (manual-verification worksheet; the
-                     method retains these events only after verification)
+  turn_events.csv    one linked row per nominated overlap episode, with
+                     participant barge-in and assistant premature-onset flags
+  turn_verification_queue.csv
+                     included, timing-valid event rows awaiting verification
+  turn_gaps.csv      positive participant-to-assistant and
+                     assistant-to-participant response gaps
+  turn_gap_verification_queue.csv
+                     included, timing-valid gap rows awaiting verification
+  turn_session_review_queue.csv
+                     one full-track review row per eligible session
+  turn_event_manual_additions.csv
+                     template for events missed by automatic nomination
+  vc_quality_regions.csv
+                     one row per route-level VC-quality score
   answers_long.csv   every questionnaire answer in long form
   DATA_DICTIONARY.md column definitions and coding conventions
 
@@ -41,6 +52,9 @@ from study.artifacts import load_manifest_artifact  # noqa: E402
 from study.coding.packets import coding_root  # noqa: E402
 from study.session_scope import annotate_analysis_scopes  # noqa: E402
 from study.storage import get_backend  # noqa: E402
+from study.timing_analysis import (BOUNDARY_CONFIRMATION_STATUS,
+                                   resolve_boundary_validation)  # noqa: E402
+from study.turn_taking import turn_events_from_timing  # noqa: E402
 
 MISSING = ""
 
@@ -131,6 +145,110 @@ def _answers_maps(answers: list[dict]) -> tuple[dict, dict, list[dict]]:
     return by_participant, by_session, long_rows
 
 
+def _vc_quality_rows(sessions: list[dict],
+                     target_refs: dict[str, str | None]) -> list[dict]:
+    """Flatten route-region VC-quality output without collapsing missingness."""
+    rows: list[dict] = []
+    for session in sessions:
+        result = session.get("vc_quality") or {}
+        inputs = result.get("inputs") or {}
+        target = inputs.get("target_audio") or {}
+        region_specs = {
+            int(region["index"]): region
+            for region in inputs.get("regions") or []
+            if region.get("index") is not None and region.get("mode") == "vc"
+        }
+        scores = {
+            int(score["region"]): score.get("metrics") or {}
+            for score in result.get("scores") or []
+            if score.get("region") is not None
+        }
+        # A failed VC session may not have reached input preparation. Preserve
+        # one explicit missing row rather than silently disappearing it.
+        has_vc_route = any(row.get("mode") == "vc"
+                           for row in session.get("schedule") or [])
+        indices = sorted(set(region_specs) | set(scores))
+        if has_vc_route and not indices:
+            indices = [None]
+        unavailable = result.get("unavailable_metrics") or []
+        unavailable_by_region = {
+            (item.get("region"), item.get("metric")): item.get("error")
+            for item in unavailable
+        }
+        for index in indices:
+            region = region_specs.get(index, {}) if index is not None else {}
+            metrics = scores.get(index, {}) if index is not None else {}
+            score_source = region.get("score_source") or {}
+            score_transmitted = region.get("score_transmitted") or {}
+            selection = region.get("score_selection") or {}
+            # Route input offsets are defined on the proxy's fixed 16 kHz
+            # participant-input timeline. Derived WAV records normally carry
+            # the same rate, but the constant is the authoritative fallback.
+            source_rate = ((region.get("source") or {}).get("sample_rate_hz")
+                           or (inputs.get("source_audio") or {}).get("sample_rate_hz")
+                           or 16000)
+            start_sample = region.get("input_start_sample")
+            end_sample = region.get("input_end_sample")
+            rows.append({
+                "session_id": session.get("session_id"),
+                "participant_id": session.get("participant_id"),
+                "condition": session.get("voice_condition"),
+                "analysis_included": session.get("analysis_included"),
+                "canonical_run": session.get("canonical_run"),
+                "canonical_attempt": session.get("canonical_attempt"),
+                "target_ref": target_refs.get(str(session.get("participant_id"))),
+                "target_speaker_id": session.get("target_speaker_id"),
+                "vc_quality_storage_status": session.get("vc_quality_status"),
+                "vc_quality_result_status": result.get("status"),
+                "analysis_id": result.get("analysis_id"),
+                "metric_profile": result.get("metric_profile"),
+                "region_index": index,
+                "route_mode": region.get("mode") or ("vc" if index is not None else None),
+                "input_sample_rate_hz": source_rate,
+                "input_start_sample": start_sample,
+                "input_end_sample": end_sample,
+                "input_start_s": (start_sample / source_rate
+                                  if isinstance(start_sample, (int, float))
+                                  and source_rate else None),
+                "input_end_s": (end_sample / source_rate
+                                if isinstance(end_sample, (int, float))
+                                and source_rate else None),
+                "transmitted_start_sample": region.get("transmitted_start_sample"),
+                "transmitted_end_sample": region.get("transmitted_end_sample"),
+                "inference_windows": region.get("windows"),
+                "stable_guard_s": region.get("stable_guard_s"),
+                "score_selection": selection.get("mode"),
+                "speech_intervals": selection.get("speech_intervals"),
+                "boundary_padding_s": selection.get("boundary_padding_s"),
+                "source_score_duration_s": score_source.get("duration_s"),
+                "transmitted_score_duration_s": score_transmitted.get("duration_s"),
+                "source_score_path": score_source.get("path"),
+                "source_score_sha256": score_source.get("sha256"),
+                "transmitted_score_path": score_transmitted.get("path"),
+                "transmitted_score_sha256": score_transmitted.get("sha256"),
+                "target_path": target.get("path"),
+                "target_sha256": target.get("sha256"),
+                "target_duration_s": target.get("duration_s"),
+                "wer": metrics.get("wer"),
+                "wer_status": metrics.get("wer_status"),
+                "wer_error": (metrics.get("wer_error")
+                              or unavailable_by_region.get((index, "wer"))),
+                "wer_reference_kind": metrics.get("ref_kind"),
+                "sim": metrics.get("sim"),
+                "sim_status": metrics.get("sim_status"),
+                "sim_error": (metrics.get("sim_error")
+                              or unavailable_by_region.get((index, "sim"))),
+                "utmos": metrics.get("utmos"),
+                "utmos_status": metrics.get("utmos_status"),
+                "utmos_error": (metrics.get("utmos_error")
+                                or unavailable_by_region.get((index, "utmos"))),
+                "session_error": result.get("error"),
+                "result_artifact_path": (result.get("result_artifact") or {}).get("path"),
+                "result_artifact_sha256": (result.get("result_artifact") or {}).get("sha256"),
+            })
+    return rows
+
+
 def _analytical_positions(sessions: list[dict]) -> dict[str, int]:
     """Ordinal analytical position (1..4) per session id, from each
     participant's analytical scenario_order slots."""
@@ -151,6 +269,33 @@ def _analytical_positions(sessions: list[dict]) -> dict[str, int]:
         for session in sessions
         if session.get("study_role") != "practice"
     }
+
+
+def _manual_turn_verification_eligible(session: dict, timing: dict) -> bool:
+    """Apply the frozen post-hoc Praat audit to legacy session snapshots.
+
+    Existing technical-validity summaries predate the completed audit and must
+    remain immutable. This analysis-time flag combines their saved clock
+    evidence with the now-frozen validation artifact.
+    """
+    if not timing:
+        return False
+    validity = session.get("technical_validity") or {}
+    integrity = timing.get("integrity") or {}
+    if (validity.get("valid_for_manual_turn_verification") is True
+            or validity.get("valid_for_confirmatory_timing_analysis") is True):
+        return integrity.get("crosswalk_complete") is True
+    reconstruction_valid = validity.get("valid_for_timing_reconstruction")
+    if reconstruction_valid is None:
+        reconstruction_valid = integrity.get("valid_for_timing") is True
+    study = (session.get("config_snapshot") or {}).get("study") or {}
+    settings = study.get("settings") or {}
+    boundary = resolve_boundary_validation(settings.get("timing") or {})
+    return bool(
+        reconstruction_valid
+        and integrity.get("crosswalk_complete") is True
+        and boundary.get("status") == BOUNDARY_CONFIRMATION_STATUS
+    )
 
 
 def _coverage_warnings(coverage: Counter, analytical_count: int) -> list[str]:
@@ -219,6 +364,11 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
 
     # ---- scenarios.csv (analytical sessions, all attempts) ----
     analytical = [s for s in sessions if s.get("study_role") != "practice"]
+    target_refs = {
+        str(participant["participant_id"]): participant.get("target_ref")
+        for participant in participants
+    }
+    vc_quality_rows = _vc_quality_rows(analytical, target_refs)
     # Load each session's timing artifact once; scenarios.csv and turn_events.csv
     # both read it, and one pass keeps the coverage tally per session.
     coverage: Counter = Counter()
@@ -226,6 +376,10 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         str(session["session_id"]):
             (_load_artifact(data_root, session, "timing_latest", coverage) or {})
         for session in analytical
+    }
+    turn_by_session = {
+        sid: turn_events_from_timing(timing)
+        for sid, timing in timing_by_session.items()
     }
     post_keys: list[str] = []
     for session in analytical:
@@ -238,7 +392,33 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         sid = str(session["session_id"])
         validity = session.get("technical_validity") or {}
         timing = timing_by_session.get(sid, {})
+        manual_turn_eligible = _manual_turn_verification_eligible(session, timing)
         timing_summary = timing.get("summary") or {}
+        turn_episodes, response_gaps = turn_by_session.get(sid, ([], []))
+        overlap_candidates = [
+            row for row in turn_episodes if row.get("overlap_200ms_candidate")
+        ]
+        barge_in_candidates = [
+            row for row in turn_episodes
+            if row.get("participant_barge_in_candidate")
+        ]
+        premature_onset_candidates = [
+            row for row in turn_episodes
+            if row.get("assistant_premature_onset_candidate")
+        ]
+        stop_latencies = [
+            float(row["assistant_stop_latency_ms"])
+            for row in barge_in_candidates
+            if row.get("assistant_stop_latency_ms") is not None
+        ]
+        assistant_response_gaps = [
+            row for row in response_gaps
+            if row.get("direction") == "participant_to_assistant"
+        ]
+        participant_response_gaps = [
+            row for row in response_gaps
+            if row.get("direction") == "assistant_to_participant"
+        ]
         integrity = timing.get("integrity") or {}
         capture_gaps = integrity.get("capture_gaps") or {}
         scenario = scenarios.get(str(session.get("scenario_id"))) or {}
@@ -274,15 +454,29 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
                 "valid_for_post_checkpoint_analysis"),
             "valid_for_confirmatory_timing_analysis": validity.get(
                 "valid_for_confirmatory_timing_analysis"),
+            "valid_for_manual_turn_verification": manual_turn_eligible,
             "technical_failure_codes": [f.get("code")
                                         for f in validity.get("failures") or []],
             "participant_speech_intervals": timing_summary.get(
                 "participant_speech_intervals"),
             "assistant_speech_intervals": timing_summary.get(
                 "assistant_speech_intervals"),
-            "overlap_candidates_200ms": timing_summary.get("overlap_events_200ms"),
-            "barge_in_candidates": timing_summary.get("barge_in_attempts"),
-            "mean_stop_latency_ms_candidates": timing_summary.get("mean_stop_latency_ms"),
+            "overlap_candidates_200ms": (
+                len(overlap_candidates) if timing else None),
+            "participant_barge_in_candidates": (
+                len(barge_in_candidates) if timing else None),
+            # Compatibility alias retained for existing analysis notebooks.
+            "barge_in_candidates": (
+                len(barge_in_candidates) if timing else None),
+            "assistant_premature_onset_candidates": (
+                len(premature_onset_candidates) if timing else None),
+            "mean_stop_latency_ms_candidates": (
+                sum(stop_latencies) / len(stop_latencies)
+                if stop_latencies else None),
+            "assistant_response_gap_candidates": (
+                len(assistant_response_gaps) if timing else None),
+            "participant_response_gap_candidates": (
+                len(participant_response_gaps) if timing else None),
             "crosswalk_complete": integrity.get("crosswalk_complete"),
             "capture_gap_total_ms": capture_gaps.get("total_gap_ms"),
             "capture_gap_max_ms": capture_gaps.get("max_gap_ms"),
@@ -309,10 +503,13 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "analysis_included", "analysis_exclusion_reasons", "started_at_unix_s",
         "ended_at_unix_s", "duration_s", "end_reason", "technical_status",
         "valid_for_condition_analysis", "valid_for_post_checkpoint_analysis",
-        "valid_for_confirmatory_timing_analysis", "technical_failure_codes",
+        "valid_for_confirmatory_timing_analysis",
+        "valid_for_manual_turn_verification", "technical_failure_codes",
         "participant_speech_intervals", "assistant_speech_intervals",
-        "overlap_candidates_200ms", "barge_in_candidates",
-        "mean_stop_latency_ms_candidates", "crosswalk_complete",
+        "overlap_candidates_200ms", "participant_barge_in_candidates",
+        "barge_in_candidates", "assistant_premature_onset_candidates",
+        "mean_stop_latency_ms_candidates", "assistant_response_gap_candidates",
+        "participant_response_gap_candidates", "crosswalk_complete",
         "capture_gap_total_ms", "capture_gap_max_ms", "vc_quality_status",
         "outcome_level", "final_account_accuracy", "demonstrated_grounding",
         "false_update_confirmation", "any_repair", "repair_total",
@@ -373,32 +570,178 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
     repair_columns = ["session_id", "participant_id", "condition", "move_index",
                       "category", "utterance_id", "post_boundary", "trouble"]
 
-    # ---- turn_events.csv (candidates awaiting manual verification) ----
-    event_rows = []
+    # ---- directional turn episodes and positive response gaps ----
+    event_rows: list[dict] = []
+    gap_rows: list[dict] = []
     for session in analytical:
         sid = str(session["session_id"])
         timing = timing_by_session.get(sid, {})
-        for kind, events in (("overlap", timing.get("overlaps") or []),
-                             ("barge_in", timing.get("barge_ins") or [])):
-            for i, event in enumerate(events, start=1):
-                event_rows.append({
-                    "session_id": sid,
-                    "participant_id": session.get("participant_id"),
-                    "condition": session.get("voice_condition"),
-                    "event_type": kind,
-                    "event_index": i,
-                    "start_ms": event.get("start_ms"),
-                    "end_ms": event.get("end_ms"),
-                    "duration_ms": event.get("duration_ms"),
-                    "stop_latency_ms": event.get("stop_latency_ms"),
-                    "verified": None,   # fill yes/no after listening to the tracks
-                    "verifier_initials": None,
-                    "verification_note": None,
-                })
-    event_columns = ["session_id", "participant_id", "condition", "event_type",
-                     "event_index", "start_ms", "end_ms", "duration_ms",
-                     "stop_latency_ms", "verified", "verifier_initials",
-                     "verification_note"]
+        integrity = timing.get("integrity") or {}
+        validity = session.get("technical_validity") or {}
+        manual_turn_eligible = _manual_turn_verification_eligible(session, timing)
+        files = session.get("files") or {}
+        common = {
+            "session_id": sid,
+            "participant_id": session.get("participant_id"),
+            "condition": session.get("voice_condition"),
+            "analysis_included": session.get("analysis_included"),
+            "valid_for_confirmatory_timing_analysis": validity.get(
+                "valid_for_confirmatory_timing_analysis"),
+            "valid_for_manual_turn_verification": manual_turn_eligible,
+            "crosswalk_complete": integrity.get("crosswalk_complete"),
+            "participant_raw_path": files.get("participant_raw"),
+            "assistant_model_path": files.get("model"),
+        }
+        episodes, response_gaps = turn_by_session.get(sid, ([], []))
+        for event in episodes:
+            if not any((event.get("overlap_200ms_candidate"),
+                        event.get("participant_barge_in_candidate"),
+                        event.get("assistant_premature_onset_candidate"))):
+                continue
+            event_rows.append({
+                **common,
+                "episode_id": event.get("episode_id"),
+                "participant_interval": event.get("participant_interval"),
+                "assistant_interval": event.get("assistant_interval"),
+                "initiator": event.get("initiator"),
+                "participant_onset_ms": event.get("participant_onset_ms"),
+                "participant_offset_ms": event.get("participant_offset_ms"),
+                "assistant_onset_ms": event.get("assistant_onset_ms"),
+                "assistant_offset_ms": event.get("assistant_offset_ms"),
+                "overlap_start_ms": event.get("overlap_start_ms"),
+                "overlap_end_ms": event.get("overlap_end_ms"),
+                "overlap_duration_ms": event.get("overlap_duration_ms"),
+                "overlap_200ms_candidate": event.get(
+                    "overlap_200ms_candidate"),
+                "participant_barge_in_candidate": event.get(
+                    "participant_barge_in_candidate"),
+                "assistant_premature_onset_candidate": event.get(
+                    "assistant_premature_onset_candidate"),
+                "assistant_stop_latency_ms_candidate": event.get(
+                    "assistant_stop_latency_ms"),
+                "participant_stop_latency_ms_candidate": event.get(
+                    "participant_stop_latency_ms"),
+                "legacy_reconstruction": event.get("legacy_reconstruction", False),
+                # Manual decisions are deliberately empty. Onset direction is
+                # automatic; yielding/disruption require listening.
+                "verified_overlap": None,
+                "verified_participant_barge_in": None,
+                "verified_assistant_premature_onset": None,
+                "successful_assistant_yielding": None,
+                "disruptive_assistant_interruption": None,
+                "verified_assistant_stop_latency_ms": None,
+                "verified_participant_stop_latency_ms": None,
+                "verifier_initials": None,
+                "verification_note": None,
+            })
+        for gap in response_gaps:
+            gap_rows.append({
+                **common,
+                **gap,
+                "verified_positive_gap": None,
+                "verified_gap_start_ms": None,
+                "verified_gap_end_ms": None,
+                "verified_gap_duration_ms": None,
+                "verifier_initials": None,
+                "verification_note": None,
+            })
+    event_columns = [
+        "session_id", "participant_id", "condition", "analysis_included",
+        "valid_for_confirmatory_timing_analysis",
+        "valid_for_manual_turn_verification", "crosswalk_complete",
+        "participant_raw_path", "assistant_model_path",
+        "episode_id", "participant_interval", "assistant_interval", "initiator",
+        "participant_onset_ms", "participant_offset_ms", "assistant_onset_ms",
+        "assistant_offset_ms", "overlap_start_ms", "overlap_end_ms",
+        "overlap_duration_ms", "overlap_200ms_candidate",
+        "participant_barge_in_candidate", "assistant_premature_onset_candidate",
+        "assistant_stop_latency_ms_candidate",
+        "participant_stop_latency_ms_candidate", "legacy_reconstruction",
+        "verified_overlap", "verified_participant_barge_in",
+        "verified_assistant_premature_onset", "successful_assistant_yielding",
+        "disruptive_assistant_interruption", "verified_assistant_stop_latency_ms",
+        "verified_participant_stop_latency_ms", "verifier_initials",
+        "verification_note",
+    ]
+    gap_columns = [
+        "session_id", "participant_id", "condition", "analysis_included",
+        "valid_for_confirmatory_timing_analysis",
+        "valid_for_manual_turn_verification", "crosswalk_complete",
+        "participant_raw_path", "assistant_model_path",
+        "gap_id", "direction", "from_speaker", "to_speaker", "from_interval",
+        "to_interval", "gap_start_ms", "gap_end_ms", "gap_duration_ms",
+        "schema", "verified_positive_gap", "verified_gap_start_ms",
+        "verified_gap_end_ms", "verified_gap_duration_ms",
+        "verifier_initials", "verification_note",
+    ]
+    verification_rows = [
+        row for row in event_rows
+        if (row.get("analysis_included")
+            and row.get("valid_for_manual_turn_verification")
+            and row.get("crosswalk_complete"))
+    ]
+    gap_verification_rows = [
+        row for row in gap_rows
+        if (row.get("analysis_included")
+            and row.get("valid_for_manual_turn_verification")
+            and row.get("crosswalk_complete"))
+    ]
+    session_review_rows = []
+    for session in analytical:
+        sid = str(session["session_id"])
+        timing = timing_by_session.get(sid, {})
+        integrity = timing.get("integrity") or {}
+        if not (session.get("analysis_included")
+                and _manual_turn_verification_eligible(session, timing)
+                and integrity.get("crosswalk_complete")):
+            continue
+        files = session.get("files") or {}
+        session_review_rows.append({
+            "session_id": sid,
+            "participant_id": session.get("participant_id"),
+            "condition": session.get("voice_condition"),
+            "participant_raw_path": files.get("participant_raw"),
+            "assistant_model_path": files.get("model"),
+            "full_session_reviewed": None,
+            "additional_event_count": None,
+            "verifier_initials": None,
+            "verification_note": None,
+        })
+    session_review_columns = [
+        "session_id", "participant_id", "condition", "participant_raw_path",
+        "assistant_model_path", "full_session_reviewed",
+        "additional_event_count", "verifier_initials", "verification_note",
+    ]
+    manual_addition_columns = [
+        "session_id", "participant_id", "condition", "manual_event_id",
+        "participant_onset_ms", "participant_offset_ms", "assistant_onset_ms",
+        "assistant_offset_ms", "overlap_start_ms", "overlap_end_ms",
+        "overlap_duration_ms", "verified_overlap",
+        "verified_participant_barge_in",
+        "verified_assistant_premature_onset", "successful_assistant_yielding",
+        "disruptive_assistant_interruption",
+        "verified_assistant_stop_latency_ms",
+        "verified_participant_stop_latency_ms", "verifier_initials",
+        "verification_note",
+    ]
+    vc_quality_columns = [
+        "session_id", "participant_id", "condition", "analysis_included",
+        "canonical_run", "canonical_attempt", "target_ref",
+        "target_speaker_id", "vc_quality_storage_status",
+        "vc_quality_result_status", "analysis_id", "metric_profile",
+        "region_index", "route_mode", "input_sample_rate_hz",
+        "input_start_sample", "input_end_sample", "input_start_s", "input_end_s",
+        "transmitted_start_sample", "transmitted_end_sample", "inference_windows",
+        "stable_guard_s", "score_selection", "speech_intervals",
+        "boundary_padding_s", "source_score_duration_s",
+        "transmitted_score_duration_s", "source_score_path",
+        "source_score_sha256", "transmitted_score_path",
+        "transmitted_score_sha256", "target_path", "target_sha256",
+        "target_duration_s", "wer", "wer_status", "wer_error",
+        "wer_reference_kind", "sim", "sim_status", "sim_error", "utmos",
+        "utmos_status", "utmos_error", "session_error",
+        "result_artifact_path", "result_artifact_sha256",
+    ]
 
     answer_columns = ["participant_id", "run_id", "session_id", "kind",
                       "question_id", "value", "answered_at_unix_s"]
@@ -409,6 +752,17 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
     _write_csv(out_dir / "units.csv", unit_rows, unit_columns)
     _write_csv(out_dir / "repairs.csv", repair_rows, repair_columns)
     _write_csv(out_dir / "turn_events.csv", event_rows, event_columns)
+    _write_csv(out_dir / "turn_verification_queue.csv", verification_rows,
+               event_columns)
+    _write_csv(out_dir / "turn_gaps.csv", gap_rows, gap_columns)
+    _write_csv(out_dir / "turn_gap_verification_queue.csv",
+               gap_verification_rows, gap_columns)
+    _write_csv(out_dir / "turn_session_review_queue.csv", session_review_rows,
+               session_review_columns)
+    _write_csv(out_dir / "turn_event_manual_additions.csv", [],
+               manual_addition_columns)
+    _write_csv(out_dir / "vc_quality_regions.csv", vc_quality_rows,
+               vc_quality_columns)
     _write_csv(out_dir / "answers_long.csv", long_rows, answer_columns)
     (out_dir / "DATA_DICTIONARY.md").write_text(_data_dictionary(study))
 
@@ -430,6 +784,29 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "unit_rows": len(unit_rows),
         "repair_rows": len(repair_rows),
         "turn_event_candidates": len(event_rows),
+        "turn_verification_candidates": len(verification_rows),
+        "turn_gap_verification_candidates": len(gap_verification_rows),
+        "turn_sessions_requiring_full_review": len(session_review_rows),
+        "overlap_200ms_candidates": sum(
+            bool(row.get("overlap_200ms_candidate")) for row in event_rows),
+        "participant_barge_in_candidates": sum(
+            bool(row.get("participant_barge_in_candidate")) for row in event_rows),
+        "assistant_premature_onset_candidates": sum(
+            bool(row.get("assistant_premature_onset_candidate"))
+            for row in event_rows),
+        "positive_response_gap_candidates": len(gap_rows),
+        "vc_quality_region_rows": len(vc_quality_rows),
+        "vc_quality_complete_region_rows": sum(
+            row.get("wer_status") == "complete"
+            and row.get("sim_status") == "complete"
+            and row.get("utmos_status") == "complete"
+            for row in vc_quality_rows),
+        "vc_quality_included_incomplete_sessions": len({
+            str(row["session_id"])
+            for row in vc_quality_rows
+            if (row.get("analysis_included")
+                and row.get("vc_quality_result_status") != "complete")
+        }),
         "generated_at_unix_s": time.time(),
     }
     (out_dir / "export_summary.json").write_text(
@@ -458,10 +835,14 @@ submitted run, canonical attempt, technically valid); the sensitivity
 analysis additionally drops participants having any attempt with
 `valid_for_condition_analysis == 0`. `analytical_position` is the 1-4
 ordinal position among the participant's analytical scenarios.
-`overlap_candidates_200ms`, `barge_in_candidates`, and
-`mean_stop_latency_ms_candidates` are AUTOMATIC nominations only — the
-method retains such events solely after manual verification
-(turn_events.csv). Coded outcome columns are merged from the coding
+`overlap_candidates_200ms`, `participant_barge_in_candidates`,
+`assistant_premature_onset_candidates`, and stop-latency values are automatic
+nominations only. Participant barge-in means participant speech began while
+the assistant was speaking; assistant premature onset is the reverse.
+`assistant_response_gap_candidates` and `participant_response_gap_candidates`
+count positive, silence-bounded speaker changes. The method retains nominated
+overlap, directional onset, and stop-latency events only after manual
+verification. Coded outcome columns are merged from the coding
 pipeline's final labels and stay empty until `python -m study.coding
 finalize` has run: `outcome_level` (1-4), `demonstrated_grounding`
 (both units incorporated AND retained), `false_update_confirmation`
@@ -488,10 +869,51 @@ One row per coded repair move. `post_boundary` uses the same boundary as
 `repair_post_boundary` above.
 
 ## turn_events.csv
-Overlap/barge-in candidates nominated by the timing analysis. Fill
-`verified` (yes/no), `verifier_initials`, and `verification_note` while
-listening to the raw-participant and assistant tracks; only verified events
-enter the analysis.
+One row per linked participant/assistant overlap episode. The automatic flags
+separate neutral overlap (at least 200 ms), participant-initiated barge-in, and
+assistant-initiated premature onset without duplicating one episode across
+rows. Fill the applicable `verified_*` fields while listening to the
+raw-participant and assistant tracks. `successful_assistant_yielding` applies
+only to verified participant barge-ins and records whether the assistant ceded
+the floor. `disruptive_assistant_interruption` applies only to verified
+assistant premature onsets and records whether that onset cut off or disrupted
+the participant. These are manual judgments, not threshold-derived labels.
+`participant_raw_path` and `assistant_model_path` identify the two tracks to
+inspect. Only verified measures enter confirmatory analysis.
+
+## turn_verification_queue.csv
+The subset of `turn_events.csv` belonging to canonical, analysis-included
+sessions that are eligible for manual turn verification and have a complete
+browser capture/playback crosswalk. This is the worksheet to annotate; the
+full event table remains an audit trail for excluded and superseded attempts.
+
+## turn_gaps.csv
+Positive silence gaps at unambiguous speaker changes. Direction is
+`participant_to_assistant` for assistant response gaps and
+`assistant_to_participant` for participant response gaps. These are derived
+from the same participant-experienced browser clock as the overlap episodes.
+The verification queue carries empty `verified_*` fields for manual review.
+
+## turn_session_review_queue.csv / turn_event_manual_additions.csv
+Every timing-eligible included session receives a full-track review row. This
+review is the false-negative check for events not nominated automatically.
+Record the number of missed events and add them to the additions table. Run
+`python -m study.turn_verification --dataset <export-dir>` after all event,
+gap, and session-review rows are complete. The command validates applicable
+fields, preserves input hashes, and writes adjudicated and verified outputs;
+automatic candidates never become final outcomes merely by being present.
+
+## vc_quality_regions.csv
+One row per converted route region in every analytical attempt. Failed or
+partial scoring remains visible as an explicit row with status/error fields and
+empty metric cells. `WER` compares the converted-region ASR with raw-source ASR
+for the same participant speech (`wer_reference_kind` records that provenance);
+`SIM` compares converted speech with the participant's frozen target voice; and
+`UTMOS` estimates converted-speech naturalness. Input offsets are samples on the
+16 kHz proxy input timeline. `score_selection`, speech-interval count, guard,
+paths, and SHA-256 hashes identify the exact derived audio scored. Filter
+`analysis_included == 1` for the canonical condition analysis, and report
+metric-specific missingness rather than treating unavailable scores as zero.
 
 ## answers_long.csv
 Every questionnaire answer (all kinds) in long form, one row per question.

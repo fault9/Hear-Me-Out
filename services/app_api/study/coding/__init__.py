@@ -10,6 +10,9 @@ Subcommands (run from services/app_api, under the app-api venv):
     python -m study.coding import-human                  ingest filled sheets
     python -m study.coding finalize                      merge to final labels
     python -m study.coding agreement                     judge-vs-human stats
+    python -m study.coding reliability-expand            queue all remaining
+                                                         packets if a frozen
+                                                         threshold failed
 
 All state lives under STUDY_DATA_ROOT/coding/study<id>/ so the pipeline runs
 against a copied data root on any machine.

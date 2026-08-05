@@ -16,6 +16,13 @@ from .packets import read_index
 
 BINARY_UNIT_FIELDS = ("attempted", "complete_raw", "acknowledgement",
                       "update_claim", "incorporation", "retention")
+RELIABILITY_THRESHOLDS = {
+    "minimum_raw_agreement": 0.80,
+    "minimum_kappa": 0.60,
+    "minimum_raw_agreement_when_kappa_undefined": 0.90,
+    "minimum_weighted_kappa": 0.60,
+    "minimum_icc_2_1": 0.75,
+}
 
 
 def raw_agreement(pairs: list[tuple]) -> float | None:
@@ -94,6 +101,67 @@ def _load_labels(root: Path, role: str, packet_id: str) -> dict | None:
     return record.get("labels")
 
 
+def _categorical_reliability(metrics: dict) -> dict:
+    raw = metrics.get("raw_agreement")
+    kappa = metrics.get("kappa")
+    reasons = []
+    if not metrics.get("n"):
+        reasons.append("no_double_coded_observations")
+    elif raw is None or raw < RELIABILITY_THRESHOLDS["minimum_raw_agreement"]:
+        reasons.append("raw_agreement_below_threshold")
+    if metrics.get("n"):
+        if kappa is None:
+            if (raw is None or raw < RELIABILITY_THRESHOLDS[
+                    "minimum_raw_agreement_when_kappa_undefined"]):
+                reasons.append("kappa_undefined_without_high_raw_agreement")
+        elif kappa < RELIABILITY_THRESHOLDS["minimum_kappa"]:
+            reasons.append("kappa_below_threshold")
+    return {**metrics, "reliable": not reasons, "reasons": reasons}
+
+
+def assess_reliability(report: dict) -> dict:
+    """Apply the frozen expansion thresholds before adjudication."""
+    fields: dict[str, dict] = {}
+    for field, metrics in (report.get("unit_labels") or {}).items():
+        fields[f"units.{field}"] = _categorical_reliability(metrics)
+    fields["final_account_accuracy"] = _categorical_reliability(
+        report.get("final_account_accuracy") or {})
+    fields["any_repair"] = _categorical_reliability(
+        report.get("any_repair") or {})
+
+    outcome = dict(report.get("outcome_level") or {})
+    outcome_reasons = []
+    if not outcome.get("n"):
+        outcome_reasons.append("no_double_coded_observations")
+    elif (outcome.get("weighted_kappa_linear") is None
+          or outcome["weighted_kappa_linear"] <
+          RELIABILITY_THRESHOLDS["minimum_weighted_kappa"]):
+        outcome_reasons.append("weighted_kappa_below_threshold")
+    fields["outcome_level"] = {
+        **outcome, "reliable": not outcome_reasons,
+        "reasons": outcome_reasons,
+    }
+
+    repair = dict(report.get("repair_total") or {})
+    repair_reasons = []
+    if not repair.get("n"):
+        repair_reasons.append("no_double_coded_observations")
+    elif (repair.get("icc_2_1") is None
+          or repair["icc_2_1"] < RELIABILITY_THRESHOLDS["minimum_icc_2_1"]):
+        repair_reasons.append("icc_below_threshold")
+    fields["repair_total"] = {
+        **repair, "reliable": not repair_reasons, "reasons": repair_reasons,
+    }
+    failed = sorted(field for field, value in fields.items()
+                    if not value["reliable"])
+    return {
+        "thresholds": RELIABILITY_THRESHOLDS,
+        "fields": fields,
+        "failed_fields": failed,
+        "requires_full_human_review": bool(failed),
+    }
+
+
 def agreement_report(root: Path) -> dict:
     """Compare judge and human labels on every packet that has both.
     Reported BEFORE adjudication (final labels are not consulted)."""
@@ -157,6 +225,7 @@ def agreement_report(root: Path) -> dict:
             "kappa": cohen_kappa(any_repair_pairs),
         },
     }
+    report["reliability"] = assess_reliability(report)
     out_dir = root / "agreement"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True))

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from . import prompts
+from .agreement import RELIABILITY_THRESHOLDS
 from .schema import CONFIDENCE_FLAG_THRESHOLD, SCHEMA_VERSION
 
 _FINGERPRINT_PACKET = {
@@ -40,6 +41,7 @@ def materials_fingerprint() -> dict:
         "verifier_system_sha256": _sha(prompts.verifier_system_prompt()),
         "schema_version": SCHEMA_VERSION,
         "confidence_flag_threshold": CONFIDENCE_FLAG_THRESHOLD,
+        "reliability_thresholds": RELIABILITY_THRESHOLDS,
     }
 
 
