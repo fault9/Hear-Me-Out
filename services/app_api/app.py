@@ -28,6 +28,21 @@ else:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+class _QuietSuccessfulPolls(logging.Filter):
+    """Drop access-log lines for SUCCESSFUL admin status polls (the dashboard
+    refreshes these every few seconds). Failures always log."""
+    _NOISY = ("/runs ", "/analyze/status", "/vc-quality/status", "/run/prepare/status")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if not any(path in message for path in self._NOISY):
+            return True
+        return '" 200' not in message and " 200 " not in message
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietSuccessfulPolls())
+
 # This file lives at <repo>/services/app_api/app.py, so the repo root is parents[2].
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # Make the shared `common` package (OpenTelemetry bootstrap) importable.

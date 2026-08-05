@@ -31,7 +31,7 @@ export function StudyEditor({ token, studyId, onBack }: {
       } catch { /* header indicator is best-effort */ }
     }
     check()
-    const t = setInterval(check, 15000)
+    const t = setInterval(() => { if (!document.hidden) check() }, 30000)
     return () => { stop = true; clearInterval(t) }
   }, [token, studyId])
 
