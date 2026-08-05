@@ -20,17 +20,42 @@ args <- commandArgs(trailingOnly = TRUE)
 permute <- "--permute" %in% args
 confirmatory <- "--confirmatory" %in% args
 amended <- "--amended" %in% args
+sensitivity <- "--complete-technical-sensitivity" %in% args
 if (!xor(permute, confirmatory)) {
   stop("pass exactly one of --permute or --confirmatory")
+}
+if (amended && sensitivity) {
+  stop("--amended and --complete-technical-sensitivity are separate analysis frames")
 }
 
 here <- dirname(sub("--file=", "", grep("--file=", commandArgs(), value = TRUE)))
 frames <- file.path(here, "output", "frames")
-frame_file <- if (amended) "scenario_level_amended.csv" else "scenario_level.csv"
+frame_file <- if (amended) {
+  "scenario_level_amended.csv"
+} else if (sensitivity) {
+  "scenario_level_sensitivity_complete_technical.csv"
+} else {
+  "scenario_level.csv"
+}
 dat <- read.csv(file.path(frames, frame_file), stringsAsFactors = FALSE)
 if (amended) cat("(amended frame: includes sessions admitted per analysis/amendments.json)\n")
+if (sensitivity) cat("(sensitivity frame: excludes participants with any technically invalid analytical attempt)\n")
 
-dat$grounding <- as.integer(dat$demonstrated_grounding %in% c("1", "true", "True", "TRUE"))
+parse_binary <- function(values, field) {
+  text <- tolower(trimws(as.character(values)))
+  result <- rep(NA_integer_, length(text))
+  result[text %in% c("1", "true", "yes")] <- 1L
+  result[text %in% c("0", "false", "no")] <- 0L
+  invalid <- !is.na(text) & nzchar(text) & is.na(result)
+  if (any(invalid)) {
+    stop(sprintf("%s contains invalid non-missing value(s): %s", field,
+                 paste(unique(text[invalid]), collapse = ", ")))
+  }
+  result
+}
+
+dat$grounding <- parse_binary(dat$demonstrated_grounding,
+                              "demonstrated_grounding")
 dat$repairs_post <- suppressWarnings(as.integer(dat$repair_post_boundary))
 dat$participant_id <- factor(dat$participant_id)
 dat$scenario_title <- factor(dat$scenario_title)
@@ -87,7 +112,11 @@ for (name in names(contrasts)) {
   sub$reference <- pair[["reference"]]
   sub <- sub[!is.na(sub$position), ]
   for (outcome in c("grounding", "repairs_post")) {
-    keep <- if (outcome == "repairs_post") !is.na(sub$repairs_post) else rep(TRUE, nrow(sub))
+    keep <- if (outcome == "repairs_post") {
+      !is.na(sub$repairs_post)
+    } else {
+      !is.na(sub$grounding)
+    }
     fit <- tryCatch(fit_one(sub[keep, ], outcome),
                     error = function(e) list(estimate = NA, se = NA, p = NA,
                                              model = paste("FAILED:", conditionMessage(e)),
@@ -96,7 +125,7 @@ for (name in names(contrasts)) {
       contrast = sprintf("%s: %s vs %s", name, pair[["treated"]], pair[["reference"]]),
       outcome = outcome, model = fit$model, estimate = fit$estimate,
       se = fit$se, p = fit$p, n_obs = fit$n,
-      n_participants = length(unique(sub$participant_id)),
+      n_participants = length(unique(sub$participant_id[keep])),
       permuted = permute))
   }
 }
@@ -104,6 +133,7 @@ for (name in names(contrasts)) {
 results$p_holm <- p.adjust(results$p, method = "holm")
 stem <- if (permute) "smoke_results" else "confirmatory_results"
 if (amended) stem <- paste0(stem, "_amended")
+if (sensitivity) stem <- paste0(stem, "_sensitivity_complete_technical")
 out <- file.path(here, "output", paste0(stem, ".csv"))
 dir.create(dirname(out), showWarnings = FALSE, recursive = TRUE)
 write.csv(results, out, row.names = FALSE)

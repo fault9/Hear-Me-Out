@@ -24,6 +24,14 @@ with participant random intercepts throughout.
 3. Smoke test (any time): `Rscript models.R --permute`
 4. Final confirmatory run (once): `Rscript models.R --confirmatory`
    Results land in `output/confirmatory_results.csv`.
+5. Prespecified technical-completeness sensitivity:
+   `Rscript models.R --confirmatory --complete-technical-sensitivity`.
+
+Blank coded outcomes remain missing throughout frame preparation and model
+fitting. In particular, a missing `demonstrated_grounding` value is never
+converted to a grounding failure. `prep.py` also writes the participant IDs
+excluded by the sensitivity rule to
+`output/frames/sensitivity_complete_technical.json`.
 
 Requires R with: lme4, glmmTMB, ordinal. Install once in R:
 `install.packages(c("lme4", "glmmTMB", "ordinal"))`

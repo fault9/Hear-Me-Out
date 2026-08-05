@@ -78,6 +78,30 @@ def main():
     write_frame("scenario_level.csv", included, SCENARIO_KEEP)
     write_frame("scenario_level_amended.csv", included + admitted, SCENARIO_KEEP)
 
+    # Prespecified sensitivity analysis: remove a participant entirely when
+    # any retained analytical attempt was technically invalid. Pending or
+    # missing evaluations are reported separately and are never treated as
+    # either valid or invalid by this rule.
+    invalid_participants = {
+        row["participant_id"] for row in scenarios
+        if str(row.get("valid_for_condition_analysis")).strip().lower()
+        in ("0", "false", "no")
+    }
+    sensitivity = [row for row in included
+                   if row["participant_id"] not in invalid_participants]
+    write_frame("scenario_level_sensitivity_complete_technical.csv",
+                sensitivity, SCENARIO_KEEP)
+    os.makedirs(OUT, exist_ok=True)
+    with open(os.path.join(OUT, "sensitivity_complete_technical.json"), "w",
+              encoding="utf-8") as handle:
+        json.dump({
+            "rule": ("exclude every participant with any analytical attempt "
+                     "where valid_for_condition_analysis is explicitly false"),
+            "excluded_participant_ids": sorted(invalid_participants),
+            "primary_rows": len(included),
+            "sensitivity_rows": len(sensitivity),
+        }, handle, indent=2, sort_keys=True)
+
     units = read_rows("units.csv")
     keep_ids = {r["session_id"] for r in included}
     amended_ids = keep_ids | {r["session_id"] for r in admitted}
@@ -85,6 +109,10 @@ def main():
                 [u for u in units if u["session_id"] in keep_ids], UNIT_KEEP)
     write_frame("unit_level_amended.csv",
                 [u for u in units if u["session_id"] in amended_ids], UNIT_KEEP)
+    sensitivity_ids = {row["session_id"] for row in sensitivity}
+    write_frame("unit_level_sensitivity_complete_technical.csv",
+                [u for u in units if u["session_id"] in sensitivity_ids],
+                UNIT_KEEP)
 
     by_participant = {}
     for r in included:
