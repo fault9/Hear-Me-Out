@@ -4,15 +4,15 @@ Reports quality and self-report distributions POOLED ACROSS CONDITIONS from
 the scenario-level frame. The condition column is dropped after design
 bookkeeping so nothing here can reveal a contrast.
 
-Usage: python3 descriptives.py
+Usage: python3 descriptives.py [--amended]
 """
 
+import argparse
 import csv
 import os
 from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FRAME = os.path.join(HERE, "output", "frames", "scenario_level.csv")
 
 LIKERT = ["post_effort", "post_frustration", "post_trust",
           "post_outcome_confidence", "post_finish_communicating",
@@ -22,10 +22,21 @@ CATEGORICAL = ["post_misunderstood", "post_self_reported_outcome",
 
 
 def main():
-    with open(FRAME, newline="", encoding="utf-8") as handle:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--amended",
+        action="store_true",
+        help="include sessions admitted by the frozen content amendment",
+    )
+    args = parser.parse_args()
+    frame_name = (
+        "scenario_level_amended.csv" if args.amended else "scenario_level.csv")
+    frame = os.path.join(HERE, "output", "frames", frame_name)
+    with open(frame, newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
 
     participants = {r["participant_id"] for r in rows}
+    print("analysis frame:", "amended content" if args.amended else "primary")
     per_condition = Counter(r["condition"] for r in rows)
     print(f"sessions: {len(rows)} | participants: {len(participants)}")
     print("design bookkeeping (n per condition, no outcomes):",
