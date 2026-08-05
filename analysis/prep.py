@@ -22,7 +22,9 @@ SCENARIO_KEEP = [
     "repair_post_boundary", "any_repair", "outcome_level",
     "final_account_accuracy", "false_update_confirmation", "duration_s",
     "valid_for_condition_analysis", "post_effort", "post_frustration",
-    "post_trust", "post_outcome_confidence",
+    "post_trust", "post_outcome_confidence", "post_finish_communicating",
+    "post_final_response_accurate", "post_misunderstood",
+    "post_self_reported_outcome", "post_wanted_to_end",
 ]
 
 UNIT_KEEP = [
