@@ -194,7 +194,13 @@ def main() -> None:
                 if force or _needs_preprocessing(s):
                     # Refresh after preprocessing because it updates the DB row.
                     s = backend.get_session(s["session_id"]) or s
-                if force or _needs_timing(s):
+                if not (s.get("files") or {}).get("participant_raw"):
+                    # Died-at-connect attempts never captured audio; timing can
+                    # never be reconstructed, so record why instead of raising
+                    # the same KeyError on every pass.
+                    stage_errors["timing"] = "raw microphone audio was never captured"
+                    timing = _latest_analysis_result(s, "timing_latest")
+                elif force or _needs_timing(s):
                     timing = prepare_timing_analysis(s, STUDY_DATA_DIR, analysis_id)
                     latest = backend.get_session(s["session_id"]) or s
                     manifest = copy.deepcopy(latest.get("artifact_manifest") or {})
