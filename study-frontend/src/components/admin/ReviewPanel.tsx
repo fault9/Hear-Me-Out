@@ -297,6 +297,17 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <Badge variant="secondary">{done} / {events.length} verified</Badge>
         <span className="text-muted-foreground">item {index + 1} · {exportName}</span>
+        <Button size="sm" variant="secondary" disabled={busy}
+          onClick={async () => {
+            setBusy(true); setErr(null)
+            try {
+              await adminApi.download(token, adminApi.datasetUrl(studyId),
+                                      `study${studyId}_dataset.zip`)
+            } catch (e: any) { setErr(e?.message || String(e)) }
+            finally { setBusy(false) }
+          }}>
+          Download dataset
+        </Button>
         <span className="ml-auto text-xs text-muted-foreground">
           space = play/pause · enter = save
         </span>
