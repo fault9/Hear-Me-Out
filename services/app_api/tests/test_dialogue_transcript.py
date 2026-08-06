@@ -23,8 +23,6 @@ class DialogueTranscriptTests(unittest.TestCase):
             relative = Path("sessions/test/participant_raw.wav")
             raw_path = root / relative
             self._write_wav(raw_path)
-            model_relative = Path("sessions/test/model.wav")
-            self._write_wav(root / model_relative)
             (raw_path.parent / "client_timeline.json").write_text(json.dumps({
                 "capture": {"chunks": [{
                     "chunk_sequence": 1,
@@ -40,8 +38,7 @@ class DialogueTranscriptTests(unittest.TestCase):
                     {"mode": "natural", "start_s": 0, "end_s": 1.5},
                     {"mode": "vc", "start_s": 1.5, "end_s": None},
                 ],
-                "files": {"participant_raw": str(relative),
-                          "model": str(model_relative)},
+                "files": {"participant_raw": str(relative)},
                 "transcript": {"model": [
                     {"text": "Lead in.", "start": 1.85, "end": 1.95,
                      "speaker": "personaplex"},
@@ -73,8 +70,7 @@ class DialogueTranscriptTests(unittest.TestCase):
 
             def transcribe(path: str) -> dict:
                 calls.append(path)
-                speaker = "Assistant" if "assistant" in path else "Participant"
-                return {"text": f"{speaker} utterance {len(calls)}.",
+                return {"text": f"Participant utterance {len(calls)}.",
                         "segments": [], "status": "complete", "error": None}
 
             result = prepare_dialogue_transcript(
@@ -82,41 +78,28 @@ class DialogueTranscriptTests(unittest.TestCase):
 
             self.assertEqual(result["schema"], DIALOGUE_TRANSCRIPT_SCHEMA)
             self.assertEqual(result["status"], "complete")
-            self.assertEqual(len(calls), 3)  # two participant + one assistant
+            self.assertEqual(len(calls), 2)
             self.assertEqual([row["speaker"] for row in result["utterances"]],
-                             ["participant", "assistant", "participant"])
+                             ["participant", "assistant", "assistant", "participant"])
+            self.assertEqual([row["text"] for row in result["utterances"][1:3]],
+                             ["Lead in.", "Assistant reply."])
             first = result["utterances"][0]
             self.assertEqual((first["start_ms"], first["end_ms"]), (1100.0, 1900.0))
             self.assertEqual(first["voice_mode"], "mixed")
             self.assertEqual([row["mode"] for row in first["route_segments"]],
                              ["natural", "vc"])
             self.assertEqual(first["text_provenance"]["wav_start_ms"], 800.0)
-            # Assistant text now comes from ASR of its own audio, so it is
-            # anchored to the interval rather than to the model's estimated
-            # fragment times. The model's own text is kept for comparison.
-            assistant = result["utterances"][1]
-            self.assertTrue(assistant["text"].startswith("Assistant utterance"))
-            provenance = assistant["text_provenance"]
-            self.assertEqual(provenance["source"], "model.wav")
-            self.assertEqual(provenance["browser_clock_origin_ms"], 0.0)
-            self.assertEqual(provenance["model_text"], "Lead in. Assistant reply.")
-            self.assertEqual(provenance["model_fragment_count"], 2)
             artifact = root / result["result_artifact"]["path"]
             self.assertTrue(artifact.exists())
             persisted = json.loads(artifact.read_text())
             self.assertNotIn("result_artifact", persisted)
 
 
-    def test_assistant_text_follows_the_audio_not_the_model_clock(self):
-        """The model merges text across its own pauses and back-computes a
-        start from word count, so a fragment can sit seconds from the turn it
-        belongs to. Placement must come from the audio."""
+    def test_model_text_is_carried_verbatim_and_in_order(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            relative = Path("sessions/drift/participant_raw.wav")
-            model_relative = Path("sessions/drift/model.wav")
+            relative = Path("sessions/paused/participant_raw.wav")
             self._write_wav(root / relative, 40.0)
-            self._write_wav(root / model_relative, 40.0)
             (root / relative).parent.joinpath("client_timeline.json").write_text(
                 json.dumps({"capture": {"chunks": [
                     {"chunk_sequence": 1, "capture_start_sample": 0,
@@ -125,12 +108,14 @@ class DialogueTranscriptTests(unittest.TestCase):
                 "session_id": "P1_R01_S02_A01",
                 "voice_condition": "stable_natural",
                 "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
-                "files": {"participant_raw": str(relative),
-                          "model": str(model_relative)},
-                # One merged fragment, timed where neither turn actually is.
+                "files": {"participant_raw": str(relative)},
+                # The model pauses mid-utterance, so one fragment spans two of
+                # its speech intervals and the next is timed before it.
                 "transcript": {"model": [
                     {"text": "One moment please while I Okay, I see your case.",
                      "start": 29.04, "end": 32.74, "speaker": "personaplex"},
+                    {"text": "Your claim was declined.", "start": 23.10,
+                     "end": 38.90, "speaker": "personaplex"},
                 ]},
             }
             timing = {
@@ -147,24 +132,20 @@ class DialogueTranscriptTests(unittest.TestCase):
                 "result_artifact": {"path": "analysis/timing/timing.json"},
             }
 
-            def transcribe(path: str) -> dict:
-                name = Path(path).stem
-                return {"text": f"spoken at {name}", "segments": [],
+            def transcribe(_path: str) -> dict:
+                return {"text": "Participant utterance.", "segments": [],
                         "status": "complete", "error": None}
 
             result = prepare_dialogue_transcript(
                 session, root, "analysis-2", timing, transcribe)
 
-            assistants = [u for u in result["utterances"] if u["speaker"] == "assistant"]
-            self.assertEqual(len(assistants), 2)
-            # Both turns get their own audio's text: neither is left empty and
-            # neither absorbs the other's words.
-            self.assertTrue(all(u["text"] for u in assistants))
-            self.assertNotEqual(assistants[0]["text"], assistants[1]["text"])
-            self.assertEqual(result["summary"]["assistant_intervals_without_text"], 0)
-            # The merged model fragment is still recorded, on one turn only.
-            carried = [u["text_provenance"]["model_fragment_count"] for u in assistants]
-            self.assertEqual(sorted(carried), [0, 1])
+            assistants = [row for row in result["utterances"]
+                          if row["speaker"] == "assistant"]
+            self.assertEqual([row["text"] for row in assistants], [
+                "One moment please while I Okay, I see your case.",
+                "Your claim was declined.",
+            ])
+            self.assertEqual(result["summary"]["unassigned_model_fragments"], 0)
 
 
 if __name__ == "__main__":
