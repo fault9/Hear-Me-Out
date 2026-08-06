@@ -86,10 +86,13 @@ def main():
     # from technical_status: valid_for_condition_analysis is also false for
     # attempts that were never evaluated (abandoned captures), and an
     # unevaluated attempt is not an invalid one. Those are reported separately.
+    # Scoped to participants who are actually in the primary frame: an invalid
+    # attempt by someone with no included session removes nothing, and naming
+    # them here would overstate the rule's effect.
     invalid_participants = {
         row["participant_id"] for row in scenarios
         if str(row.get("technical_status")).strip().lower() == "invalid"
-    }
+    } & {row["participant_id"] for row in included}
     unevaluated = sorted(
         row["session_id"] for row in scenarios
         if str(row.get("technical_status")).strip().lower() not in
