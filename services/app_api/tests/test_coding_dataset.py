@@ -962,6 +962,69 @@ class AgreementMathTests(unittest.TestCase):
         self.assertIsNone(agreement.cohen_kappa([(1, 1), (1, 1)]))
 
 
+class DatasetDownloadTests(FixtureCase):
+    """The admin Data tab builds the analysis tables on demand and streams
+    them as their own small archive, separate from the audio export."""
+
+    manifest_paths_relative_to_media = True
+
+    def _client(self):
+        from unittest.mock import Mock, patch
+
+        from fastapi import FastAPI
+        from starlette.testclient import TestClient
+        from study import router as study_router
+
+        # Router paths are module-level (read at import), so point them at this
+        # fixture's data root the same way the finalization tests do.
+        media = self.data_root / "media"
+        for item in (patch.object(study_router, "STUDY_DATA_DIR", media),
+                     patch.object(study_router, "SESSIONS_DIR", media / "sessions"),
+                     patch.object(study_router, "TARGETS_DIR", media / "targets"),
+                     patch.object(study_router, "get_backend", return_value=self.backend),
+                     patch.object(study_router, "get_manager", return_value=Mock())):
+            item.start()
+            self.addCleanup(item.stop)
+
+        app = FastAPI()
+        app.include_router(study_router.build_study_router())
+        return TestClient(app), {"X-Study-Admin-Token": study_router.ADMIN_TOKEN}
+
+    def test_dataset_download_contains_every_table(self):
+        import io
+        import zipfile
+
+        client, headers = self._client()
+        response = client.get(f"/api/study/studies/{self.study_id}/dataset",
+                              headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            names = set(archive.namelist())
+            summary = json.loads(archive.read("export_summary.json"))
+            scenarios = archive.read("scenarios.csv").decode()
+        # Every table the method's measures draw on, plus its documentation.
+        self.assertLessEqual({
+            "participants.csv", "scenarios.csv", "units.csv", "repairs.csv",
+            "turn_events.csv", "turn_verification_queue.csv", "turn_gaps.csv",
+            "turn_gap_verification_queue.csv", "turn_session_review_queue.csv",
+            "turn_event_manual_additions.csv", "vc_quality_regions.csv",
+            "answers_long.csv", "DATA_DICTIONARY.md", "export_summary.json",
+        }, names)
+        self.assertEqual(summary["analytical_sessions"], 1)
+        self.assertIn(self.session_id, scenarios)
+
+    def test_unknown_study_is_rejected(self):
+        client, headers = self._client()
+        response = client.get("/api/study/studies/9999/dataset", headers=headers)
+        self.assertEqual(response.status_code, 404)
+
+    def test_admin_token_is_required(self):
+        client, _ = self._client()
+        response = client.get(f"/api/study/studies/{self.study_id}/dataset")
+        self.assertEqual(response.status_code, 401)
+
+
 class ProductionLayoutTests(FixtureCase):
     """The real container layout: data_root/media/sessions/... with manifest
     paths recorded relative to the media dir ("sessions/..."). Readers hold

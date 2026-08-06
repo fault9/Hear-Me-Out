@@ -206,6 +206,7 @@ export const adminApi = {
     jpost(`/studies/${id}/vc-quality`, body, adminHeaders(t)),
   vcQualityStatus: (t: string, id: number) => jget(`/studies/${id}/vc-quality/status`, adminHeaders(t)),
   exportUrl: (id: number, format: "json" | "zip") => `${BASE}/studies/${id}/export?format=${format}`,
+  datasetUrl: (id: number) => `${BASE}/studies/${id}/dataset`,
 
   templateUrl: () => `${BASE}/template`,
   yamlUrl: (id: number) => `${BASE}/studies/${id}/yaml`,

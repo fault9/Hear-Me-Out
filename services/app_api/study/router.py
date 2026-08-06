@@ -622,6 +622,38 @@ def build_study_router() -> APIRouter:
             background=BackgroundTask(archive_path.unlink, missing_ok=True),
         )
 
+    @router.get("/studies/{study_id}/dataset", dependencies=[Depends(require_admin)])
+    async def export_dataset(study_id: int):
+        """The tidy analysis tables, built on demand. Kept separate from the
+        archival export: these are small, derived, and regenerated whenever
+        analysis or coding re-runs."""
+        if not backend.get_study(study_id):
+            raise HTTPException(status_code=404, detail="Unknown study")
+        from .dataset_export import build_dataset
+
+        work_dir = Path(tempfile.mkdtemp(prefix=f"study{study_id}_dataset_",
+                                         dir=STUDY_DATA_DIR))
+        archive_path = work_dir.with_suffix(".zip")
+        try:
+            summary = build_dataset(study_id, work_dir)
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as z:
+                for path in sorted(work_dir.iterdir()):
+                    if path.is_file():
+                        z.write(path, path.name)
+        except Exception:
+            archive_path.unlink(missing_ok=True)
+            raise
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        logger.info(f"[study] dataset export: {summary['analytical_sessions']} analytical "
+                    f"sessions, warnings={summary['warnings']}")
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename=f"study{study_id}_dataset.zip",
+            background=BackgroundTask(archive_path.unlink, missing_ok=True),
+        )
+
     # ============================ PARTICIPANT ============================
     def _require_participant(code: str) -> dict:
         p = backend.get_participant_by_code(code)

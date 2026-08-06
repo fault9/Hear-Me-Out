@@ -360,6 +360,15 @@ function DataPanel({ token, studyId }: any) {
     a.download = `study${studyId}_export.${fmt}`; a.click(); URL.revokeObjectURL(a.href)
   }
   const [opErr, setOpErr] = useState<string | null>(null)
+  const [datasetBusy, setDatasetBusy] = useState(false)
+  const downloadDataset = async () => {
+    setOpErr(null); setDatasetBusy(true)
+    try {
+      await adminApi.download(token, adminApi.datasetUrl(studyId),
+                              `study${studyId}_dataset.zip`)
+    } catch (e: any) { setOpErr(e?.message || String(e)) }
+    finally { setDatasetBusy(false) }
+  }
   const runAnalysis = async (force: boolean) => {
     setOpErr(null)
     try { setStatus(await adminApi.analyze(token, studyId, force)) }
@@ -406,6 +415,19 @@ function DataPanel({ token, studyId }: any) {
         <Button size="sm" variant="ghost" onClick={() => adminApi.stopEngine(token)}>Stop VC engine</Button>
       </div>
       {opErr && <p className="mb-3 text-sm text-destructive">{opErr}</p>}
+
+      <div className="mb-4 rounded-lg border p-3">
+        <div className="mb-1 text-sm font-semibold">Analysis dataset</div>
+        <p className="mb-2 text-xs text-muted-foreground">
+          The tidy analysis tables (participants, scenarios, units, repairs, turn events,
+          answers) with the data dictionary and an export summary. Built fresh on each
+          download, so it always reflects the latest analysis and coding state. Unzip into{" "}
+          <code>analysis/data/</code>.
+        </p>
+        <Button size="sm" disabled={datasetBusy} onClick={downloadDataset}>
+          {datasetBusy ? "Building…" : "Download analysis dataset (CSV)"}
+        </Button>
+      </div>
 
       <div className="mb-4 rounded-lg border p-3">
         <div className="mb-1 text-sm font-semibold">Analysis pipeline</div>
