@@ -50,6 +50,10 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     target: number; at: number; duration: number }>>({})
   const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map())
   const stopTimers = useRef<number[]>([])
+  // Native controls per track: the reviewer can scrub freely, and what is
+  // actually loaded and playing is visible rather than inferred.
+  const [urls, setUrls] = useState<Record<string, string>>({})
+  const playerRef = useRef<Record<string, HTMLAudioElement | null>>({})
 
   const event = events[index]
   const done = events.filter((e) => e.verdict).length
@@ -75,6 +79,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     const cached = audioRef.current.get(key)
     if (cached) return cached
     const url = await adminApi.reviewAudio(token, studyId, sessionId, track)
+    setUrls((u) => ({ ...u, [`${sessionId}:${track}`]: url }))
     const element = new Audio(url)
     element.preload = "auto"
     // Seeking before metadata loads is silently discarded and playback starts
@@ -215,6 +220,32 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
           <Button size="sm" variant="secondary" onClick={() => play("participant_raw")}>Participant only</Button>
           <Button size="sm" variant="secondary" onClick={() => play("assistant")}>Assistant only</Button>
           <Button size="sm" variant="ghost" onClick={stopAll}>Stop</Button>
+        </div>
+        <div className="mt-3 flex flex-col gap-2">
+          {(["participant_raw", "assistant"] as const).map((track) => {
+            const url = urls[`${event.session_id}:${track}`]
+            const offset = track === "participant_raw" ? correctionMs : 0
+            return (
+              <div key={track} className="flex flex-wrap items-center gap-2">
+                <span className="w-28 text-xs text-muted-foreground">
+                  {track === "participant_raw" ? "participant" : "assistant"}
+                </span>
+                {url ? (
+                  <>
+                    <audio controls preload="auto" src={url} className="h-8 flex-1"
+                      ref={(el) => { playerRef.current[track] = el }} />
+                    <Button size="sm" variant="secondary" onClick={() => {
+                      const el = playerRef.current[track]
+                      if (el) { el.currentTime = Math.max(0, (from + offset) / 1000); el.play() }
+                    }}>Jump to event</Button>
+                  </>
+                ) : (
+                  <Button size="sm" variant="secondary"
+                    onClick={() => audioFor(event.session_id, track)}>Load</Button>
+                )}
+              </div>
+            )
+          })}
         </div>
         {Object.keys(seek).length > 0 && (
           <p className="mt-2 font-mono text-xs text-muted-foreground">
