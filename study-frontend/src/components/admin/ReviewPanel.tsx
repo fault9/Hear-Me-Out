@@ -314,8 +314,10 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
           return (
             <div key={q.key} className={enabled ? "mb-3" : "mb-3 opacity-40"}>
               <div className="mb-1 text-sm font-medium">
-                {q.label}{q.hint && <span className="ml-2 text-xs text-muted-foreground">{q.hint}</span>}
-                {!enabled && <span className="ml-2 text-xs text-muted-foreground">n/a — needs “yes” above</span>}
+                {q.label}
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {enabled ? q.hint : "n/a — needs “yes” above"}
+                </span>
               </div>
               <div className="flex gap-2">
                 {[["1", "Yes"], ["0", "No"]].map(([value, label]) => (
