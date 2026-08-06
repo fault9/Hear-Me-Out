@@ -306,6 +306,33 @@ VERDICT_FIELDS = (
     "verification_note",
 )
 
+# A verdict is hierarchical: everything below a "no" is not a judgment at all.
+# Yielding applies only to a verified barge-in, disruption only to a verified
+# premature onset, and neither exists without real simultaneous speech.
+# Blanked at ingest and again on read, so "no barge-in" can never reach the
+# frames as "failed to yield" (missing != zero, per the data dictionary).
+TURN_VERDICT_GATES = (
+    ("verified_overlap", (
+        "verified_participant_barge_in", "verified_assistant_premature_onset",
+        "successful_assistant_yielding", "disruptive_assistant_interruption",
+        "verified_assistant_stop_latency_ms",
+        "verified_participant_stop_latency_ms")),
+    ("verified_participant_barge_in", (
+        "successful_assistant_yielding", "verified_assistant_stop_latency_ms")),
+    ("verified_assistant_premature_onset", (
+        "disruptive_assistant_interruption",
+        "verified_participant_stop_latency_ms")),
+)
+
+
+def gate_turn_verdict(record: dict) -> dict:
+    gated = dict(record)
+    for parent, children in TURN_VERDICT_GATES:
+        if str(gated.get(parent) or "").strip() != "1":
+            for child in children:
+                gated[child] = None
+    return gated
+
 
 def load_turn_verdicts(data_root: Path, study_id: int) -> dict[str, dict]:
     """Manual turn-verification decisions, keyed session_id::episode_id.
@@ -326,7 +353,7 @@ def load_turn_verdicts(data_root: Path, study_id: int) -> dict[str, dict]:
             continue
         key = record.get("event_key")
         if key:
-            verdicts[str(key)] = record
+            verdicts[str(key)] = gate_turn_verdict(record)
     return verdicts
 
 

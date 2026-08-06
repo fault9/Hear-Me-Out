@@ -15,14 +15,33 @@ type Utterance = {
   start_ms: number | null; end_ms: number | null
 }
 
-const QUESTIONS: { key: string; label: string; hint?: string }[] = [
+const QUESTIONS: { key: string; label: string; hint?: string; dependsOn?: string }[] = [
   { key: "verified_overlap",
     label: "Real simultaneous speech (not noise or leakage)?", hint: "1 / 2" },
-  { key: "verified_participant_barge_in", label: "Participant barge-in?" },
-  { key: "verified_assistant_premature_onset", label: "Assistant premature onset?" },
-  { key: "successful_assistant_yielding", label: "Assistant yielded successfully?" },
-  { key: "disruptive_assistant_interruption", label: "Disruptive assistant interruption?" },
+  { key: "verified_participant_barge_in", label: "Participant barge-in?",
+    dependsOn: "verified_overlap" },
+  { key: "verified_assistant_premature_onset", label: "Assistant premature onset?",
+    dependsOn: "verified_overlap" },
+  { key: "successful_assistant_yielding", label: "Assistant yielded successfully?",
+    dependsOn: "verified_participant_barge_in" },
+  { key: "disruptive_assistant_interruption", label: "Disruptive assistant interruption?",
+    dependsOn: "verified_assistant_premature_onset" },
 ]
+
+// A question only applies while every ancestor is "yes": yielding is only a
+// judgment about a verified barge-in, disruption only about a verified
+// premature onset. Anything below a "no" stays blank — never recorded as 0.
+function applicable(key: string, answers: Verdict): boolean {
+  const question = QUESTIONS.find((q) => q.key === key)
+  if (!question?.dependsOn) return true
+  return answers[question.dependsOn] === "1" && applicable(question.dependsOn, answers)
+}
+
+function withInapplicableCleared(answers: Verdict): Verdict {
+  const next = { ...answers }
+  for (const q of QUESTIONS) if (!applicable(q.key, next)) next[q.key] = null
+  return next
+}
 
 function eventWindow(event: Event): [number, number] {
   const values = ["overlap_start_ms", "overlap_end_ms", "participant_onset_ms",
@@ -124,7 +143,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   // never waits on a fetch mid-pass.
   useEffect(() => {
     if (!event) return
-    setAnswers({ ...(event.verdict || {}) })
+    setAnswers(withInapplicableCleared({ ...(event.verdict || {}) }))
     setNote(event.verdict?.verification_note || "")
     // Clear first: showing the previous item's transcript while the next one
     // loads is worse than showing nothing, and a late response from an earlier
@@ -168,8 +187,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return
       if (e.code === "Space") { e.preventDefault(); play() }
-      if (e.key === "1") setAnswers((a) => ({ ...a, verified_overlap: "1" }))
-      if (e.key === "2") setAnswers((a) => ({ ...a, verified_overlap: "0" }))
+      if (e.key === "1") setAnswers((a) => withInapplicableCleared({ ...a, verified_overlap: "1" }))
+      if (e.key === "2") setAnswers((a) => withInapplicableCleared({ ...a, verified_overlap: "0" }))
       if (e.key === "Enter") save()
     }
     window.addEventListener("keydown", onKey)
@@ -276,7 +295,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
           return (
             <p key={u.id} className={inEvent ? "rounded bg-primary/10 px-1" : ""}>
               <span className="font-mono text-xs text-muted-foreground">
-                {u.speaker === "participant" ? "P" : "A"} {((u.start_ms ?? 0) / 1000).toFixed(1)}s
+                {u.speaker === "participant" ? "P" : "A"}{" "}
+                {((u.start_ms ?? 0) / 1000).toFixed(1)}–{((u.end_ms ?? 0) / 1000).toFixed(1)}s
               </span>{" "}
               {u.text || <em className="text-muted-foreground">(no text)</em>}
             </p>
@@ -285,22 +305,26 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       </div>
 
       <div className="rounded-lg border p-3">
-        {QUESTIONS.map((q) => (
-          <div key={q.key} className="mb-3">
-            <div className="mb-1 text-sm font-medium">
-              {q.label}{q.hint && <span className="ml-2 text-xs text-muted-foreground">{q.hint}</span>}
+        {QUESTIONS.map((q) => {
+          const enabled = applicable(q.key, answers)
+          return (
+            <div key={q.key} className={enabled ? "mb-3" : "mb-3 opacity-40"}>
+              <div className="mb-1 text-sm font-medium">
+                {q.label}{q.hint && <span className="ml-2 text-xs text-muted-foreground">{q.hint}</span>}
+                {!enabled && <span className="ml-2 text-xs text-muted-foreground">n/a — needs “yes” above</span>}
+              </div>
+              <div className="flex gap-2">
+                {[["1", "Yes"], ["0", "No"]].map(([value, label]) => (
+                  <Button key={value} size="sm" disabled={!enabled}
+                    variant={answers[q.key] === value ? "default" : "secondary"}
+                    onClick={() => setAnswers((a) => withInapplicableCleared({ ...a, [q.key]: value }))}>
+                    {label}
+                  </Button>
+                ))}
+              </div>
             </div>
-            <div className="flex gap-2">
-              {[["1", "Yes"], ["0", "No"]].map(([value, label]) => (
-                <Button key={value} size="sm"
-                  variant={answers[q.key] === value ? "default" : "secondary"}
-                  onClick={() => setAnswers((a) => ({ ...a, [q.key]: value }))}>
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </div>
-        ))}
+          )
+        })}
         <label className="text-xs text-muted-foreground">Note (optional)</label>
         <Input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1" />
         <div className="mt-3 flex flex-wrap items-center gap-2">

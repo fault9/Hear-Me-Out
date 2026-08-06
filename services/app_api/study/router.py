@@ -709,7 +709,11 @@ def build_study_router() -> APIRouter:
         key = str(body.get("event_key") or "").strip()
         if not key:
             raise HTTPException(status_code=422, detail="event_key is required")
-        record = {**body, "event_key": key, "recorded_at_unix_s": time.time()}
+        from .dataset_export import gate_turn_verdict
+
+        # Fields below a "no" are not judgments; never record them as zeros.
+        record = gate_turn_verdict(
+            {**body, "event_key": key, "recorded_at_unix_s": time.time()})
         path = _verdict_path(study_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         append_jsonl(path, [record])
