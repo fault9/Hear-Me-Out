@@ -44,11 +44,18 @@ function withInapplicableCleared(answers: Verdict): Verdict {
 }
 
 function eventWindow(event: Event): [number, number] {
-  const values = ["overlap_start_ms", "overlap_end_ms", "participant_onset_ms",
-                  "participant_offset_ms", "assistant_onset_ms", "assistant_offset_ms"]
+  // Centered on the overlap itself: enough lead-in to hear who already held
+  // the floor, not the whole pair of turns.
+  const start = parseFloat(event.overlap_start_ms)
+  const end = parseFloat(event.overlap_end_ms)
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start)
+    return [Math.max(0, start - WINDOW_PAD_MS), end + WINDOW_PAD_MS]
+  const values = ["participant_onset_ms", "participant_offset_ms",
+                  "assistant_onset_ms", "assistant_offset_ms"]
     .map((key) => parseFloat(event[key])).filter((v) => !Number.isNaN(v))
   if (!values.length) return [0, 5000]
-  return [Math.min(...values) - WINDOW_PAD_MS, Math.max(...values) + WINDOW_PAD_MS]
+  return [Math.max(0, Math.min(...values) - WINDOW_PAD_MS),
+          Math.max(...values) + WINDOW_PAD_MS]
 }
 
 export function ReviewPanel({ token, studyId }: { token: string; studyId: number }) {
@@ -260,9 +267,12 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
 
   if (!event) return <p className="text-sm text-muted-foreground">Queue is empty.</p>
 
-  const [from, to] = eventWindow(event)
-  const participantTurnMs =
-    parseFloat(event.participant_offset_ms) - parseFloat(event.participant_onset_ms)
+  const overlapStart = parseFloat(event.overlap_start_ms)
+  const overlapEnd = parseFloat(event.overlap_end_ms)
+  const overlapAt = Number.isFinite(overlapStart) && Number.isFinite(overlapEnd)
+    ? `${(overlapStart / 1000).toFixed(1)}–${(overlapEnd / 1000).toFixed(1)}s`
+      + ` (${((overlapEnd - overlapStart) / 1000).toFixed(1)}s)`
+    : "—"
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -277,13 +287,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
         <div className="grid gap-2 text-xs sm:grid-cols-4">
           {[["session", event.session_id], ["episode", event.episode_id],
             ["initiator", event.initiator],
-            ["overlap (ms)", event.overlap_duration_ms || "—"],
-            ["participant turn (ms)",
-             Number.isFinite(participantTurnMs) ? Math.round(participantTurnMs) : "—"],
-            ["≥200 ms nominated", event.overlap_200ms_candidate],
-            ["barge-in nominated", event.participant_barge_in_candidate],
-            ["premature onset nominated", event.assistant_premature_onset_candidate],
-            ["window (ms)", `${Math.round(from)} – ${Math.round(to)}`],
+            ["overlap at", overlapAt],
           ].map(([label, value]) => (
             <div key={String(label)}>
               <div className="font-medium">{String(label)}</div>
