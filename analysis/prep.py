@@ -33,10 +33,29 @@ UNIT_KEEP = [
     "acknowledgement", "update_claim", "incorporation", "retention",
 ]
 
+TURN_EVENT_KEEP = [
+    "session_id", "participant_id", "condition", "episode_id", "initiator",
+    "overlap_duration_ms", "overlap_200ms_candidate",
+    "participant_barge_in_candidate", "assistant_premature_onset_candidate",
+    "assistant_stop_latency_ms_candidate",
+    "participant_stop_latency_ms_candidate", "verified_overlap",
+    "verified_participant_barge_in", "verified_assistant_premature_onset",
+    "successful_assistant_yielding", "disruptive_assistant_interruption",
+    "verified_assistant_stop_latency_ms", "verified_participant_stop_latency_ms",
+]
 
-def read_rows(name):
+TURN_GAP_KEEP = [
+    "session_id", "participant_id", "condition", "gap_id", "direction",
+    "from_speaker", "to_speaker", "gap_duration_ms", "verified_positive_gap",
+    "verified_gap_duration_ms",
+]
+
+
+def read_rows(name, required=True):
     path = os.path.join(DATA, name)
     if not os.path.exists(path):
+        if not required:
+            return []
         sys.exit(f"missing {path} — copy the dataset_export CSVs into analysis/data/")
     with open(path, newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
@@ -94,6 +113,24 @@ def main():
     write_frame("unit_level_sensitivity_complete_technical.csv",
                 [u for u in units if u["session_id"] in sensitivity_ids],
                 UNIT_KEEP)
+
+    # Turn-taking frames carry only sessions whose synchronization certified:
+    # the method reports timing-derived indicators only when validated, so
+    # uncertified candidates must never reach a turn-taking model.
+    for name, keep, frame in (("turn_events.csv", TURN_EVENT_KEEP,
+                               "turn_events_certified.csv"),
+                              ("turn_gaps.csv", TURN_GAP_KEEP,
+                               "turn_gaps_certified.csv")):
+        rows = read_rows(name, required=False)
+        certified = [r for r in rows
+                     if truthy(r.get("analysis_included"))
+                     and truthy(r.get("valid_for_manual_turn_verification"))
+                     and truthy(r.get("crosswalk_complete"))]
+        write_frame(frame, certified, keep)
+        dropped = {r["session_id"] for r in rows} - {r["session_id"] for r in certified}
+        if dropped:
+            print(f"  {name}: {len(rows) - len(certified)} row(s) from "
+                  f"{len(dropped)} uncertified session(s) excluded")
 
     by_participant = {}
     for r in included:

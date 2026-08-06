@@ -56,6 +56,51 @@ class PrepTests(unittest.TestCase):
             self.assertEqual([row["participant_id"] for row in sensitivity], ["P1"])
             self.assertEqual(primary[0]["demonstrated_grounding"], "")
 
+    def test_turn_frames_keep_only_certified_synchronization(self):
+        prep = _load_prep()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data, output = root / "data", root / "output"
+            data.mkdir()
+            with (data / "scenarios.csv").open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=sorted(
+                    set(prep.SCENARIO_KEEP) | {"analysis_included"}))
+                writer.writeheader()
+                writer.writerow({"session_id": "S1", "participant_id": "P1",
+                                 "analysis_included": "1",
+                                 "valid_for_condition_analysis": "1"})
+            with (data / "units.csv").open("w", newline="") as handle:
+                csv.DictWriter(handle, fieldnames=prep.UNIT_KEEP).writeheader()
+            event_fields = sorted(set(prep.TURN_EVENT_KEEP) | {
+                "analysis_included", "valid_for_manual_turn_verification",
+                "crosswalk_complete"})
+            events = [
+                # Certified session: eligible for the turn-taking models.
+                {"session_id": "S1", "participant_id": "P1", "episode_id": "e1",
+                 "analysis_included": "1",
+                 "valid_for_manual_turn_verification": "1",
+                 "crosswalk_complete": "1"},
+                # Included for content measures, but synchronization never
+                # certified (delivery failure) — must not reach a turn model.
+                {"session_id": "S2", "participant_id": "P2", "episode_id": "e2",
+                 "analysis_included": "1",
+                 "valid_for_manual_turn_verification": "0",
+                 "crosswalk_complete": "0"},
+            ]
+            with (data / "turn_events.csv").open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=event_fields)
+                writer.writeheader()
+                writer.writerows(events)
+            prep.DATA, prep.OUT = str(data), str(output)
+
+            prep.main()
+
+            with (output / "turn_events_certified.csv").open() as handle:
+                certified = list(csv.DictReader(handle))
+            self.assertEqual([row["session_id"] for row in certified], ["S1"])
+            # turn_gaps.csv absent from this export: the frame is still written.
+            self.assertTrue((output / "turn_gaps_certified.csv").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
