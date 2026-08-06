@@ -81,6 +81,14 @@ export const LOUDNESS_NORMALIZE_DEFAULT = true
 export const MAX_RECORDING_SECONDS = 30
 export const MIN_RECORDING_SECONDS = 0.3
 
+// Leading/trailing silence is trimmed from a fresh take: audit latencies are
+// measured from the clip's end, so trailing room tone would place the measured
+// offset after the speech actually stopped. Only the edges are trimmed —
+// within-turn pauses are part of the utterance and must survive.
+export const RECORDING_TRIM_RMS = 0.01
+export const RECORDING_TRIM_WINDOW_MS = 10
+export const RECORDING_TRIM_GUARD_MS = 40
+
 // IndexedDB names — version bumps trigger migrations (none defined yet).
 export const SOUNDBOARD_DB_NAME = "hmo_soundboard"
 export const SOUNDBOARD_DB_VERSION = 1

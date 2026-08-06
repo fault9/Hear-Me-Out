@@ -21,6 +21,9 @@ import {
   PP_SAMPLE_RATE,
   PP_CHANNELS,
   DURATION_DRIFT_TOLERANCE_MS,
+  RECORDING_TRIM_RMS,
+  RECORDING_TRIM_WINDOW_MS,
+  RECORDING_TRIM_GUARD_MS,
 } from "@/lib/soundboardConfig"
 import { createWavFile } from "@shared/lib/audio"
 
@@ -81,6 +84,40 @@ export async function resampleTo(
   src.start(0)
   const rendered = await offline.startRendering()
   return new Float32Array(rendered.getChannelData(0))
+}
+
+// Trim silence from the START and END of a take only; interior silence (a
+// scripted within-turn pause) is left untouched. Returns the original buffer
+// when nothing crosses the threshold, so a silent take is never emptied.
+export function trimEdgeSilence(
+  pcm: Float32Array,
+  sampleRate: number,
+  {
+    thresholdRms = RECORDING_TRIM_RMS,
+    windowMs = RECORDING_TRIM_WINDOW_MS,
+    guardMs = RECORDING_TRIM_GUARD_MS,
+  } = {},
+): { pcm: Float32Array; trimmedStartMs: number; trimmedEndMs: number } {
+  const window = Math.max(1, Math.round((windowMs / 1000) * sampleRate))
+  const loud: boolean[] = []
+  for (let start = 0; start < pcm.length; start += window) {
+    let sum = 0
+    const end = Math.min(start + window, pcm.length)
+    for (let i = start; i < end; i++) sum += pcm[i] * pcm[i]
+    loud.push(Math.sqrt(sum / (end - start)) >= thresholdRms)
+  }
+  const first = loud.indexOf(true)
+  const last = loud.lastIndexOf(true)
+  if (first === -1) return { pcm, trimmedStartMs: 0, trimmedEndMs: 0 }
+
+  const guard = Math.round((guardMs / 1000) * sampleRate)
+  const from = Math.max(0, first * window - guard)
+  const to = Math.min(pcm.length, (last + 1) * window + guard)
+  return {
+    pcm: pcm.slice(from, to),
+    trimmedStartMs: (from / sampleRate) * 1000,
+    trimmedEndMs: ((pcm.length - to) / sampleRate) * 1000,
+  }
 }
 
 // Decode → downmix → resample to PP_SAMPLE_RATE. Use this for ANY external

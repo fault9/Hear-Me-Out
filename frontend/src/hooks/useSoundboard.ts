@@ -20,6 +20,7 @@ import {
 import {
   decodeAndConformToPp,
   encodeWavAtPpRate,
+  trimEdgeSilence,
 } from "@/lib/audioFormat"
 import {
   type Slot,
@@ -329,6 +330,8 @@ export function useSoundboard() {
       pcm = await resampleTo(combined, r.actualSr, PP_SAMPLE_RATE)
       finalSr = PP_SAMPLE_RATE
     }
+    const trimmed = trimEdgeSilence(pcm, finalSr)
+    pcm = trimmed.pcm
     const wav = encodeWavAtPpRate(pcm, finalSr)
     await r.ctx.close()
 
