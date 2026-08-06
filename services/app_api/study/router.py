@@ -799,8 +799,12 @@ def build_study_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="Unknown study")
         from .dataset_export import build_dataset
 
-        work_dir = Path(tempfile.mkdtemp(prefix=f"study{study_id}_dataset_",
-                                         dir=STUDY_DATA_DIR))
+        # Written to the canonical export directory, not a temp dir: the review
+        # pass pins its item set to an export, so downloading is what produces
+        # the material a verification pass runs against.
+        work_dir = (Path(os.path.expanduser(_DATA_ROOT)) / "exports"
+                    / f"study{study_id}"
+                    / time.strftime("dataset_%Y%m%dT%H%M%SZ", time.gmtime()))
         archive_path = work_dir.with_suffix(".zip")
         try:
             summary = build_dataset(study_id, work_dir)
@@ -811,8 +815,6 @@ def build_study_router() -> APIRouter:
         except Exception:
             archive_path.unlink(missing_ok=True)
             raise
-        finally:
-            shutil.rmtree(work_dir, ignore_errors=True)
         logger.info(f"[study] dataset export: {summary['analytical_sessions']} analytical "
                     f"sessions, warnings={summary['warnings']}")
         return FileResponse(

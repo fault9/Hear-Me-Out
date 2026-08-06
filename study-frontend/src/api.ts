@@ -207,6 +207,24 @@ export const adminApi = {
   vcQualityStatus: (t: string, id: number) => jget(`/studies/${id}/vc-quality/status`, adminHeaders(t)),
   exportUrl: (id: number, format: "json" | "zip") => `${BASE}/studies/${id}/export?format=${format}`,
   datasetUrl: (id: number) => `${BASE}/studies/${id}/dataset`,
+  reviewQueue: (t: string, id: number) =>
+    jget(`/studies/${id}/review/turn-queue`, adminHeaders(t)),
+  reviewVerdict: (t: string, id: number, body: unknown) =>
+    jpost(`/studies/${id}/review/turn-verdict`, body, adminHeaders(t)),
+  reviewClaim: (t: string, id: number, reviewer: string) =>
+    jpost(`/studies/${id}/review/claim`, { reviewer }, adminHeaders(t)),
+  reviewContext: (t: string, id: number, sessionId: string, fromMs: number, toMs: number) =>
+    jget(`/studies/${id}/review/context?session_id=${encodeURIComponent(sessionId)}`
+         + `&from_ms=${Math.round(fromMs)}&to_ms=${Math.round(toMs)}`, adminHeaders(t)),
+  // Audio needs the admin header, which an <audio src> cannot send: fetch it
+  // as a blob and hand the element an object URL.
+  async reviewAudio(t: string, id: number, sessionId: string, track: string) {
+    const r = await fetch(
+      `${BASE}/studies/${id}/review/audio?session_id=${encodeURIComponent(sessionId)}&track=${track}`,
+      { headers: adminHeaders(t) })
+    if (!r.ok) throw await asError(r)
+    return URL.createObjectURL(await r.blob())
+  },
 
   templateUrl: () => `${BASE}/template`,
   yamlUrl: (id: number) => `${BASE}/studies/${id}/yaml`,

@@ -5,8 +5,9 @@ import { Badge } from "@shared/ui/badge"
 import { adminApi } from "@/api"
 import { ScenarioEditor } from "@/components/admin/ScenarioEditor"
 import { QuestionnaireBuilder } from "@/components/admin/QuestionnaireBuilder"
+import { ReviewPanel } from "@/components/admin/ReviewPanel"
 
-type Tab = "settings" | "scenarios" | "targets" | "questionnaires" | "participants" | "data"
+type Tab = "settings" | "scenarios" | "targets" | "questionnaires" | "participants" | "data" | "review"
 
 export function StudyEditor({ token, studyId, onBack }: {
   token: string; studyId: number; onBack: () => void
@@ -97,7 +98,7 @@ export function StudyEditor({ token, studyId, onBack }: {
       {err && <p className="mb-3 text-sm text-destructive">{err}</p>}
 
       <div className="mb-5 flex flex-wrap gap-1 border-b">
-        {(["settings", "scenarios", "targets", "questionnaires", "participants", "data"] as Tab[]).map(t => (
+        {(["settings", "scenarios", "targets", "questionnaires", "participants", "data", "review"] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className={`px-3 py-2 text-sm capitalize ${tab === t ? "border-b-2 border-primary font-medium" : "text-muted-foreground"}`}>
             {t}
@@ -147,6 +148,8 @@ export function StudyEditor({ token, studyId, onBack }: {
       )}
 
       {tab === "data" && <DataPanel token={token} studyId={studyId} />}
+
+      {tab === "review" && <ReviewPanel token={token} studyId={studyId} />}
     </div>
   )
 }

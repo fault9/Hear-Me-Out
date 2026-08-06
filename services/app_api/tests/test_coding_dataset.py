@@ -983,7 +983,8 @@ class DatasetDownloadTests(FixtureCase):
         # Router paths are module-level (read at import), so point them at this
         # fixture's data root the same way the finalization tests do.
         media = self.data_root / "media"
-        for item in (patch.object(study_router, "STUDY_DATA_DIR", media),
+        for item in (patch.object(study_router, "_DATA_ROOT", str(self.data_root)),
+                     patch.object(study_router, "STUDY_DATA_DIR", media),
                      patch.object(study_router, "SESSIONS_DIR", media / "sessions"),
                      patch.object(study_router, "TARGETS_DIR", media / "targets"),
                      patch.object(study_router, "get_backend", return_value=self.backend),
@@ -1028,6 +1029,92 @@ class DatasetDownloadTests(FixtureCase):
         client, _ = self._client()
         response = client.get(f"/api/study/studies/{self.study_id}/dataset")
         self.assertEqual(response.status_code, 401)
+
+
+class TurnReviewTests(DatasetDownloadTests):
+    """Manual turn verification: blinded queue, condition-neutral audio,
+    single assignment per event, and verdicts that reach the export."""
+
+    def _seed_export(self, client, headers):
+        """A dataset export pins the review pass's item set."""
+        response = client.get(f"/api/study/studies/{self.study_id}/dataset",
+                              headers=headers)
+        self.assertEqual(response.status_code, 200)
+
+    def test_queue_withholds_condition(self):
+        client, headers = self._client()
+        self._seed_export(client, headers)
+        response = client.get(
+            f"/api/study/studies/{self.study_id}/review/turn-queue", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        body = response.text.lower()
+        for token in ("vc_activation", "stable_natural", "stable_converted",
+                      "vc_deactivation"):
+            self.assertNotIn(token, body)
+        payload = response.json()
+        self.assertTrue(payload["export"].startswith("dataset_"))
+        for event in payload["events"]:
+            self.assertNotIn("condition", event)
+
+    def test_transmitted_track_is_never_served(self):
+        client, headers = self._client()
+        self._seed_export(client, headers)
+        response = client.get(
+            f"/api/study/studies/{self.study_id}/review/audio",
+            params={"session_id": self.session_id, "track": "merged"},
+            headers=headers)
+        # merged.wav is built from the transmitted (converted) participant
+        # audio, so serving it would reveal the condition.
+        self.assertEqual(response.status_code, 422)
+
+    def test_context_drops_condition_revealing_fields(self):
+        client, headers = self._client()
+        self._seed_export(client, headers)
+        response = client.get(
+            f"/api/study/studies/{self.study_id}/review/context",
+            params={"session_id": self.session_id, "from_ms": 0, "to_ms": 999999},
+            headers=headers)
+        self.assertEqual(response.status_code, 200)
+        utterances = response.json()["utterances"]
+        self.assertTrue(utterances)
+        for utterance in utterances:
+            self.assertEqual(set(utterance),
+                             {"id", "speaker", "text", "start_ms", "end_ms"})
+
+    def test_claim_hands_each_event_to_one_reviewer(self):
+        client, headers = self._client()
+        self._seed_export(client, headers)
+        first = client.post(f"/api/study/studies/{self.study_id}/review/claim",
+                            json={"reviewer": "AA"}, headers=headers).json()
+        second = client.post(f"/api/study/studies/{self.study_id}/review/claim",
+                             json={"reviewer": "BB"}, headers=headers).json()
+        self.assertIsNotNone(first["event_key"])
+        self.assertNotEqual(first["event_key"], second["event_key"])
+
+    def test_verdict_reaches_the_export_and_keeps_history(self):
+        client, headers = self._client()
+        self._seed_export(client, headers)
+        queue = client.get(f"/api/study/studies/{self.study_id}/review/turn-queue",
+                           headers=headers).json()
+        event = queue["events"][0]
+        for initials in ("AA", "BB"):  # a revision must append, not overwrite
+            response = client.post(
+                f"/api/study/studies/{self.study_id}/review/turn-verdict",
+                json={"event_key": event["event_key"], "verified_overlap": "1",
+                      "verifier_initials": initials}, headers=headers)
+            self.assertEqual(response.status_code, 200)
+        verdict_file = (self.data_root / "review" / f"study{self.study_id}"
+                        / "turn_verdicts.jsonl")
+        self.assertEqual(len(verdict_file.read_text().strip().splitlines()), 2)
+
+        out_dir = self.data_root / "exports" / "verified"
+        summary = build_dataset(self.study_id, out_dir)
+        self.assertEqual(summary["turn_events_verified"], 1)
+        with (out_dir / "turn_events.csv").open() as handle:
+            rows = {r["session_id"] + "::" + r["episode_id"]: r
+                    for r in csv.DictReader(handle)}
+        self.assertEqual(rows[event["event_key"]]["verifier_initials"], "BB")
+        self.assertEqual(rows[event["event_key"]]["verified_overlap"], "1")
 
 
 class ProductionLayoutTests(FixtureCase):
