@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from .artifacts import atomic_write_json, file_record
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v1"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v2"
 _ASR_PADDING_MS = 200.0
 
 Transcriber = Callable[[str], dict]
@@ -225,20 +225,42 @@ def _participant_utterances(raw_path: Path, intervals: list[dict],
     return utterances
 
 
-def _assistant_utterances(intervals: list[dict], fragments: list[dict]) -> tuple[list[dict], list[dict]]:
+def _assistant_utterances(model_path: Path, intervals: list[dict],
+                          fragments: list[dict], transcriber: Transcriber,
+                          temporary: Path) -> tuple[list[dict], list[dict]]:
+    """Assistant text from ASR of the assistant's own audio, per interval.
+
+    The model's emitted text carries browser-estimated times that merge across
+    its pauses and back-compute a start from word count, so it cannot locate a
+    turn on the audio clock. It is retained per interval as a cross-check of
+    what was said; placement comes from the audio itself. model.wav is padded
+    to the conversation start at assembly, so its origin is 0.
+    """
+    duration_ms = _wav_duration_ms(model_path)
     assigned, unassigned = _assign_model_fragments(intervals, fragments)
     utterances = []
     for index, (interval, rows) in enumerate(zip(intervals, assigned)):
-        text = " ".join(
+        start_ms = float(interval["start_ms"])
+        end_ms = float(interval["end_ms"])
+        clip_start, clip_end = _clip_window(intervals, index, 0.0, duration_ms)
+        asr = {"text": "", "segments": [], "status": "failed",
+               "error": "empty interval after browser-to-WAV clock mapping"}
+        actual_start, actual_end = clip_start, clip_end
+        if clip_end > clip_start:
+            clip_path = temporary / f"assistant_{index + 1:03d}.wav"
+            actual_start, actual_end = _write_wav_slice(
+                model_path, clip_path, clip_start, clip_end)
+            asr = transcriber(str(clip_path))
+        model_text = " ".join(
             str(row.get("text") or "").strip() for row in rows
             if str(row.get("text") or "").strip()
         )
         utterances.append({
             "id": f"assistant_{index + 1:03d}",
             "speaker": "assistant",
-            "start_ms": round(float(interval["start_ms"]), 3),
-            "end_ms": round(float(interval["end_ms"]), 3),
-            "text": text,
+            "start_ms": round(start_ms, 3),
+            "end_ms": round(end_ms, 3),
+            "text": str(asr.get("text") or "").strip(),
             "timing": {
                 "timeline": "browser_audio_clock",
                 "source": "timing.assistant_intervals",
@@ -247,10 +269,18 @@ def _assistant_utterances(intervals: list[dict], fragments: list[dict]) -> tuple
                 "last_packet_sequence": interval.get("last_packet_sequence"),
             },
             "text_provenance": {
-                "source": "model_transcript.json",
-                "method": "maximum_overlap_or_nearest_interval_assignment",
-                "fragment_count": len(rows),
-                "fragments": rows,
+                "source": "model.wav",
+                "method": "whisper-small_interval_asr",
+                "asr_status": asr.get("status"),
+                "asr_error": asr.get("error"),
+                "wav_start_ms": round(actual_start, 3),
+                "wav_end_ms": round(actual_end, 3),
+                "browser_clock_origin_ms": 0.0,
+                "context_padding_ms": _ASR_PADDING_MS,
+                # What the model reported saying, kept for comparison only.
+                "model_text": model_text,
+                "model_fragment_count": len(rows),
+                "model_fragments": rows,
             },
         })
     return utterances, unassigned
@@ -280,20 +310,25 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
     )
     origin_ms = _capture_origin_ms(session_dir, timing)
     regions = _route_regions(session, timing, end_ms)
+    model_path = data_root / files["model"] if files.get("model") else None
+    if model_path is None or not model_path.exists():
+        raise FileNotFoundError("assistant (model) audio is missing")
     with tempfile.TemporaryDirectory(prefix="hmo-dialogue-") as temporary:
         participant = _participant_utterances(
             raw_path, participant_intervals, origin_ms, regions,
             transcriber or _default_transcriber, Path(temporary),
         )
-    assistant, unassigned = _assistant_utterances(
-        assistant_intervals, model_fragments)
+        assistant, unassigned = _assistant_utterances(
+            model_path, assistant_intervals, model_fragments,
+            transcriber or _default_transcriber, Path(temporary),
+        )
     utterances = sorted(
         participant + assistant,
         key=lambda row: (row["start_ms"], 0 if row["speaker"] == "assistant" else 1),
     )
     failed_asr = sum(
         row["text_provenance"].get("asr_status") != "complete"
-        for row in participant
+        for row in participant + assistant
     )
     result: dict[str, Any] = {
         "schema": DIALOGUE_TRANSCRIPT_SCHEMA,
@@ -315,12 +350,13 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
         "summary": {
             "participant_utterances": len(participant),
             "assistant_utterances": len(assistant),
-            "participant_asr_failures": failed_asr,
+            "asr_failures": failed_asr,
             "assistant_intervals_without_text": sum(not row["text"] for row in assistant),
             "unassigned_model_fragments": len(unassigned),
         },
         "sources": {
             "participant_raw": file_record(raw_path, relative_to=data_root),
+            "model": file_record(model_path, relative_to=data_root),
             "timing": timing.get("result_artifact"),
             "model_transcript": (
                 (((session.get("artifact_manifest") or {}).get("artifacts") or {}).get(
