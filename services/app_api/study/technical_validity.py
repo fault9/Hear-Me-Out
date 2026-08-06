@@ -224,6 +224,12 @@ def evaluate_technical_validity(session: dict, data_root: Path,
         int(stream_stop_rows[0].get("input_samples") or 0)
         if len(stream_stop_rows) == 1 else None
     )
+    if final_input_sample is None and delivery_verified:
+        # The same delivery failure truncates the stream before its sealing
+        # event, so take the capture's extent from its certified last chunk.
+        chunk_ends = [int(row.get("input_end_sample") or 0) for row in events
+                      if row.get("event") == "input_chunk"]
+        final_input_sample = max(chunk_ends) if chunk_ends else None
     crossed_checkpoint = bool(
         checkpoint_requested_sample is not None
         and final_input_sample is not None

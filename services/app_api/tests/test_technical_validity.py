@@ -328,6 +328,38 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertFalse(result["valid_for_timing_reconstruction"])
         self.assertFalse(result["valid_for_confirmatory_timing_analysis"])
 
+    def test_verified_continuity_recovers_the_post_checkpoint_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session, timing = self._failed_delivery_fixture(root, contiguous=True)
+            session["config_snapshot"]["study"]["settings"][
+                "analysis_checkpoint_s"] = 0.1  # 1600 samples, inside the capture
+            events = [json.loads(line) for line
+                      in (root / "sessions" / "attempt" / "events.jsonl")
+                      .read_text().splitlines()]
+            next_sequence = max(row.get("event_sequence") or 0
+                                for row in events) + 1
+            events += [
+                {"event": "analysis_checkpoint_requested",
+                 "event_sequence": next_sequence,
+                 "requested_input_sample": 1600},
+                {"event": "analysis_checkpoint_reached",
+                 "event_sequence": next_sequence + 1,
+                 "requested_input_sample": 1600, "input_sample": 2048,
+                 "route_mode": "vc"},
+            ]
+            (root / "sessions" / "attempt" / "events.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in events))
+            session["artifact_manifest"]["artifacts"]["events"] = file_record(
+                root / "sessions" / "attempt" / "events.jsonl", relative_to=root)
+
+            result = evaluate_technical_validity(session, root, timing)
+
+        # No stream_stop survived, so the capture's extent comes from its last
+        # certified chunk instead of being read as "never reached the window".
+        self.assertTrue(result["valid_for_condition_analysis"])
+        self.assertTrue(result["valid_for_post_checkpoint_analysis"])
+
     def test_unverified_continuity_keeps_failed_delivery_invalid(self):
         with tempfile.TemporaryDirectory() as temp:
             session, timing = self._failed_delivery_fixture(
