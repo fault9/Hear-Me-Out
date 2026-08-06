@@ -13,7 +13,7 @@ type Event = Record<string, any>
 
 const QUESTIONS: { key: string; label: string; hint?: string; dependsOn?: string }[] = [
   { key: "verified_overlap",
-    label: "Real simultaneous speech (not noise or leakage)?", hint: "1 / 2" },
+    label: "Real simultaneous speech (not noise or leakage)?" },
   { key: "verified_participant_barge_in", label: "Participant barge-in?",
     hint: "a genuine attempt to take the floor — a backchannel or continuer is No",
     dependsOn: "verified_overlap" },
@@ -225,15 +225,20 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       if ((e.target as HTMLElement)?.tagName === "INPUT") return
       if (e.code === "Space") {
         e.preventDefault()
-        if (playing) pauseAll(); else playEvent()
+        if (playing) { pauseAll(); return }
+        // Resume mid-window; replay the window once it has finished (or the
+        // position was scrubbed outside it).
+        const current = events[index]
+        if (!current) return
+        const [from, to] = eventWindow(current)
+        if (position >= to / 1000 - 0.05 || position < from / 1000 - 0.05) playEvent()
+        else playFrom(position, to / 1000)
       }
-      if (e.key === "1") setAnswers((a) => withInapplicableCleared({ ...a, verified_overlap: "1" }))
-      if (e.key === "2") setAnswers((a) => withInapplicableCleared({ ...a, verified_overlap: "0" }))
       if (e.key === "Enter") save()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [started, playing, playEvent, pauseAll, save])
+  }, [started, playing, position, events, index, playEvent, playFrom, pauseAll, save])
 
   if (!started) {
     return (
@@ -264,7 +269,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
         <Badge variant="secondary">{done} / {events.length} verified</Badge>
         <span className="text-muted-foreground">item {index + 1} · {exportName}</span>
         <span className="ml-auto text-xs text-muted-foreground">
-          space = play · 1/2 = overlap yes/no · enter = save
+          space = play/pause · enter = save
         </span>
       </div>
 
