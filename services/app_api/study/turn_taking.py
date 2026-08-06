@@ -5,32 +5,70 @@ from __future__ import annotations
 from typing import Any
 
 
-TURN_EPISODE_SCHEMA = "hmo.turn-episode.v1"
+TURN_EPISODE_SCHEMA = "hmo.turn-episode.v2"
 TURN_GAP_SCHEMA = "hmo.turn-gap.v1"
 OVERLAP_MINIMUM_MS = 200.0
+# Silence that ends a turn. The RMS detectors emit an interval per stretch of
+# speech separated by more than their 250 ms hangover, so one continuous turn
+# arrives as several intervals. Pooled inter-interval gaps show a mode at
+# 0.25-0.5 s decaying to a flat tail by ~1.5 s on the participant side and
+# ~0.75 s on the assistant side; the looser of the two is used for both, which
+# groups more rather than less and so cannot manufacture onsets.
+ONSET_GROUPING_MS = 1500.0
+
+
+def group_turns(intervals: list[dict], *,
+                grouping_ms: float = ONSET_GROUPING_MS) -> list[dict]:
+    turns: list[dict[str, Any]] = []
+    for index, interval in enumerate(intervals):
+        start, end = float(interval["start_ms"]), float(interval["end_ms"])
+        if turns and start - turns[-1]["end_ms"] <= grouping_ms:
+            turns[-1]["end_ms"] = max(turns[-1]["end_ms"], end)
+            turns[-1]["members"].append((index, start, end))
+        else:
+            turns.append({"start_ms": start, "end_ms": end,
+                          "members": [(index, start, end)]})
+    return turns
 
 
 def build_turn_episodes(participant: list[dict], assistant: list[dict], *,
-                        overlap_minimum_ms: float = OVERLAP_MINIMUM_MS) -> list[dict]:
-    """Link every participant/assistant speech intersection once.
+                        overlap_minimum_ms: float = OVERLAP_MINIMUM_MS,
+                        grouping_ms: float = ONSET_GROUPING_MS) -> list[dict]:
+    """Link every participant/assistant turn intersection once.
 
     Directional flags are onset relationships, not semantic judgments. A
     participant barge-in candidate begins after assistant onset and before its
     offset; an assistant premature-onset candidate is the symmetric case.
     Exact equal onsets remain non-directional because the detectors are
     quantized and cannot establish who started first.
+
+    Onsets belong to turns, not to detected intervals. Evaluated per interval,
+    a speaker who already held the floor, paused, and resumed was recorded as
+    starting the overlap - 26% of participant barge-in candidates and 24% of
+    assistant premature-onset candidates over the pooled sessions, each naming
+    the party opposite to the one that actually interrupted. Overlap duration
+    sums the intersecting speech and so excludes silence inside either turn.
     """
     rows: list[dict[str, Any]] = []
-    for participant_index, participant_interval in enumerate(participant):
-        p_start = float(participant_interval["start_ms"])
-        p_end = float(participant_interval["end_ms"])
-        for assistant_index, assistant_interval in enumerate(assistant):
-            a_start = float(assistant_interval["start_ms"])
-            a_end = float(assistant_interval["end_ms"])
-            overlap_start = max(p_start, a_start)
-            overlap_end = min(p_end, a_end)
-            if overlap_end <= overlap_start:
+    participant_turns = group_turns(participant, grouping_ms=grouping_ms)
+    assistant_turns = group_turns(assistant, grouping_ms=grouping_ms)
+    for participant_turn in participant_turns:
+        p_start = participant_turn["start_ms"]
+        p_end = participant_turn["end_ms"]
+        for assistant_turn in assistant_turns:
+            a_start = assistant_turn["start_ms"]
+            a_end = assistant_turn["end_ms"]
+            spans = [
+                (max(p_span_start, a_span_start), min(p_span_end, a_span_end))
+                for _, p_span_start, p_span_end in participant_turn["members"]
+                for _, a_span_start, a_span_end in assistant_turn["members"]
+                if min(p_span_end, a_span_end) > max(p_span_start, a_span_start)
+            ]
+            if not spans:
                 continue
+            overlap_start = min(start for start, _ in spans)
+            overlap_end = max(end for _, end in spans)
+            duration = sum(end - start for start, end in spans)
 
             participant_barge_in = a_start < p_start < a_end
             assistant_premature_onset = p_start < a_start < p_end
@@ -40,11 +78,12 @@ def build_turn_episodes(participant: list[dict], assistant: list[dict], *,
                 initiator = "assistant"
             else:
                 initiator = "simultaneous"
-            duration = overlap_end - overlap_start
             rows.append({
                 "schema": TURN_EPISODE_SCHEMA,
-                "participant_interval": participant_index,
-                "assistant_interval": assistant_index,
+                "participant_interval": participant_turn["members"][0][0],
+                "assistant_interval": assistant_turn["members"][0][0],
+                "participant_intervals": [row[0] for row in participant_turn["members"]],
+                "assistant_intervals": [row[0] for row in assistant_turn["members"]],
                 "participant_onset_ms": p_start,
                 "participant_offset_ms": p_end,
                 "assistant_onset_ms": a_start,
@@ -52,6 +91,7 @@ def build_turn_episodes(participant: list[dict], assistant: list[dict], *,
                 "overlap_start_ms": overlap_start,
                 "overlap_end_ms": overlap_end,
                 "overlap_duration_ms": duration,
+                "onset_grouping_ms": grouping_ms,
                 "initiator": initiator,
                 "overlap_200ms_candidate": duration >= overlap_minimum_ms,
                 "participant_barge_in_candidate": participant_barge_in,

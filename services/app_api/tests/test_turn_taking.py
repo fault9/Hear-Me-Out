@@ -36,6 +36,39 @@ class TurnEpisodeTests(unittest.TestCase):
         self.assertEqual(event["participant_stop_latency_ms"], 400)
         self.assertIsNone(event["assistant_stop_latency_ms"])
 
+    def test_a_resumption_is_not_a_new_onset(self):
+        """The participant holds the floor from 10s, the assistant cuts in at
+        12s, and the participant pauses and resumes twice. Per interval, the
+        two resumptions each began inside the assistant's speech and were
+        recorded as participant barge-ins - naming the wrong party."""
+        episodes = build_turn_episodes(
+            [{"start_ms": 10000, "end_ms": 13000},
+             {"start_ms": 13500, "end_ms": 16000},
+             {"start_ms": 16500, "end_ms": 20000}],
+            [{"start_ms": 12000, "end_ms": 18000}],
+        )
+
+        self.assertEqual(len(episodes), 1)
+        event = episodes[0]
+        self.assertEqual(event["initiator"], "assistant")
+        self.assertFalse(event["participant_barge_in_candidate"])
+        self.assertTrue(event["assistant_premature_onset_candidate"])
+        self.assertEqual(event["participant_onset_ms"], 10000)
+        self.assertEqual(event["participant_intervals"], [0, 1, 2])
+        # Silence inside either turn is not overlapping speech.
+        self.assertEqual(event["overlap_duration_ms"], 1000 + 2500 + 1500)
+
+    def test_a_pause_longer_than_the_grouping_starts_a_new_turn(self):
+        episodes = build_turn_episodes(
+            [{"start_ms": 10000, "end_ms": 13000},
+             {"start_ms": 15000, "end_ms": 17000}],
+            [{"start_ms": 12000, "end_ms": 18000}],
+        )
+
+        self.assertEqual(len(episodes), 2)
+        self.assertEqual([row["initiator"] for row in episodes],
+                         ["assistant", "participant"])
+
     def test_equal_onsets_are_not_assigned_a_direction(self):
         event = build_turn_episodes(
             [{"start_ms": 100, "end_ms": 500}],
