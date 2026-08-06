@@ -44,6 +44,10 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const [exportName, setExportName] = useState("")
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Where each track actually landed, so a discarded seek is visible rather
+  // than sounding like broken audio.
+  const [seek, setSeek] = useState<Record<string, {
+    target: number; at: number; duration: number }>>({})
   const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map())
   const stopTimers = useRef<number[]>([])
 
@@ -72,6 +76,14 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     if (cached) return cached
     const url = await adminApi.reviewAudio(token, studyId, sessionId, track)
     const element = new Audio(url)
+    element.preload = "auto"
+    // Seeking before metadata loads is silently discarded and playback starts
+    // at 0 — the wrong moment, and easy to mistake for broken audio.
+    await new Promise<void>((resolve) => {
+      if (element.readyState >= 1) { resolve(); return }
+      element.addEventListener("loadedmetadata", () => resolve(), { once: true })
+      element.addEventListener("error", () => resolve(), { once: true })
+    })
     audioRef.current.set(key, element)
     return element
   }, [token, studyId])
@@ -93,7 +105,10 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
         // Event times carry the frozen capture correction; the raw microphone
         // file is in capture time, so add it back when seeking that track.
         const offset = track === "participant_raw" ? correctionMs : 0
-        element.currentTime = Math.max(0, (from + offset) / 1000)
+        const target = Math.max(0, (from + offset) / 1000)
+        element.currentTime = target
+        setSeek((s) => ({ ...s, [track]: { target, at: element.currentTime,
+                                           duration: element.duration } }))
         await element.play()
         stopTimers.current.push(window.setTimeout(() => element.pause(), to - from))
       } catch (e: any) { setErr(e?.message || String(e)) }
@@ -201,6 +216,17 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
           <Button size="sm" variant="secondary" onClick={() => play("assistant")}>Assistant only</Button>
           <Button size="sm" variant="ghost" onClick={stopAll}>Stop</Button>
         </div>
+        {Object.keys(seek).length > 0 && (
+          <p className="mt-2 font-mono text-xs text-muted-foreground">
+            {Object.entries(seek).map(([track, s]) => (
+              <span key={track} className="mr-4">
+                {track}: seeked {s.at.toFixed(1)}s
+                {Math.abs(s.at - s.target) > 0.5 && ` (wanted ${s.target.toFixed(1)}s — seek failed)`}
+                {" "}of {Number.isFinite(s.duration) ? s.duration.toFixed(1) : "?"}s
+              </span>
+            ))}
+          </p>
+        )}
       </div>
 
       <div className="max-h-56 overflow-auto rounded-lg border p-3 text-sm">
