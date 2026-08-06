@@ -694,7 +694,13 @@ def build_study_router() -> APIRouter:
             key = f"{row['session_id']}::{row['episode_id']}"
             events.append({k: v for k, v in row.items() if k != "condition"}
                           | {"event_key": key, "verdict": verdicts.get(key)})
+        # Event times carry the frozen capture correction, so seeking the raw
+        # microphone file needs it added back to land on the same instant.
+        study = backend.get_study(study_id) or {}
+        timing_settings = ((study.get("settings") or {}).get("timing") or {})
         return {"export": export.name, "events": events,
+                "participant_capture_latency_correction_ms": float(
+                    timing_settings.get("participant_capture_latency_correction_ms") or 0.0),
                 "completed": sum(1 for e in events if e["verdict"])}
 
     @router.post("/studies/{study_id}/review/turn-verdict",
@@ -767,19 +773,11 @@ def build_study_router() -> APIRouter:
     @router.get("/studies/{study_id}/review/audio",
                 dependencies=[Depends(require_admin)])
     async def review_audio(study_id: int, session_id: str, track: str):
+        # Only the raw microphone and assistant tracks. merged.wav is built
+        # from the TRANSMITTED participant audio, so it carries the converted
+        # voice and would reveal the condition.
         column = {"participant_raw": "participant_raw_path",
                   "assistant": "assistant_model_path"}.get(track)
-        if track == "merged":
-            session = backend.get_session(session_id)
-            if not session:
-                raise HTTPException(status_code=404, detail="Unknown session")
-            relative = ((session.get("files") or {}).get("merged"))
-            if not relative:
-                raise HTTPException(status_code=404, detail="No merged audio")
-            path = (STUDY_DATA_DIR / relative).resolve()
-            if not path.is_file() or STUDY_DATA_DIR.resolve() not in path.parents:
-                raise HTTPException(status_code=404, detail="Audio file is missing")
-            return FileResponse(path, media_type="audio/wav")
         if column is None:
             raise HTTPException(status_code=422, detail="Unknown track")
         _, rows = _queue_rows(study_id)
