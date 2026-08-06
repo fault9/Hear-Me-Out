@@ -126,17 +126,25 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     if (!event) return
     setAnswers({ ...(event.verdict || {}) })
     setNote(event.verdict?.verification_note || "")
+    // Clear first: showing the previous item's transcript while the next one
+    // loads is worse than showing nothing, and a late response from an earlier
+    // item must never overwrite the current one.
+    setContext([])
+    let cancelled = false
     const [from, to] = eventWindow(event)
     adminApi.reviewContext(token, studyId, event.session_id, from, to)
-      .then((r) => setContext(r.utterances || []))
-      .catch(() => setContext([]))
+      .then((r) => { if (!cancelled) setContext(r.utterances || []) })
+      .catch(() => { if (!cancelled) setContext([]) })
     const upcoming = events[index + 1]
     if (upcoming) {
       audioFor(upcoming.session_id, "participant_raw").catch(() => {})
       audioFor(upcoming.session_id, "assistant").catch(() => {})
     }
-    return stopAll
-  }, [event, index, events, token, studyId, audioFor, stopAll])
+    return () => { cancelled = true; stopAll() }
+    // Keyed on the event itself: re-fetching on every saved verdict would
+    // reopen the race for no benefit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event?.event_key, token, studyId])
 
   const save = useCallback(async () => {
     if (!event) return
@@ -268,7 +276,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
           return (
             <p key={u.id} className={inEvent ? "rounded bg-primary/10 px-1" : ""}>
               <span className="font-mono text-xs text-muted-foreground">
-                {u.speaker === "participant" ? "P" : "A"} {Math.round(u.start_ms ?? 0)}
+                {u.speaker === "participant" ? "P" : "A"} {((u.start_ms ?? 0) / 1000).toFixed(1)}s
               </span>{" "}
               {u.text || <em className="text-muted-foreground">(no text)</em>}
             </p>
