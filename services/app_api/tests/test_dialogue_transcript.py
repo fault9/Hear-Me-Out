@@ -202,6 +202,57 @@ class DialogueTranscriptTests(unittest.TestCase):
             self.assertEqual(result["utterances"][0]["text"],
                              "Got it. Let me check.")
 
+    def test_the_assistant_falling_silent_ends_its_turn(self):
+        """A stall ("one moment please" ... 40s ... a new turn) is two turns
+        even though the participant never speaks."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = Path("sessions/stall/participant_raw.wav")
+            self._write_wav(root / relative, 60.0)
+            (root / relative).parent.joinpath("client_timeline.json").write_text(
+                json.dumps({"capture": {"chunks": [
+                    {"chunk_sequence": 1, "capture_start_sample": 0,
+                     "sample_count": 2048, "timeline_start_ms": 0.0}]}}))
+            session = {
+                "session_id": "P1_R01_S02_A01",
+                "voice_condition": "stable_natural",
+                "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
+                "files": {"participant_raw": str(relative)},
+                "transcript": {"model": [
+                    {"text": "One moment please.", "start": 10.0, "end": 11.0,
+                     "speaker": "personaplex"},
+                    {"text": "Yes, I found your assignment.", "start": 49.0,
+                     "end": 51.0, "speaker": "personaplex"},
+                ]},
+            }
+            timing = {
+                "schema": "hmo.timing-analysis.v4",
+                "status": "estimated_pending_validation",
+                "participant_intervals": [
+                    {"start_ms": 55000.0, "end_ms": 56000.0, "detector": "rms"}],
+                # The assistant is silent between 11s and 49s.
+                "assistant_intervals": [
+                    {"start_ms": 10000.0, "end_ms": 11000.0, "detector": "rms"},
+                    {"start_ms": 49000.0, "end_ms": 51000.0, "detector": "rms"},
+                ],
+                "route_switches": [], "overlaps": [], "barge_ins": [],
+                "integrity": {"participant_capture_latency_correction_ms": 0.0},
+                "result_artifact": {"path": "analysis/timing/timing.json"},
+            }
+
+            def transcribe(_path: str) -> dict:
+                return {"text": "Participant utterance.", "segments": [],
+                        "status": "complete", "error": None}
+
+            result = prepare_dialogue_transcript(
+                session, root, "analysis-4", timing, transcribe)
+
+            assistants = [row for row in result["utterances"]
+                          if row["speaker"] == "assistant"]
+            self.assertEqual([row["text"] for row in assistants],
+                             ["One moment please.",
+                              "Yes, I found your assignment."])
+
 
 if __name__ == "__main__":
     unittest.main()

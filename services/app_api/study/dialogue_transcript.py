@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import tempfile
 import time
 import wave
@@ -12,7 +13,11 @@ from typing import Any, Callable
 
 from .artifacts import atomic_write_json, file_record
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v4"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v5"
+# Silence that ends an assistant turn, measured on the same packet-RMS speech
+# detection as the timing analysis. See _merge_assistant_runs.
+ASSISTANT_TURN_SILENCE_MS = float(
+    os.environ.get("ASSISTANT_TURN_SILENCE_MS", "1500"))
 _ASR_PADDING_MS = 200.0
 
 Transcriber = Callable[[str], dict]
@@ -232,15 +237,29 @@ def _assistant_utterances(fragments: list[dict]) -> tuple[list[dict], list[dict]
     return utterances, unassigned
 
 
-def _merge_assistant_runs(utterances: list[dict]) -> list[dict]:
+def _assistant_silence_ms(start_ms: float, end_ms: float,
+                          intervals: list[dict]) -> float:
+    speech = sum(
+        max(0.0, min(end_ms, float(row["end_ms"])) - max(start_ms, float(row["start_ms"])))
+        for row in intervals)
+    return max(0.0, end_ms - start_ms - speech)
+
+
+def _merge_assistant_runs(utterances: list[dict],
+                          intervals: list[dict]) -> list[dict]:
     # The model emits text roughly per sentence, so one spoken turn arrives as
     # several fragments. A run is closed by the participant speaking, which
-    # keeps a barge-in visible at the point it happened.
+    # keeps a barge-in visible at the point it happened, or by the assistant
+    # falling silent: over the pooled sessions 55% of fragment junctions carry
+    # under 0.5s of silence (continuous speech), and past ~1.5s the
+    # distribution is a featureless tail out to 56s.
     merged: list[dict] = []
     for row in utterances:
         previous = merged[-1] if merged else None
         if (row["speaker"] != "assistant" or previous is None
-                or previous["speaker"] != "assistant"):
+                or previous["speaker"] != "assistant"
+                or _assistant_silence_ms(previous["end_ms"], row["end_ms"],
+                                         intervals) > ASSISTANT_TURN_SILENCE_MS):
             merged.append(copy.deepcopy(row))
             continue
         previous["text"] = " ".join(
@@ -288,7 +307,7 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
     utterances = _merge_assistant_runs(sorted(
         participant + assistant,
         key=lambda row: (row["start_ms"], 0 if row["speaker"] == "assistant" else 1),
-    ))
+    ), assistant_intervals)
     failed_asr = sum(
         row["text_provenance"].get("asr_status") != "complete"
         for row in participant
@@ -305,6 +324,7 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
             "timing_status": timing.get("status"),
             "speech_boundaries": "copied_from_timing_analysis_not_inferred_from_asr",
             "assistant_times": "model_emission_clock_ordering_only_not_measurement",
+            "assistant_turn_silence_ms": ASSISTANT_TURN_SILENCE_MS,
         },
         "utterances": utterances,
         "overlaps": copy.deepcopy(timing.get("overlaps") or []),
