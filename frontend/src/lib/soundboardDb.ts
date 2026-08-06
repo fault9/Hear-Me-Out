@@ -17,6 +17,7 @@ import {
 } from "@/lib/soundboardConfig"
 
 export type ManipulationMode = "unconverted" | "vc" | "pitch_formant"
+export type SourceSpeaker = "masculine_presenting" | "feminine_presenting"
 
 // Per-slot record. raw is the as-recorded WAV at PP_SAMPLE_RATE; baked is the
 // post-VC or post-pitch-formant WAV (also at PP_SAMPLE_RATE). For unconverted
@@ -28,6 +29,9 @@ export interface Slot {
   // soundboard and for analysing session logs afterward.
   condition: string
   manipulation: ManipulationMode
+  // Prespecified audit source identity (e.g. masculine_presenting). This is
+  // experimental metadata, not inferred from the recording or its filename.
+  sourceSpeaker?: SourceSpeaker
 
   // VC-mode fields
   targetId?: string

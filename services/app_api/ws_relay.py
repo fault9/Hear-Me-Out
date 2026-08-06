@@ -13,9 +13,13 @@ STUDY_CHAT_UPSTREAM (e.g. ws://127.0.0.1:<port> in tests).
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
 import os
 import ssl
+from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import parse_qs
 
 import websockets
@@ -25,6 +29,60 @@ logger = logging.getLogger(__name__)
 
 RELAY_PATH = "/api/meanvc/chat-proxy"
 DEFAULT_UPSTREAM = "wss://127.0.0.1:5002"
+AUDIT_RELAY_PATH = "/api/personaplex/audit-relay"
+DEFAULT_PERSONAPLEX_UPSTREAM = "wss://127.0.0.1:8000"
+PERSONAPLEX_CHAT_PATH = "/api/chat"
+
+
+@dataclass
+class _DeliveryCounter:
+    active: bool = False
+    received_frames: int = 0
+    received_bytes: int = 0
+    forwarded_frames: int = 0
+    forwarded_bytes: int = 0
+    received_hash: Any = field(default_factory=hashlib.sha256)
+    forwarded_hash: Any = field(default_factory=hashlib.sha256)
+
+    def reset(self) -> None:
+        self.active = True
+        self.received_frames = 0
+        self.received_bytes = 0
+        self.forwarded_frames = 0
+        self.forwarded_bytes = 0
+        self.received_hash = hashlib.sha256()
+        self.forwarded_hash = hashlib.sha256()
+
+    def received(self, payload: bytes) -> None:
+        if not self.active or not payload or payload[0] != 1:
+            return
+        self.received_frames += 1
+        self.received_bytes += len(payload)
+        self.received_hash.update(payload)
+
+    def forwarded(self, payload: bytes) -> None:
+        if not self.active or not payload or payload[0] != 1:
+            return
+        self.forwarded_frames += 1
+        self.forwarded_bytes += len(payload)
+        self.forwarded_hash.update(payload)
+
+    def receipt(self, request_id: str) -> dict:
+        self.active = False
+        return {
+            "type": "hmo.audit.delivery_receipt",
+            "request_id": request_id,
+            "relay_received": {
+                "frames": self.received_frames,
+                "bytes": self.received_bytes,
+                "sha256": self.received_hash.hexdigest(),
+            },
+            "relay_forwarded": {
+                "frames": self.forwarded_frames,
+                "bytes": self.forwarded_bytes,
+                "sha256": self.forwarded_hash.hexdigest(),
+            },
+        }
 
 
 def _sendable_code(code) -> int:
@@ -36,7 +94,20 @@ def _sendable_code(code) -> int:
     return int(code)
 
 
-async def _pump_browser_to_upstream(browser: WebSocket, upstream):
+async def _send_browser(browser: WebSocket, lock: asyncio.Lock, message) -> None:
+    async with lock:
+        if isinstance(message, bytes):
+            await browser.send_bytes(message)
+        else:
+            await browser.send_text(message)
+
+
+async def _pump_browser_to_upstream(
+    browser: WebSocket,
+    upstream,
+    send_lock: asyncio.Lock,
+    delivery: _DeliveryCounter | None,
+):
     """Forward client frames until the browser disconnects; returns its close code."""
     while True:
         message = await browser.receive()
@@ -44,27 +115,60 @@ async def _pump_browser_to_upstream(browser: WebSocket, upstream):
             return message.get("code")
         data = message.get("bytes")
         if data is not None:
+            if delivery is not None:
+                delivery.received(data)
             await upstream.send(data)
+            if delivery is not None:
+                delivery.forwarded(data)
             continue
         text = message.get("text")
         if text is not None:
+            if delivery is not None:
+                try:
+                    control = json.loads(text)
+                except (TypeError, ValueError):
+                    control = None
+                if isinstance(control, dict):
+                    request_id = str(control.get("request_id") or "")
+                    if control.get("type") == "hmo.audit.delivery_reset":
+                        delivery.reset()
+                        await _send_browser(browser, send_lock, json.dumps({
+                            "type": "hmo.audit.delivery_reset_ack",
+                            "request_id": request_id,
+                        }))
+                        continue
+                    if control.get("type") == "hmo.audit.delivery_receipt_request":
+                        await _send_browser(
+                            browser,
+                            send_lock,
+                            json.dumps(delivery.receipt(request_id)),
+                        )
+                        continue
             await upstream.send(text)
 
 
-async def _pump_upstream_to_browser(upstream, browser: WebSocket):
+async def _pump_upstream_to_browser(
+    upstream, browser: WebSocket, send_lock: asyncio.Lock
+):
     async for message in upstream:
         if isinstance(message, (bytes, bytearray, memoryview)):
-            await browser.send_bytes(bytes(message))
+            await _send_browser(browser, send_lock, bytes(message))
         else:
-            await browser.send_text(message)
+            await _send_browser(browser, send_lock, message)
 
 
-async def _relay(browser: WebSocket) -> None:
+async def _relay(
+    browser: WebSocket,
+    upstream_base: str,
+    upstream_path: str,
+    delivery_audit: bool = False,
+) -> None:
     await browser.accept()
     query = browser.url.query or ""
     sid = (parse_qs(query).get("session_id") or ["-"])[0]
-    upstream_base = os.environ.get("STUDY_CHAT_UPSTREAM", DEFAULT_UPSTREAM).rstrip("/")
-    url = f"{upstream_base}{RELAY_PATH}" + (f"?{query}" if query else "")
+    url = f"{upstream_base.rstrip('/')}{upstream_path}" + (
+        f"?{query}" if query else ""
+    )
 
     ssl_ctx = None
     if url.startswith("wss:"):
@@ -82,10 +186,21 @@ async def _relay(browser: WebSocket) -> None:
             await browser.close(code=1011, reason="audio service unavailable")
         return
 
-    logger.info(f"[relay] chat-proxy open session={sid} -> {upstream_base}")
+    logger.info(
+        "[relay] open path=%s session=%s -> %s",
+        upstream_path,
+        sid,
+        upstream_base,
+    )
     browser_code = None
-    up_task = asyncio.create_task(_pump_browser_to_upstream(browser, upstream))
-    down_task = asyncio.create_task(_pump_upstream_to_browser(upstream, browser))
+    send_lock = asyncio.Lock()
+    delivery = _DeliveryCounter() if delivery_audit else None
+    up_task = asyncio.create_task(
+        _pump_browser_to_upstream(browser, upstream, send_lock, delivery)
+    )
+    down_task = asyncio.create_task(
+        _pump_upstream_to_browser(upstream, browser, send_lock)
+    )
     try:
         done, pending = await asyncio.wait(
             {up_task, down_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -117,4 +232,17 @@ async def _relay(browser: WebSocket) -> None:
 def register_chat_relay(app: FastAPI) -> None:
     @app.websocket(RELAY_PATH)
     async def chat_proxy_relay(browser: WebSocket):
-        await _relay(browser)
+        upstream = os.environ.get("STUDY_CHAT_UPSTREAM", DEFAULT_UPSTREAM)
+        await _relay(browser, upstream, RELAY_PATH)
+
+    @app.websocket(AUDIT_RELAY_PATH)
+    async def personaplex_audit_relay(browser: WebSocket):
+        upstream = os.environ.get(
+            "PERSONAPLEX_AUDIT_UPSTREAM", DEFAULT_PERSONAPLEX_UPSTREAM
+        )
+        await _relay(
+            browser,
+            upstream,
+            PERSONAPLEX_CHAT_PATH,
+            delivery_audit=True,
+        )

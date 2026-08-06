@@ -71,3 +71,14 @@ export function getPersonaplexWsURL(textPrompt?: string): string {
   const tp = textPrompt || DEFAULT_PROMPT;
   return `wss://${wsHost}:8000/api/chat?voice_prompt=${encodeURIComponent(voicePrompt)}&text_prompt=${encodeURIComponent(tp)}`;
 }
+
+export const PERSONAPLEX_AUDIT_VOICE_PROMPT = "NATF2.pt";
+
+export function getPersonaplexAuditWsURL(textPrompt?: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const params = new URLSearchParams({
+    voice_prompt: PERSONAPLEX_AUDIT_VOICE_PROMPT,
+    text_prompt: textPrompt || DEFAULT_PROMPT,
+  });
+  return `${protocol}//${window.location.host}/api/personaplex/audit-relay?${params}`;
+}

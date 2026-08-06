@@ -444,6 +444,7 @@ export function SoundboardPanel({ ws, vcEnabled }: Props) {
             ws={ws}
             playback={playback}
             slots={visible}
+            targets={sb.targets}
             onBeforeRun={() => setAutoplay(false)}
           />
         )}

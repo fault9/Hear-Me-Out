@@ -47,7 +47,10 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { OPUS_ENCODER_CONFIG, PP_SAMPLE_RATE } from "@/lib/soundboardConfig"
 import type { Slot } from "@/lib/soundboardDb"
-import type { useWebSocket } from "@shared/hooks/useWebSocket"
+import type {
+  AudioDeliveryAuditResult,
+  useWebSocket,
+} from "@shared/hooks/useWebSocket"
 import { transcribeWavBlob } from "@shared/services/api"
 import { putSlot } from "@/lib/soundboardDb"
 import { captureClip } from "@/lib/soundboardCapture"
@@ -67,6 +70,13 @@ export interface PlaybackRecord {
   startMs: number          // performance.now() at src.start()
   endMs: number            // performance.now() at src.onended / stop
   clipDurationMs: number   // canonical, from baked AudioBuffer
+  deliveryAudit: AudioDeliveryAuditResult | null
+}
+
+export type PlaybackStart = Pick<PlaybackRecord, "slotId" | "startMs" | "clipDurationMs">
+
+interface PlaybackOptions {
+  auditDelivery?: boolean
 }
 
 interface UseSoundboardPlaybackOpts {
@@ -87,6 +97,8 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
   const startedAtRef = useRef<number>(0)
   const sourceEndedAtRef = useRef<number>(0)
   const clipDurationRef = useRef<number>(0)
+  const lastPlaybackRecordRef = useRef<PlaybackRecord | null>(null)
+  const deliveryAuditActiveRef = useRef(false)
 
   // Local monitor: whether the researcher hears the clip through their own
   // speakers as it plays to PP. This is purely a local tap — muting it does
@@ -120,18 +132,25 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
   const stop = useCallback(async () => {
     const slot = activeSlotRef.current
     await teardown()
+    const deliveryAudit = deliveryAuditActiveRef.current
+      ? await ws.finishAudioDeliveryAudit()
+      : null
+    deliveryAuditActiveRef.current = false
     // Un-suppress the live mic so normal conversation can resume.
     ws.setMicMuted(false)
     if (slot) {
       // The encoder receives a short flush grace period after the source ends.
       // Audit timing must use the audio-source boundary, not teardown time.
       const endMs = sourceEndedAtRef.current || performance.now()
-      onPlayEnd?.(slot, {
+      const record = {
         slotId: slot.id,
         startMs: startedAtRef.current,
         endMs,
         clipDurationMs: clipDurationRef.current,
-      })
+        deliveryAudit,
+      }
+      lastPlaybackRecordRef.current = record
+      onPlayEnd?.(slot, record)
     }
     sourceEndedAtRef.current = 0
     activeSlotRef.current = null
@@ -139,14 +158,14 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
   }, [onPlayEnd, teardown, ws])
 
   const playSlot = useCallback(
-    async (slot: Slot) => {
+    async (slot: Slot, options: PlaybackOptions = {}) => {
       setError(null)
       // The clip we send: baked if it exists, otherwise raw (for "unconverted"
       // condition slots that play the researcher's own voice unchanged).
       const blob = slot.baked ?? slot.raw
       if (!blob) {
         setError("Slot has no audio to play.")
-        return
+        return null
       }
       // Live, ref-based readiness (socket OPEN + PP handshake done). We do NOT
       // gate on the React `connected`/`warmupComplete` state here: a long-lived
@@ -158,7 +177,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
             + "before playing a clip."
           : "Not connected to PersonaPlex (the conversation closed — check the "
             + "browser console, then restart the session).")
-        return
+        return null
       }
       // Recorder is loaded from CDN; if the script tag failed (offline),
       // surface a clear error rather than crashing.
@@ -166,7 +185,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
         .Recorder
       if (!RecorderCtor) {
         setError("Opus encoder not available (window.Recorder missing).")
-        return
+        return null
       }
       // If another slot is mid-play, cut it off cleanly first.
       if (playingSlotId) await stop()
@@ -180,7 +199,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
           `Browser refused AudioContext at ${PP_SAMPLE_RATE} Hz: ${(e as Error).message}. ` +
             `Soundboard playback aborted to avoid implicit resampling.`,
         )
-        return
+        return null
       }
       // Defensive: some browsers ignore the sampleRate hint and silently use
       // the device default. If so, abort — implicit resampling would invalidate
@@ -191,7 +210,7 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
           `AudioContext rate is ${ctx.sampleRate} Hz, expected ${PP_SAMPLE_RATE}. ` +
             `Soundboard playback aborted to avoid implicit resampling.`,
         )
-        return
+        return null
       }
 
       // Decode the baked WAV into an AudioBuffer at PP_SAMPLE_RATE.
@@ -231,13 +250,36 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
       srcRef.current = src
       recRef.current = recorder
       activeSlotRef.current = slot
+      lastPlaybackRecordRef.current = null
       sourceEndedAtRef.current = 0
       clipDurationRef.current = clipDurationMs
 
       // Suppress the live mic BEFORE starting the encoder so no mic packets
       // slip through while the soundboard's Opus stream ramps up.
       ws.setMicMuted(true)
-      await recorder.start()
+      if (options.auditDelivery) {
+        try {
+          await ws.beginAudioDeliveryAudit()
+          deliveryAuditActiveRef.current = true
+        } catch (e) {
+          await teardown()
+          ws.setMicMuted(false)
+          setError(`Could not start delivery audit: ${(e as Error).message}`)
+          return null
+        }
+      }
+      try {
+        await recorder.start()
+      } catch (e) {
+        await teardown()
+        if (deliveryAuditActiveRef.current) {
+          await ws.finishAudioDeliveryAudit()
+          deliveryAuditActiveRef.current = false
+        }
+        ws.setMicMuted(false)
+        setError(`Could not start Opus encoder: ${(e as Error).message}`)
+        return null
+      }
       // Recorder is now connected to src in opus-recorder's internal graph.
       // Start the source AFTER recorder.start() so we don't lose initial frames.
       const startMs = performance.now()
@@ -305,12 +347,26 @@ export function useSoundboardPlayback(opts: UseSoundboardPlaybackOpts) {
         // Small flush window so the encoder emits the last frame's page.
         setTimeout(() => { void stop() }, 60)
       }
+      return { slotId: slot.id, startMs, clipDurationMs } satisfies PlaybackStart
     },
-    [onPlayStart, playingSlotId, stop, ws],
+    [onPlayStart, playingSlotId, stop, teardown, ws],
   )
 
   // Tear down on unmount.
   useEffect(() => () => { void teardown() }, [teardown])
 
-  return { playingSlotId, playSlot, stop, error, monitorMuted, setMonitorMuted }
+  const getLastPlaybackRecord = useCallback(
+    () => lastPlaybackRecordRef.current,
+    [],
+  )
+
+  return {
+    playingSlotId,
+    playSlot,
+    stop,
+    getLastPlaybackRecord,
+    error,
+    monitorMuted,
+    setMonitorMuted,
+  }
 }

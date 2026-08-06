@@ -21,26 +21,40 @@
 //  run exploratory (recorded in the manifest).
 // ============================================================================
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { getPersonaplexWsURL } from "@/lib/config"
-import { OPUS_ENCODER_CONFIG, PP_SAMPLE_RATE } from "@/lib/soundboardConfig"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  getPersonaplexAuditWsURL,
+  PERSONAPLEX_AUDIT_VOICE_PROMPT,
+} from "@/lib/config"
+import {
+  DURATION_DRIFT_TOLERANCE_MS,
+  OPUS_ENCODER_CONFIG,
+  PP_SAMPLE_RATE,
+} from "@/lib/soundboardConfig"
 import { uploadSoundboardAudit } from "@shared/services/api"
 import { makeZip } from "@/lib/soundboardZip"
 import { assembleSentWav, assembleSentTimelineWav, getCapturedClips, resetCapture } from "@/lib/soundboardCapture"
-import type { Slot } from "@/lib/soundboardDb"
-import type { useWebSocket } from "@shared/hooks/useWebSocket"
+import {
+  analyzeAuditInput,
+  type AuditInputTiming,
+} from "@/lib/soundboardAuditTiming"
+import type { Slot, Target } from "@/lib/soundboardDb"
+import type {
+  AudioDeliveryAuditResult,
+  useWebSocket,
+} from "@shared/hooks/useWebSocket"
 import type { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
 
 type WsState = ReturnType<typeof useWebSocket>
 type PlaybackState = ReturnType<typeof useSoundboardPlayback>
 
 // opus-recorder is loaded globally via <script> (see useSoundboardPlayback).
-declare class Recorder {
-  constructor(opts: Record<string, unknown>)
+interface RecorderInstance {
   start(): Promise<void>
   stop(): Promise<void> | void
   ondataavailable: ((buf: ArrayBuffer) => void) | null
 }
+type RecorderConstructor = new (opts: Record<string, unknown>) => RecorderInstance
 
 // PersonaPlex is full-duplex: its generation loop is CLOCKED by incoming
 // audio frames — with no input stream it produces nothing (no greeting, no
@@ -49,7 +63,9 @@ declare class Recorder {
 // clip plays (the same isMicMuted gate the live mic uses, so the clip's
 // Opus stream is the only input during playback — one coherent stream).
 async function startSilenceFeed(ws: WsState): Promise<{ stop: () => Promise<void> }> {
-  const RecorderCtor = (window as unknown as { Recorder?: typeof Recorder }).Recorder
+  const RecorderCtor = (
+    window as unknown as { Recorder?: RecorderConstructor }
+  ).Recorder
   if (!RecorderCtor) {
     throw new Error("Opus encoder not available (window.Recorder missing)")
   }
@@ -128,6 +144,9 @@ export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
 // Interrupt presentations fire this far into PP's ongoing speech run, so
 // every corrective interruption lands at a comparable point of a PP turn.
 export const INTERRUPT_FIRE_DELAY_MS = 800
+// Includes the browser's encoder-start and local relay-control round trip.
+// The exact realized offset is retained and used for the final validity check.
+export const INTERRUPT_FIRE_TOLERANCE_MS = 300
 // A decoded PP packet counts as speech (not silence) at/above this RMS; PP's
 // idle frames sit near zero (observed ~0.01 mean silence vs ~0.25 peak speech).
 export const PP_ENERGY_THRESHOLD = 0.02
@@ -136,6 +155,10 @@ export const PP_SPEAKING_GAP_MS = 350
 // Minimum warm time after handshake before playing, so PP's brief greeting
 // isn't clipped and the encoder/graph is settled.
 export const MIN_PRE_CLIP_MS = 1200
+// One energetic 20-ms assistant packet overlapping annotated source speech is
+// the minimum audit overlap event. Participant-study overlap uses its separate
+// manually verified 200-ms definition.
+export const AUDIT_OVERLAP_EVENT_MIN_MS = 20
 
 export type PresentationMode = "after_silence" | "during_pp_speech"
 
@@ -145,13 +168,21 @@ export interface AuditPresentation {
   label: string
   condition: string
   manipulation: string
+  route: "natural" | "converted" | "pitch_formant"
+  source_speaker: string | null
   engine: string | null
+  target_id: string | null
+  target_label: string | null
+  target_sha256: string | null
   clip_sha256: string
   // Hash of the slot's RAW source take. Matched natural/converted pairs share
   // one source WAV, so raw_sha256 equality across a pair IS the proof that
   // linguistic content and source timing are held constant.
   raw_sha256: string | null
   clip_duration_ms: number
+  input_timing_source_sha256: string
+  input_timing: AuditInputTiming
+  clip_audio: AuditClipAudioMetadata
   // after_silence: wait for PP to finish speaking, then play (default).
   // during_pp_speech: fire the clip WHILE PP is speaking (corrective-
   // interruption items) and measure yielding.
@@ -166,19 +197,44 @@ export interface AuditScriptTurn {
   label: string
   condition: string
   manipulation: string
+  route: "natural" | "converted" | "pitch_formant"
+  source_speaker: string | null
   engine: string | null
+  target_id: string | null
+  target_label: string | null
+  target_sha256: string | null
   clip_sha256: string
   raw_sha256: string | null
   clip_duration_ms: number
+  input_timing_source_sha256: string
+  input_timing: AuditInputTiming
+  clip_audio: AuditClipAudioMetadata
+}
+
+export interface AuditClipAudioMetadata {
+  sample_rate_hz: number
+  normalized: boolean
+  target_lufs: number | null
+  measured_lufs: number | null
+  duration_drift_ms: number
 }
 
 export interface AuditManifest {
-  schema: "hmo.soundboard-audit-manifest.v2"
+  schema: "hmo.soundboard-audit-manifest.v3"
   mode: AuditMode
   created_at: string
   seed: number
   reps: number
   prompt: string
+  assistant: {
+    engine: "personaplex"
+    voice_prompt: string
+    text_prompt: string
+  }
+  audio_format: {
+    personaplex_sample_rate_hz: number
+    opus_encoder: typeof OPUS_ENCODER_CONFIG
+  }
   inter_turn_gap_ms?: number    // script mode
   // Every parameter that DEFINES a measurement is frozen here — including the
   // energy-detection constants (what counts as PP "speaking") — so a run's
@@ -187,16 +243,23 @@ export interface AuditManifest {
     | "responseTimeoutMs" | "responseLingerMs" | "cooldownMs">
     & {
       interruptFireDelayMs: number
+      interruptFireToleranceMs: number
       interTurnGapMs?: number
       ppEnergyThresholdRms: number
       ppSpeakingGapMs: number
       minPreClipMs: number
+      overlapEventMinimumMs: number
     }
   production_engine_only: boolean
   engine_warnings: string[]
   // Matched mode only: raw_sha256 -> manipulations present; single-condition
   // items are warned about.
-  pairing?: { raw_sha256: string; labels: string[]; manipulations: string[] }[]
+  pairing?: {
+    raw_sha256: string
+    labels: string[]
+    manipulations: string[]
+    source_speakers: string[]
+  }[]
   pairing_warnings?: string[]
   presentations?: AuditPresentation[]   // matched mode
   script?: AuditScriptTurn[]            // script mode, single script
@@ -210,7 +273,7 @@ export interface AuditManifest {
 
 // Script mode records: one AuditSessionRecord per replay, each holding a
 // per-turn AuditTurnRecord. The whole-conversation PP energy events let the
-// post-processor slice per-turn overlap / barge-in / response windows.
+// post-processor slice per-turn overlap, onset, and response windows.
 export interface AuditTurnRecord {
   turn: number
   slot_id: string
@@ -220,9 +283,14 @@ export interface AuditTurnRecord {
   t_play_end_ms: number | null
   t_pp_response_start_ms: number | null
   t_pp_response_end_ms: number | null
+  // Live-runner diagnostic. The scheduled playback timeline and input-sample
+  // annotations produce the authoritative post-processed response gap.
   response_latency_ms: number | null
-  pp_spoke_during_clip: boolean   // PP energy inside the clip window = barge-in
+  // Coarse live-runner flag retained for diagnostics. Packet-scheduled timing
+  // in post-processing is authoritative for overlap and premature onset.
+  pp_spoke_during_clip: boolean
   sent_clip_sha256: string | null
+  delivery_audit: AudioDeliveryAuditResult | null
   notes: string[]
 }
 
@@ -256,19 +324,20 @@ export interface AuditRunRecord {
   t_play_end_ms: number | null
   t_pp_response_start_ms: number | null
   t_pp_response_end_ms: number | null
-  response_latency_ms: number | null   // clip end → PP speech start
-  // Interrupt presentations: how far into PP's speech run the clip fired, and
-  // how long PP kept speaking after the clip started (yielding). null when PP
-  // was not actually speaking at fire time (see notes).
+  // Live-runner clip-end-to-energy diagnostic. Post-processing derives the
+  // authoritative signed onset offset from scheduled playback packets.
+  response_latency_ms: number | null
+  // Live-runner interruption diagnostics retained for troubleshooting. The
+  // packet timeline supplies authoritative fire offset and stop latency.
   fire_offset_into_pp_speech_ms: number | null
   pp_yield_latency_ms: number | null
   notes: string[]
-  // EVERY PP speech event during this presentation, on performance.now().
-  // Overlap during the clip window, premature onsets in ambiguous pauses, and
-  // yielding are all computed from this list downstream.
+  // Legacy/live diagnostics on performance.now(). New analyses use the
+  // separately archived playback_timeline.json packet schedule.
   pp_speech_events: { type: string; timestampMs: number }[]
   pp_transcript: { text: string; speaker: string }[]
   sent_clip_sha256: string | null
+  delivery_audit: AudioDeliveryAuditResult | null
   // Internal carriers between runPresentation and the zip bundler; stripped
   // from the record before it lands in run_log.json.
   _ppWav?: Blob | null
@@ -314,13 +383,28 @@ async function sha256Hex(blob: Blob): Promise<string> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+const routeForSlot = (slot: Slot): AuditPresentation["route"] => {
+  if (slot.manipulation === "vc") return "converted"
+  if (slot.manipulation === "unconverted") return "natural"
+  return "pitch_formant"
+}
+
+const clipAudioForSlot = (slot: Slot): AuditClipAudioMetadata => ({
+  sample_rate_hz: slot.sampleRate,
+  normalized: slot.normalized === true,
+  target_lufs: slot.targetLufs ?? null,
+  measured_lufs: slot.measuredLufs ?? null,
+  duration_drift_ms: slot.driftMs,
+})
+
 export function useSoundboardAudit(opts: {
   ws: WsState
   playback: PlaybackState
   slots: Slot[]
+  targets: Target[]
   onBeforeRun?: () => void      // e.g. panel turns its autoplay off
 }) {
-  const { ws, playback, slots, onBeforeRun } = opts
+  const { ws, playback, slots, targets, onBeforeRun } = opts
   const [config, setConfig] = useState<AuditConfig>(DEFAULT_AUDIT_CONFIG)
   // Slot ids presented in interrupt mode (corrective-interruption items).
   const [interruptSlotIds, setInterruptSlotIds] = useState<Set<string>>(new Set())
@@ -361,6 +445,7 @@ export function useSoundboardAudit(opts: {
   // off per-packet RMS instead. Events are still logged for reference.
   const ppEventsRef = useRef<{ type: string; timestampMs: number; rms?: number }[]>([])
   const lastEnergeticMsRef = useRef(0)   // perf.now() of last rms>threshold packet
+  const energeticRunStartMsRef = useRef(0)
   const sawEnergyRef = useRef(false)
   const speakingNow = useCallback(
     () => lastEnergeticMsRef.current > 0
@@ -371,11 +456,19 @@ export function useSoundboardAudit(opts: {
     const offEvents = registerPpSpeechListener((e) => {
       ppEventsRef.current.push({ type: e.type, timestampMs: e.timestampMs })
     })
-    const offAudio = registerAssistantAudioListener((rms, perfMs) => {
+    const offAudio = registerAssistantAudioListener((rms, startMs, endMs) => {
       if (rms >= PP_ENERGY_THRESHOLD) {
-        lastEnergeticMsRef.current = perfMs
+        if (lastEnergeticMsRef.current === 0
+            || startMs - lastEnergeticMsRef.current >= PP_SPEAKING_GAP_MS) {
+          energeticRunStartMsRef.current = startMs
+        }
+        lastEnergeticMsRef.current = endMs
         sawEnergyRef.current = true
-        ppEventsRef.current.push({ type: "pp_energy", timestampMs: perfMs, rms: +rms.toFixed(4) })
+        ppEventsRef.current.push({
+          type: "pp_energy",
+          timestampMs: endMs,
+          rms: +rms.toFixed(4),
+        })
       }
     })
     return () => { offEvents(); offAudio() }
@@ -394,10 +487,54 @@ export function useSoundboardAudit(opts: {
   }, [])
 
   // ---- manifest ----------------------------------------------------------
-  const eligibleSlots = slots.filter((s) => !!(s.baked ?? s.raw))
-  const engineWarnings = eligibleSlots
-    .filter((s) => s.manipulation === "vc" && s.engine && s.engine !== "xvc")
-    .map((s) => `${s.label}: VC bake uses non-production engine "${s.engine}"`)
+  const eligibleSlots = useMemo(
+    () => slots.filter((slot) => !!(slot.baked ?? slot.raw)),
+    [slots],
+  )
+  const engineWarnings = useMemo(
+    () => eligibleSlots
+      .filter((slot) => slot.manipulation === "vc"
+        && slot.engine && slot.engine !== "xvc")
+      .map((slot) => `${slot.label}: VC bake uses non-production engine "${slot.engine}"`),
+    [eligibleSlots],
+  )
+  const configurationErrors = useMemo(() => {
+    const errors = eligibleSlots.flatMap((slot) => {
+      const slotErrors: string[] = []
+      if (!slot.sourceSpeaker) {
+        slotErrors.push(`${slot.label}: source speaker is missing`)
+      }
+      if (slot.sampleRate !== PP_SAMPLE_RATE) {
+        slotErrors.push(
+          `${slot.label}: sample rate is ${slot.sampleRate}, expected ${PP_SAMPLE_RATE}`,
+        )
+      }
+      if (!slot.normalized || slot.measuredLufs == null) {
+        slotErrors.push(`${slot.label}: final clip is not loudness-normalized`)
+      }
+      if (Math.abs(slot.driftMs) > DURATION_DRIFT_TOLERANCE_MS) {
+        slotErrors.push(`${slot.label}: duration drift is ${slot.driftMs} ms`)
+      }
+      if (slot.manipulation === "vc") {
+        const target = targets.find((candidate) => candidate.id === slot.targetId)
+        if (!slot.targetId || !target?.wav) {
+          slotErrors.push(`${slot.label}: converted clip has no uploaded target WAV`)
+        }
+      }
+      return slotErrors
+    })
+    const targetLevels = new Set(
+      eligibleSlots
+        .map((slot) => slot.targetLufs)
+        .filter((value): value is number => value != null),
+    )
+    if (targetLevels.size > 1) {
+      errors.push(
+        `clips use different loudness targets: ${[...targetLevels].sort().join(", ")} LUFS`,
+      )
+    }
+    return errors
+  }, [eligibleSlots, targets])
 
   const generateManifest = useCallback(async () => {
     setError(null)
@@ -411,6 +548,10 @@ export function useSoundboardAudit(opts: {
         + "explicitly mark this run exploratory.")
       return null
     }
+    if (configurationErrors.length > 0) {
+      setError(`Audit configuration is incomplete: ${configurationErrors.join("; ")}`)
+      return null
+    }
 
     const baseTiming = {
       greetingSettleMs: config.greetingSettleMs,
@@ -419,11 +560,44 @@ export function useSoundboardAudit(opts: {
       responseLingerMs: config.responseLingerMs,
       cooldownMs: config.cooldownMs,
       interruptFireDelayMs: INTERRUPT_FIRE_DELAY_MS,
-      // Detection constants: these DEFINE latency / barge-in / speaking, so
+      interruptFireToleranceMs: INTERRUPT_FIRE_TOLERANCE_MS,
+      // Detection constants define onset, overlap, and speaking, so
       // they belong in the frozen record, not only in code.
       ppEnergyThresholdRms: PP_ENERGY_THRESHOLD,
       ppSpeakingGapMs: PP_SPEAKING_GAP_MS,
       minPreClipMs: MIN_PRE_CLIP_MS,
+      overlapEventMinimumMs: AUDIT_OVERLAP_EVENT_MIN_MS,
+    }
+    const inputTimingCache = new Map<string, AuditInputTiming>()
+    const targetHashCache = new Map<string, string>()
+    const targetMetadataFor = async (slot: Slot) => {
+      if (slot.manipulation !== "vc" || !slot.targetId) {
+        return { id: null, label: null, sha256: null }
+      }
+      const target = targets.find((candidate) => candidate.id === slot.targetId)
+      if (!target?.wav) return { id: slot.targetId, label: target?.label ?? null, sha256: null }
+      const cached = targetHashCache.get(slot.targetId)
+      const sha256 = cached ?? await sha256Hex(target.wav)
+      targetHashCache.set(slot.targetId, sha256)
+      return { id: slot.targetId, label: target.label, sha256 }
+    }
+    const inputTimingFor = async (
+      slot: Slot,
+      clip: Blob,
+      clipHash: string,
+      rawHash: string | null,
+    ) => {
+      // Matched pairs share the raw take and therefore share one annotation.
+      // This prevents route-specific VC residue from shifting the nominal user
+      // onset, offset, or pause windows.
+      const source = slot.raw ?? clip
+      const sourceHash = rawHash ?? clipHash
+      let annotation = inputTimingCache.get(sourceHash)
+      if (!annotation) {
+        annotation = await analyzeAuditInput(source)
+        inputTimingCache.set(sourceHash, annotation)
+      }
+      return { sourceHash, annotation }
     }
 
     // ---- script mode: ordered turns, replayed `reps` times --------------
@@ -432,27 +606,50 @@ export function useSoundboardAudit(opts: {
         const turns: AuditScriptTurn[] = []
         for (const slot of group) {
           const clip = slot.baked ?? slot.raw!
+          const clipHash = await sha256Hex(clip)
+          const rawHash = slot.raw ? await sha256Hex(slot.raw) : null
+          const inputTiming = await inputTimingFor(
+            slot, clip, clipHash, rawHash
+          )
+          const target = await targetMetadataFor(slot)
           turns.push({
             turn: turns.length + 1,
             slot_id: slot.id,
             label: slot.label,
             condition: slot.condition,
             manipulation: slot.manipulation,
+            route: routeForSlot(slot),
+            source_speaker: slot.sourceSpeaker ?? null,
             engine: slot.manipulation === "vc" ? (slot.engine ?? "xvc") : null,
-            clip_sha256: await sha256Hex(clip),
-            raw_sha256: slot.raw ? await sha256Hex(slot.raw) : null,
+            target_id: target.id,
+            target_label: target.label,
+            target_sha256: target.sha256,
+            clip_sha256: clipHash,
+            raw_sha256: rawHash,
             clip_duration_ms: Math.round(slot.bakedDurationMs || slot.rawDurationMs),
+            input_timing_source_sha256: inputTiming.sourceHash,
+            input_timing: inputTiming.annotation,
+            clip_audio: clipAudioForSlot(slot),
           })
         }
         return turns
       }
       const common = {
-        schema: "hmo.soundboard-audit-manifest.v2" as const,
+        schema: "hmo.soundboard-audit-manifest.v3" as const,
         mode: "script" as const,
         created_at: new Date().toISOString(),
         seed: config.seed,
         reps: config.reps,
         prompt: config.prompt,
+        assistant: {
+          engine: "personaplex" as const,
+          voice_prompt: PERSONAPLEX_AUDIT_VOICE_PROMPT,
+          text_prompt: config.prompt,
+        },
+        audio_format: {
+          personaplex_sample_rate_hz: PP_SAMPLE_RATE,
+          opus_encoder: OPUS_ENCODER_CONFIG,
+        },
         inter_turn_gap_ms: config.interTurnGapMs,
         timing: { ...baseTiming, interTurnGapMs: config.interTurnGapMs },
         production_engine_only: engineWarnings.length === 0,
@@ -496,16 +693,30 @@ export function useSoundboardAudit(opts: {
 
     // ---- matched mode (§3.3): shuffled single-turn presentations --------
     const base: Omit<AuditPresentation, "index">[] = []
-    const pairing = new Map<string, { labels: string[]; manipulations: string[] }>()
+    const pairing = new Map<string, {
+      labels: string[]
+      manipulations: string[]
+      source_speakers: string[]
+    }>()
     for (const slot of eligibleSlots) {
       const clip = slot.baked ?? slot.raw!
       const hash = await sha256Hex(clip)
       const rawHash = slot.raw ? await sha256Hex(slot.raw) : null
+      const inputTiming = await inputTimingFor(slot, clip, hash, rawHash)
+      const target = await targetMetadataFor(slot)
       if (rawHash) {
-        const entry = pairing.get(rawHash) ?? { labels: [], manipulations: [] }
+        const entry = pairing.get(rawHash) ?? {
+          labels: [],
+          manipulations: [],
+          source_speakers: [],
+        }
         entry.labels.push(slot.label)
         if (!entry.manipulations.includes(slot.manipulation)) {
           entry.manipulations.push(slot.manipulation)
+        }
+        if (slot.sourceSpeaker
+            && !entry.source_speakers.includes(slot.sourceSpeaker)) {
+          entry.source_speakers.push(slot.sourceSpeaker)
         }
         pairing.set(rawHash, entry)
       }
@@ -515,10 +726,18 @@ export function useSoundboardAudit(opts: {
           label: slot.label,
           condition: slot.condition,
           manipulation: slot.manipulation,
+          route: routeForSlot(slot),
+          source_speaker: slot.sourceSpeaker ?? null,
           engine: slot.manipulation === "vc" ? (slot.engine ?? "xvc") : null,
+          target_id: target.id,
+          target_label: target.label,
+          target_sha256: target.sha256,
           clip_sha256: hash,
           raw_sha256: rawHash,
           clip_duration_ms: Math.round(slot.bakedDurationMs || slot.rawDurationMs),
+          input_timing_source_sha256: inputTiming.sourceHash,
+          input_timing: inputTiming.annotation,
+          clip_audio: clipAudioForSlot(slot),
           presentation_mode: interruptSlotIds.has(slot.id)
             ? "during_pp_speech" : "after_silence",
         })
@@ -529,19 +748,35 @@ export function useSoundboardAudit(opts: {
     const pairingRows = Array.from(pairing.entries()).map(
       ([raw_sha256, entry]) => ({ raw_sha256, ...entry }))
     const pairingWarnings = pairingRows
-      .filter((row) => !(row.manipulations.includes("vc")
-        && (row.manipulations.includes("unconverted")
-          || row.manipulations.includes("pitch_formant"))))
-      .map((row) => `unmatched item (single condition): ${row.labels.join(", ")}`)
+      .flatMap((row) => {
+        const warnings = []
+        if (!(row.manipulations.includes("vc")
+            && row.manipulations.includes("unconverted"))) {
+          warnings.push(`unmatched natural/converted item: ${row.labels.join(", ")}`)
+        }
+        if (row.source_speakers.length !== 1) {
+          warnings.push(`source-speaker mismatch: ${row.labels.join(", ")}`)
+        }
+        return warnings
+      })
     const ordered = shuffled(base, config.seed)
       .map((p, i) => ({ index: i + 1, ...p }))
     const draft: AuditManifest = {
-      schema: "hmo.soundboard-audit-manifest.v2",
+      schema: "hmo.soundboard-audit-manifest.v3",
       mode: "matched",
       created_at: new Date().toISOString(),
       seed: config.seed,
       reps: config.reps,
       prompt: config.prompt,
+      assistant: {
+        engine: "personaplex" as const,
+        voice_prompt: PERSONAPLEX_AUDIT_VOICE_PROMPT,
+        text_prompt: config.prompt,
+      },
+      audio_format: {
+        personaplex_sample_rate_hz: PP_SAMPLE_RATE,
+        opus_encoder: OPUS_ENCODER_CONFIG,
+      },
       timing: baseTiming,
       production_engine_only: engineWarnings.length === 0,
       engine_warnings: engineWarnings,
@@ -553,7 +788,14 @@ export function useSoundboardAudit(opts: {
     const frozen = { ...draft, manifest_sha256: digest }
     setManifest(frozen)
     return frozen
-  }, [eligibleSlots, engineWarnings, config, interruptSlotIds])
+  }, [
+    eligibleSlots,
+    engineWarnings,
+    configurationErrors,
+    config,
+    interruptSlotIds,
+    targets,
+  ])
 
   // ---- the run -----------------------------------------------------------
   const runPresentation = useCallback(async (
@@ -579,6 +821,7 @@ export function useSoundboardAudit(opts: {
       pp_speech_events: [],
       pp_transcript: [],
       sent_clip_sha256: null,
+      delivery_audit: null,
     }
     if (!slot || !(slot.baked ?? slot.raw)) {
       record.status = "clip_error"
@@ -591,17 +834,22 @@ export function useSoundboardAudit(opts: {
     ws.clearResponseChunks()
     resetCapture()
     lastEnergeticMsRef.current = 0
+    energeticRunStartMsRef.current = 0
     sawEnergyRef.current = false
     ppEventsRef.current = []
 
-    ws.connect(getPersonaplexWsURL(config.prompt))
+    ws.connect(getPersonaplexAuditWsURL(config.prompt))
     let silence: { stop: () => Promise<void> } | null = null
     try {
       if (!(await waitFor(() => handshakeRef.current, config.handshakeTimeoutMs))) {
         record.status = "handshake_timeout"
         return record
       }
-      record.t_handshake_ms = performance.now()
+      // Use the WebSocket hook's exact handshake epoch. playback_timeline.json
+      // is relative to this same performance.now() value, so post-processing
+      // can place scheduled assistant packets on the audit record's clock
+      // without estimating an offset from React state propagation.
+      record.t_handshake_ms = ws.getConversationStartPerformanceMs()
 
       // Feed PP its input clock (continuous silence) — without this PP never
       // generates: no greeting, and responses freeze when the clip ends.
@@ -609,19 +857,17 @@ export function useSoundboardAudit(opts: {
       silence = await startSilenceFeed(ws)
 
       const handshakeAt = record.t_handshake_ms
+      let interruptRunStart: number | null = null
       if (presentation.presentation_mode === "during_pp_speech") {
         // Corrective interruption: fire the clip WHILE PP is speaking
         // (energetically), a fixed delay into its speech run.
         const spoke = await waitFor(() => speakingNow(), config.greetingCapMs)
         if (spoke) {
-          const runStart = lastEnergeticMsRef.current
-          const fireAt = runStart + INTERRUPT_FIRE_DELAY_MS
+          interruptRunStart = energeticRunStartMsRef.current
+          const fireAt = interruptRunStart + INTERRUPT_FIRE_DELAY_MS
           await waitFor(() => performance.now() >= fireAt || !speakingNow(),
             INTERRUPT_FIRE_DELAY_MS + 1_000)
-          if (speakingNow()) {
-            record.fire_offset_into_pp_speech_ms =
-              +(performance.now() - runStart).toFixed(1)
-          } else {
+          if (!speakingNow()) {
             record.notes.push("pp_stopped_before_interrupt_fire")
           }
         } else {
@@ -644,9 +890,20 @@ export function useSoundboardAudit(opts: {
         if (!sawEnergyRef.current) record.notes.push("pp_never_greeted")
       }
 
+      const playbackStart = await playback.playSlot(slot, { auditDelivery: true })
+      if (!playbackStart) {
+        record.status = "clip_error"
+        record.error = playback.error || "clip did not start"
+        return record
+      }
+      record.t_play_start_ms = playbackStart.startMs
       const wasSpeakingAtFire = speakingNow()
-      record.t_play_start_ms = performance.now()
-      await playback.playSlot(slot)
+      if (presentation.presentation_mode === "during_pp_speech"
+          && interruptRunStart != null) {
+        record.fire_offset_into_pp_speech_ms = +(
+          playbackStart.startMs - interruptRunStart
+        ).toFixed(1)
+      }
       // Yielding (interrupt mode): how long PP kept speaking after the clip
       // started. Resolved as soon as PP's ongoing run ends, checked below
       // after the clip finishes (events carry the exact end time).
@@ -662,7 +919,11 @@ export function useSoundboardAudit(opts: {
         record.error = "clip did not finish within budget"
         return record
       }
-      const playEnd = performance.now()
+      const playbackEnd = playback.getLastPlaybackRecord()
+      record.delivery_audit = playbackEnd?.deliveryAudit ?? null
+      const playEnd = playbackEnd?.slotId === presentation.slot_id
+        ? playbackEnd.endMs
+        : playbackStart.startMs + playbackStart.clipDurationMs
       record.t_play_end_ms = playEnd
 
       // PP's response: first ENERGETIC packet after the clip ended. (The
@@ -730,7 +991,7 @@ export function useSoundboardAudit(opts: {
         .catch(() => null)
       ws.disconnect()
     }
-  }, [slots, ws, playback, config, waitFor])
+  }, [slots, ws, playback, config, waitFor, speakingNow])
 
   // ---- script mode: one full ordered conversation, replayed per rep ------
   const runScriptSession = useCallback(async (
@@ -744,10 +1005,11 @@ export function useSoundboardAudit(opts: {
     ws.clearResponseChunks()
     resetCapture()
     lastEnergeticMsRef.current = 0
+    energeticRunStartMsRef.current = 0
     sawEnergyRef.current = false
     ppEventsRef.current = []
 
-    ws.connect(getPersonaplexWsURL(config.prompt))
+    ws.connect(getPersonaplexAuditWsURL(config.prompt))
     let silence: { stop: () => Promise<void> } | null = null
     const gap = config.interTurnGapMs
     try {
@@ -755,7 +1017,7 @@ export function useSoundboardAudit(opts: {
         record.status = "handshake_timeout"
         return record
       }
-      record.t_handshake_ms = performance.now()
+      record.t_handshake_ms = ws.getConversationStartPerformanceMs()
       ws.setMicMuted(false)
       silence = await startSilenceFeed(ws)
 
@@ -784,14 +1046,21 @@ export function useSoundboardAudit(opts: {
           t_pp_response_start_ms: null, t_pp_response_end_ms: null,
           response_latency_ms: null, pp_spoke_during_clip: false,
           sent_clip_sha256: null, notes: [],
+          delivery_audit: null,
         }
         if (!slot || !(slot.baked ?? slot.raw)) {
           tr.notes.push("slot missing or has no audio")
           record.turns.push(tr)
           continue
         }
-        tr.t_play_start_ms = performance.now()
-        await playback.playSlot(slot)
+        const playbackStart = await playback.playSlot(slot, { auditDelivery: true })
+        if (!playbackStart) {
+          tr.status = "clip_error"
+          tr.notes.push(playback.error || "clip did not start")
+          record.turns.push(tr)
+          continue
+        }
+        tr.t_play_start_ms = playbackStart.startMs
         await waitFor(() => playingRef.current === turn.slot_id, 3_000)
         if (!(await waitFor(() => playingRef.current === null,
                             turn.clip_duration_ms + 10_000))) {
@@ -800,7 +1069,11 @@ export function useSoundboardAudit(opts: {
           record.turns.push(tr)
           continue
         }
-        const playEnd = performance.now()
+        const playbackEnd = playback.getLastPlaybackRecord()
+        tr.delivery_audit = playbackEnd?.deliveryAudit ?? null
+        const playEnd = playbackEnd?.slotId === turn.slot_id
+          ? playbackEnd.endMs
+          : playbackStart.startMs + playbackStart.clipDurationMs
         tr.t_play_end_ms = playEnd
         // Response: first energetic PP packet after the clip ends. PP's
         // utterance is FINISHED only after responseLingerMs of audible quiet
@@ -835,7 +1108,7 @@ export function useSoundboardAudit(opts: {
       return record
     } finally {
       record.pp_speech_events = ppEventsRef.current.slice()
-      // PP barge-in per turn: any energetic packet inside that turn's clip window.
+      // Coarse live overlap flag; scheduled packet timing is authoritative.
       for (const tr of record.turns) {
         if (tr.t_play_start_ms != null && tr.t_play_end_ms != null) {
           tr.pp_spoke_during_clip = record.pp_speech_events.some(
@@ -928,50 +1201,50 @@ export function useSoundboardAudit(opts: {
           await sleep(config.cooldownMs)
         }
       } else {
-      for (const presentation of (manifest.presentations ?? [])) {
-        if (abortRef.current) break
-        setProgress((p) => ({ ...p, currentIndex: presentation.index,
-                              phase: `run ${presentation.index}/${total}: ${presentation.label}` }))
-        let record: AuditRunRecord
-        try {
-          record = await runPresentation(presentation)
-        } catch (e) {
-          record = {
-            index: presentation.index, slot_id: presentation.slot_id,
-            label: presentation.label,
-            presentation_mode: presentation.presentation_mode,
-            status: abortRef.current ? "aborted" : "error",
-            error: String((e as Error).message ?? e),
-            t_connect_ms: performance.now(), t_handshake_ms: null,
-            t_play_start_ms: null, t_play_end_ms: null,
-            t_pp_response_start_ms: null, t_pp_response_end_ms: null,
-            response_latency_ms: null,
-            fire_offset_into_pp_speech_ms: null, pp_yield_latency_ms: null,
-            notes: [], pp_speech_events: ppEventsRef.current.slice(),
-            pp_transcript: [], sent_clip_sha256: null,
+        for (const presentation of (manifest.presentations ?? [])) {
+          if (abortRef.current) break
+          setProgress((p) => ({ ...p, currentIndex: presentation.index,
+                                phase: `run ${presentation.index}/${total}: ${presentation.label}` }))
+          let record: AuditRunRecord
+          try {
+            record = await runPresentation(presentation)
+          } catch (e) {
+            record = {
+              index: presentation.index, slot_id: presentation.slot_id,
+              label: presentation.label,
+              presentation_mode: presentation.presentation_mode,
+              status: abortRef.current ? "aborted" : "error",
+              error: String((e as Error).message ?? e),
+              t_connect_ms: performance.now(), t_handshake_ms: null,
+              t_play_start_ms: null, t_play_end_ms: null,
+              t_pp_response_start_ms: null, t_pp_response_end_ms: null,
+              response_latency_ms: null,
+              fire_offset_into_pp_speech_ms: null, pp_yield_latency_ms: null,
+              notes: [], pp_speech_events: ppEventsRef.current.slice(),
+              pp_transcript: [], sent_clip_sha256: null, delivery_audit: null,
+            }
+            try { ws.disconnect() } catch { /* already down */ }
           }
-          try { ws.disconnect() } catch { /* already down */ }
+          const prefix = `runs/${String(presentation.index).padStart(3, "0")}_${presentation.slot_id}`
+          const ppWav = record._ppWav
+          const sentWav = record._sentWav
+          const timeline = record._playbackTimeline
+          delete record._ppWav
+          delete record._sentWav
+          delete record._playbackTimeline
+          if (ppWav) audio.push({ name: `${prefix}/personaplex.wav`, blob: ppWav })
+          if (sentWav) audio.push({ name: `${prefix}/sent.wav`, blob: sentWav })
+          if (timeline) {
+            audio.push({
+              name: `${prefix}/playback_timeline.json`,
+              blob: new Blob([JSON.stringify(timeline)]),
+            })
+          }
+          records.push(record)
+          setProgress((p) => ({ ...p, records: records.slice() }))
+          if (abortRef.current) break
+          await sleep(config.cooldownMs)
         }
-        const prefix = `runs/${String(presentation.index).padStart(3, "0")}_${presentation.slot_id}`
-        const ppWav = record._ppWav
-        const sentWav = record._sentWav
-        const timeline = record._playbackTimeline
-        delete record._ppWav
-        delete record._sentWav
-        delete record._playbackTimeline
-        if (ppWav) audio.push({ name: `${prefix}/personaplex.wav`, blob: ppWav })
-        if (sentWav) audio.push({ name: `${prefix}/sent.wav`, blob: sentWav })
-        if (timeline) {
-          audio.push({
-            name: `${prefix}/playback_timeline.json`,
-            blob: new Blob([JSON.stringify(timeline)]),
-          })
-        }
-        records.push(record)
-        setProgress((p) => ({ ...p, records: records.slice() }))
-        if (abortRef.current) break
-        await sleep(config.cooldownMs)
-      }
       }
     } finally {
       setProgress((p) => ({ ...p, running: false, phase: abortRef.current ? "aborted" : "finished" }))
@@ -1005,6 +1278,18 @@ export function useSoundboardAudit(opts: {
             blob: slot.raw,
           })
         }
+        if (item.target_id && item.target_sha256
+            && !seenHashes.has(item.target_sha256)) {
+          const target = targets.find((candidate) => candidate.id === item.target_id)
+          if (target?.wav) {
+            seenHashes.add(item.target_sha256)
+            audio.push({
+              name: `stimuli/target_${item.target_sha256.slice(0, 8)}_`
+                + `${slug(target.label)}.wav`,
+              blob: target.wav,
+            })
+          }
+        }
       }
       // Bundle everything, even a partial/aborted run — partial data beats none.
       const entries = [
@@ -1032,7 +1317,16 @@ export function useSoundboardAudit(opts: {
         setUploadState({ status: "failed", detail: String((e as Error).message ?? e) })
       }
     }
-  }, [manifest, ws, config.cooldownMs, runPresentation, onBeforeRun])
+  }, [
+    manifest,
+    ws,
+    config.cooldownMs,
+    runPresentation,
+    runScriptSession,
+    onBeforeRun,
+    slots,
+    targets,
+  ])
 
   const retryUpload = useCallback(async () => {
     if (!resultsZip || !manifest) return

@@ -27,7 +27,12 @@ import {
   LOUDNESS_TARGET_LUFS,
   LOUDNESS_NORMALIZE_DEFAULT,
 } from "@/lib/soundboardConfig"
-import type { Slot, Target, ManipulationMode } from "@/lib/soundboardDb"
+import type {
+  Slot,
+  Target,
+  ManipulationMode,
+  SourceSpeaker,
+} from "@/lib/soundboardDb"
 
 // Suggested condition tags — researchers add their own freely.
 const CONDITION_PRESETS = [
@@ -380,18 +385,34 @@ function SlotCard({
   const [playing, setPlaying] = useState<"raw" | "baked" | null>(null)
   const [label, setLabel] = useState(slot.label)
   const [condition, setCondition] = useState(slot.condition)
+  const [sourceSpeaker, setSourceSpeaker] = useState<SourceSpeaker | "">(
+    slot.sourceSpeaker ?? "",
+  )
 
   // Keep local state in sync if a refresh swapped slot data underneath us.
   useEffect(() => {
     setLabel(slot.label)
     setCondition(slot.condition)
+    setSourceSpeaker(slot.sourceSpeaker ?? "")
     setMode(slot.manipulation)
     setVcEngine(slot.engine === "seedvc" ? "seedvc" : "xvc")
     setSemitones(slot.pitchSemitones ?? PITCH_FORMANT_DEFAULTS.semitones)
     setFormantShift(slot.formantShift ?? PITCH_FORMANT_DEFAULTS.formantShift)
     const cands = sb.targets.filter((t) => !!t.wav)
     setTargetId(slot.targetId || cands[0]?.id || "")
-  }, [slot.id, slot.updatedAt]) // intentionally narrow
+  }, [
+    sb.targets,
+    slot.condition,
+    slot.engine,
+    slot.formantShift,
+    slot.id,
+    slot.label,
+    slot.manipulation,
+    slot.pitchSemitones,
+    slot.sourceSpeaker,
+    slot.targetId,
+    slot.updatedAt,
+  ])
 
   const startRec = async () => {
     try {
@@ -447,8 +468,17 @@ function SlotCard({
   }
 
   const saveMeta = async () => {
-    if (label === slot.label && condition === slot.condition) return
-    try { await sb.updateSlot({ ...slot, label, condition }) } catch (e) { onError(e) }
+    if (label === slot.label
+        && condition === slot.condition
+        && sourceSpeaker === (slot.sourceSpeaker ?? "")) return
+    try {
+      await sb.updateSlot({
+        ...slot,
+        label,
+        condition,
+        sourceSpeaker: sourceSpeaker || undefined,
+      })
+    } catch (e) { onError(e) }
   }
 
   const drift = slot.driftMs ?? 0
@@ -480,6 +510,19 @@ function SlotCard({
             <datalist id={`cond-${slot.id}`}>
               {CONDITION_PRESETS.map((c) => <option key={c} value={c} />)}
             </datalist>
+          </div>
+          <div className="w-[180px] space-y-1">
+            <Label className="text-[10px]">Source speaker</Label>
+            <select
+              className="h-8 w-full rounded-md border bg-background px-2 text-xs"
+              value={sourceSpeaker}
+              onChange={(e) => setSourceSpeaker(e.target.value as SourceSpeaker | "")}
+              onBlur={saveMeta}
+            >
+              <option value="">Select source</option>
+              <option value="masculine_presenting" />
+              <option value="feminine_presenting" />
+            </select>
           </div>
           <div className="flex flex-col">
             <Button

@@ -57,6 +57,27 @@ interface AssistantPlaybackEntry {
   underrun_ms: number;
 }
 
+export interface AudioDeliveryCounts {
+  frames: number;
+  bytes: number;
+  sha256: string;
+}
+
+export interface AudioDeliveryAuditResult {
+  status: "complete" | "failed";
+  browser_sent: AudioDeliveryCounts;
+  relay_received: AudioDeliveryCounts | null;
+  relay_forwarded: AudioDeliveryCounts | null;
+  error?: string;
+}
+
+interface PendingAuditControl {
+  expectedType: string;
+  resolve: (message: Record<string, unknown>) => void;
+  reject: (error: Error) => void;
+  timeoutId: number;
+}
+
 declare global {
   interface Window {
     webkitAudioContext?: new (options?: AudioContextOptions) => AudioContext;
@@ -147,9 +168,17 @@ export function useWebSocket() {
 
   // Live assistant-audio energy listeners (rms per decoded packet). Used by the
   // audit runner for speech-vs-silence detection; empty in normal use.
-  const assistantAudioListenersRef = useRef<Set<(rms: number, perfMs: number) => void>>(new Set());
+  const assistantAudioListenersRef = useRef<Set<(
+    rms: number,
+    playbackStartPerfMs: number,
+    playbackEndPerfMs: number,
+  ) => void>>(new Set());
   const registerAssistantAudioListener = useCallback(
-    (listener: (rms: number, perfMs: number) => void) => {
+    (listener: (
+      rms: number,
+      playbackStartPerfMs: number,
+      playbackEndPerfMs: number,
+    ) => void) => {
       assistantAudioListenersRef.current.add(listener);
       return () => { assistantAudioListenersRef.current.delete(listener); };
     }, []);
@@ -181,6 +210,20 @@ export function useWebSocket() {
   const modelPacketSequenceRef = useRef(0);
   const assistantPlaybackRef = useRef<AssistantPlaybackEntry[]>([]);
   const playbackDecodeTasksRef = useRef<Promise<void>[]>([]);
+  const outgoingAudioAuditRef = useRef<{
+    chunks: Uint8Array[];
+    frames: number;
+    bytes: number;
+  } | null>(null);
+  const pendingAuditControlsRef = useRef<Map<string, PendingAuditControl>>(new Map());
+  const clearPendingAuditControls = useCallback((reason: string) => {
+    for (const pending of pendingAuditControlsRef.current.values()) {
+      clearTimeout(pending.timeoutId);
+      pending.reject(new Error(reason));
+    }
+    pendingAuditControlsRef.current.clear();
+    outgoingAudioAuditRef.current = null;
+  }, []);
   // OggOpusDecoder is stateful. Chaining calls prevents overlapping decode()
   // operations from corrupting or reordering one logical Opus stream.
   const playbackDecodeChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -289,7 +332,7 @@ export function useWebSocket() {
       // not arrival quiet.
       const playbackEndPerfMs = scheduledPerfMs + buffer.duration * 1000;
       assistantAudioListenersRef.current.forEach(
-        (l) => l(packetRms, playbackEndPerfMs));
+        (listener) => listener(packetRms, scheduledPerfMs, playbackEndPerfMs));
       assistantPlaybackRef.current.push({
         packet_sequence: packetSequence,
         timeline_start_ms: Math.max(0, scheduledPerfMs - conversationStartPerf.current),
@@ -418,6 +461,7 @@ export function useWebSocket() {
         superseded: runId !== runIdRef.current,
       });
       if (runId !== runIdRef.current) return;
+      clearPendingAuditControls("audit relay socket closed");
       setConnected(false);
       if (!intentionalClose.current) {
         if (event.code === 1006) {
@@ -440,6 +484,14 @@ export function useWebSocket() {
         if (typeof event.data === "string") {
           try {
             const msg = JSON.parse(event.data);
+            const requestId = String(msg?.request_id || "");
+            const pending = pendingAuditControlsRef.current.get(requestId);
+            if (pending && msg?.type === pending.expectedType) {
+              clearTimeout(pending.timeoutId);
+              pendingAuditControlsRef.current.delete(requestId);
+              pending.resolve(msg);
+              return;
+            }
             if (msg?.error) setError(String(msg.error));
           } catch { /* ignore non-JSON text */ }
           return;
@@ -514,7 +566,7 @@ export function useWebSocket() {
         // Ignore unrecognized messages
       }
     };
-  }, [latestPersonaplexAudioEnd, playAudio, playFeedback]);
+  }, [clearPendingAuditControls, latestPersonaplexAudioEnd, playAudio, playFeedback]);
 
   // Direct-to-PP byte-fidelity contract. This function:
   //   - prepends the 0x01 tag byte (PP's user-audio frame marker)
@@ -533,9 +585,97 @@ export function useWebSocket() {
       const tagged = new Uint8Array(data.byteLength + 1);
       tagged[0] = 1;
       tagged.set(new Uint8Array(data), 1);
+      const audit = outgoingAudioAuditRef.current;
+      if (audit) {
+        audit.chunks.push(tagged.slice());
+        audit.frames += 1;
+        audit.bytes += tagged.byteLength;
+      }
       socketRef.current.send(tagged.buffer);
     }
   }, []);
+
+  const requestControl = useCallback((
+    type: string,
+    expectedType: string,
+    payload: Record<string, unknown> = {},
+    timeoutMs = 5_000,
+  ): Promise<Record<string, unknown>> => {
+    const socket = socketRef.current;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("WebSocket is not open"));
+    }
+    const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        pendingAuditControlsRef.current.delete(requestId);
+        reject(new Error(`${expectedType} timed out`));
+      }, timeoutMs);
+      pendingAuditControlsRef.current.set(requestId, {
+        expectedType,
+        resolve,
+        reject,
+        timeoutId,
+      });
+      socket.send(JSON.stringify({ ...payload, type, request_id: requestId }));
+    });
+  }, []);
+
+  const requestAuditControl = useCallback((
+    type: string,
+    expectedType: string,
+    timeoutMs = 5_000,
+  ) => requestControl(type, expectedType, {}, timeoutMs), [requestControl]);
+
+  const beginAudioDeliveryAudit = useCallback(async () => {
+    await requestAuditControl(
+      "hmo.audit.delivery_reset",
+      "hmo.audit.delivery_reset_ack",
+    );
+    outgoingAudioAuditRef.current = { chunks: [], frames: 0, bytes: 0 };
+  }, [requestAuditControl]);
+
+  const finishAudioDeliveryAudit = useCallback(async (): Promise<AudioDeliveryAuditResult> => {
+    const outgoing = outgoingAudioAuditRef.current;
+    outgoingAudioAuditRef.current = null;
+    const chunks = outgoing?.chunks ?? [];
+    const combined = new Uint8Array(
+      chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
+    );
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const digest = await crypto.subtle.digest("SHA-256", combined);
+    const browserSent: AudioDeliveryCounts = {
+      frames: outgoing?.frames ?? 0,
+      bytes: outgoing?.bytes ?? 0,
+      sha256: Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+    };
+    try {
+      const receipt = await requestAuditControl(
+        "hmo.audit.delivery_receipt_request",
+        "hmo.audit.delivery_receipt",
+      );
+      return {
+        status: "complete",
+        browser_sent: browserSent,
+        relay_received: receipt.relay_received as AudioDeliveryCounts,
+        relay_forwarded: receipt.relay_forwarded as AudioDeliveryCounts,
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        browser_sent: browserSent,
+        relay_received: null,
+        relay_forwarded: null,
+        error: String((error as Error).message || error),
+      };
+    }
+  }, [requestAuditControl]);
 
   // Raw, untagged binary send — used in proxy/VC mode where the chat-proxy
   // expects raw float32 mic PCM.
@@ -561,13 +701,14 @@ export function useWebSocket() {
     audioReadyRef.current = false;
     socketRef.current?.close();
     socketRef.current = null;
+    clearPendingAuditControls("audit relay disconnected");
     setConnected(false);
     setWarmupComplete(false);
     setHandshakeReceived(false);
     scheduledEnd.current = 0;
     feedbackEnd.current = 0;
     resetPpSpeech(true);   // close any open PP run at conversation end
-  }, [resetPpSpeech]);
+  }, [clearPendingAuditControls, resetPpSpeech]);
 
   useEffect(() => {
     return () => disconnect();
@@ -724,6 +865,9 @@ export function useWebSocket() {
     sendAudio,
     sendRawAudio,
     sendControl,
+    requestControl,
+    beginAudioDeliveryAudit,
+    finishAudioDeliveryAudit,
     getVcUserWav,
     setPersonaplexSink,
     configureFeedback,

@@ -31,6 +31,7 @@ interface ManifestSlot {
   label: string
   condition: string
   manipulation: string
+  sourceSpeaker?: string
   targetId?: string
   engine?: string
   pitchSemitones?: number
@@ -40,6 +41,9 @@ interface ManifestSlot {
   bakedDurationMs: number
   driftMs: number
   qualityScore?: number | null
+  normalized?: boolean
+  targetLufs?: number
+  measuredLufs?: number | null
   bakeTimestamp?: number
   createdAt: number
   updatedAt: number
@@ -278,6 +282,7 @@ export async function exportSoundboard(
       label: s.label,
       condition: s.condition,
       manipulation: s.manipulation,
+      sourceSpeaker: s.sourceSpeaker,
       targetId: s.targetId,
       engine: s.engine,
       pitchSemitones: s.pitchSemitones,
@@ -287,6 +292,9 @@ export async function exportSoundboard(
       bakedDurationMs: s.bakedDurationMs,
       driftMs: s.driftMs,
       qualityScore: s.qualityScore ?? null,
+      normalized: s.normalized,
+      targetLufs: s.targetLufs,
+      measuredLufs: s.measuredLufs ?? null,
       bakeTimestamp: s.bakeTimestamp,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
@@ -346,6 +354,7 @@ export async function importSoundboard(
     label: m.label,
     condition: m.condition,
     manipulation: m.manipulation as Slot["manipulation"],
+    sourceSpeaker: m.sourceSpeaker as Slot["sourceSpeaker"],
     targetId: m.targetId,
     engine: m.engine as Slot["engine"],
     pitchSemitones: m.pitchSemitones,
@@ -357,6 +366,9 @@ export async function importSoundboard(
     bakedDurationMs: m.bakedDurationMs,
     driftMs: m.driftMs,
     qualityScore: m.qualityScore ?? null,
+    normalized: m.normalized,
+    targetLufs: m.targetLufs,
+    measuredLufs: m.measuredLufs ?? null,
     bakeTimestamp: m.bakeTimestamp,
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,

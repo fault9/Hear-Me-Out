@@ -22,7 +22,7 @@ import {
   type AuditRunRecord,
   type AuditSessionRecord,
 } from "@/hooks/useSoundboardAudit"
-import type { Slot } from "@/lib/soundboardDb"
+import type { Slot, Target } from "@/lib/soundboardDb"
 import type { useWebSocket } from "@shared/hooks/useWebSocket"
 import type { useSoundboardPlayback } from "@/hooks/useSoundboardPlayback"
 
@@ -30,6 +30,7 @@ interface Props {
   ws: ReturnType<typeof useWebSocket>
   playback: ReturnType<typeof useSoundboardPlayback>
   slots: Slot[]
+  targets: Target[]
   onBeforeRun?: () => void
 }
 
@@ -45,9 +46,11 @@ const STATUS_TONE: Record<string, string> = {
 const isSession = (r: AuditRunRecord | AuditSessionRecord): r is AuditSessionRecord =>
   "rep" in r
 
-export function SoundboardAuditSection({ ws, playback, slots, onBeforeRun }: Props) {
+export function SoundboardAuditSection({
+  ws, playback, slots, targets, onBeforeRun,
+}: Props) {
   const [open, setOpen] = useState(false)
-  const audit = useSoundboardAudit({ ws, playback, slots, onBeforeRun })
+  const audit = useSoundboardAudit({ ws, playback, slots, targets, onBeforeRun })
   const { config, setConfig, manifest, progress } = audit
   const running = progress.running
   const scriptMode = config.mode === "script"

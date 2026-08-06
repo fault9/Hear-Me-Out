@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import threading
 import unittest
@@ -10,7 +12,7 @@ from fastapi import FastAPI
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from ws_relay import RELAY_PATH, register_chat_relay
+from ws_relay import AUDIT_RELAY_PATH, RELAY_PATH, register_chat_relay
 
 
 class FakeUpstream:
@@ -76,11 +78,13 @@ class WsRelayTest(unittest.TestCase):
         cls.upstream = FakeUpstream().start()
         cls.upstream_url = f"ws://127.0.0.1:{cls.upstream.port}"
         os.environ["STUDY_CHAT_UPSTREAM"] = cls.upstream_url
+        os.environ["PERSONAPLEX_AUDIT_UPSTREAM"] = cls.upstream_url
 
     @classmethod
     def tearDownClass(cls):
         cls.upstream.stop()
         os.environ.pop("STUDY_CHAT_UPSTREAM", None)
+        os.environ.pop("PERSONAPLEX_AUDIT_UPSTREAM", None)
 
     def test_relays_query_binary_and_text_verbatim(self):
         client = make_client()
@@ -103,6 +107,42 @@ class WsRelayTest(unittest.TestCase):
             with self.assertRaises(WebSocketDisconnect) as ctx:
                 ws.receive_text()
             self.assertEqual(ctx.exception.code, 1000)
+
+    def test_audit_relay_returns_independent_delivery_receipt(self):
+        client = make_client()
+        with client.websocket_connect(
+                f"{AUDIT_RELAY_PATH}?text_prompt=test") as ws:
+            self.assertEqual(
+                ws.receive_text(), "target:/api/chat?text_prompt=test"
+            )
+            ws.send_text(json.dumps({
+                "type": "hmo.audit.delivery_reset",
+                "request_id": "reset-1",
+            }))
+            reset = json.loads(ws.receive_text())
+            self.assertEqual(reset["type"], "hmo.audit.delivery_reset_ack")
+
+            payloads = [b"\x01first-page", b"\x01second-page"]
+            for payload in payloads:
+                ws.send_bytes(payload)
+                self.assertEqual(ws.receive_bytes(), payload)
+
+            ws.send_text(json.dumps({
+                "type": "hmo.audit.delivery_receipt_request",
+                "request_id": "receipt-1",
+            }))
+            receipt = json.loads(ws.receive_text())
+            expected_hash = hashlib.sha256(b"".join(payloads)).hexdigest()
+            self.assertEqual(receipt["type"], "hmo.audit.delivery_receipt")
+            self.assertEqual(receipt["relay_received"]["frames"], 2)
+            self.assertEqual(
+                receipt["relay_received"]["bytes"],
+                sum(len(payload) for payload in payloads),
+            )
+            self.assertEqual(receipt["relay_received"]["sha256"], expected_hash)
+            self.assertEqual(
+                receipt["relay_forwarded"], receipt["relay_received"]
+            )
 
     def test_unreachable_upstream_closes_1011(self):
         os.environ["STUDY_CHAT_UPSTREAM"] = "ws://127.0.0.1:1"
