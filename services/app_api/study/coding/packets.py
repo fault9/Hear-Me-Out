@@ -106,32 +106,6 @@ def assert_blinded(packet: dict) -> None:
             raise BlindingError(f"forbidden token in blinded packet: {token!r}")
 
 
-def _merge_assistant_runs(utterances: list[dict]) -> list[dict]:
-    """Join the model's consecutive text fragments back into spoken turns.
-
-    The model emits text roughly per sentence, so one turn reaches the
-    transcript as several lines. Runs are closed by the participant speaking,
-    which keeps a barge-in visible at the point it happened.
-    """
-    merged: list[dict] = []
-    for row in utterances:
-        previous = merged[-1] if merged else None
-        if (row.get("speaker") != "assistant" or previous is None
-                or previous.get("speaker") != "assistant"):
-            merged.append(dict(row))
-            continue
-        text = str(row.get("text") or "").strip()
-        previous["text"] = " ".join(
-            part for part in (previous.get("text"), text) if part)
-        previous["end_ms"] = row.get("end_ms")
-    index = 0
-    for row in merged:
-        if row.get("speaker") == "assistant":
-            index += 1
-            row["id"] = f"assistant_{index:03d}"
-    return merged
-
-
 def build_packet(session: dict, data_root: Path, salt: str,
                  scenario_row: dict | None = None) -> tuple[dict, dict] | None:
     """Return (blinded_packet, unblinded_meta) or None when the session has no
@@ -146,7 +120,7 @@ def build_packet(session: dict, data_root: Path, salt: str,
     pid = packet_id_for(str(session["session_id"]), salt)
     utterances_blind = []
     utterance_times = []
-    for row in _merge_assistant_runs(dialogue.get("utterances") or []):
+    for row in dialogue.get("utterances") or []:
         utterances_blind.append({
             "id": row["id"],
             "speaker": row["speaker"],

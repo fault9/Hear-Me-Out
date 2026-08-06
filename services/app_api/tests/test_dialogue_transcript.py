@@ -80,9 +80,12 @@ class DialogueTranscriptTests(unittest.TestCase):
             self.assertEqual(result["status"], "complete")
             self.assertEqual(len(calls), 2)
             self.assertEqual([row["speaker"] for row in result["utterances"]],
-                             ["participant", "assistant", "assistant", "participant"])
-            self.assertEqual([row["text"] for row in result["utterances"][1:3]],
-                             ["Lead in.", "Assistant reply."])
+                             ["participant", "assistant", "participant"])
+            # Both fragments are one spoken turn: nothing separates them.
+            self.assertEqual(result["utterances"][1]["text"],
+                             "Lead in. Assistant reply.")
+            self.assertEqual(
+                result["utterances"][1]["text_provenance"]["fragment_count"], 2)
             first = result["utterances"][0]
             self.assertEqual((first["start_ms"], first["end_ms"]), (1100.0, 1900.0))
             self.assertEqual(first["voice_mode"], "mixed")
@@ -139,13 +142,65 @@ class DialogueTranscriptTests(unittest.TestCase):
             result = prepare_dialogue_transcript(
                 session, root, "analysis-2", timing, transcribe)
 
+            # Nothing separates the two fragments, so they are one turn, and
+            # every word the model emitted survives exactly once.
             assistants = [row for row in result["utterances"]
                           if row["speaker"] == "assistant"]
             self.assertEqual([row["text"] for row in assistants], [
-                "One moment please while I Okay, I see your case.",
-                "Your claim was declined.",
+                "One moment please while I Okay, I see your case."
+                " Your claim was declined.",
             ])
             self.assertEqual(result["summary"]["unassigned_model_fragments"], 0)
+            self.assertEqual(result["summary"]["model_fragments"], 2)
+
+    def test_participant_speech_closes_an_assistant_turn(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = Path("sessions/split/participant_raw.wav")
+            self._write_wav(root / relative, 40.0)
+            (root / relative).parent.joinpath("client_timeline.json").write_text(
+                json.dumps({"capture": {"chunks": [
+                    {"chunk_sequence": 1, "capture_start_sample": 0,
+                     "sample_count": 2048, "timeline_start_ms": 0.0}]}}))
+            session = {
+                "session_id": "P1_R01_S02_A01",
+                "voice_condition": "stable_natural",
+                "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
+                "files": {"participant_raw": str(relative)},
+                "transcript": {"model": [
+                    {"text": "Got it.", "start": 10.1, "end": 10.9,
+                     "speaker": "personaplex"},
+                    {"text": "Let me check.", "start": 10.9, "end": 12.9,
+                     "speaker": "personaplex"},
+                    {"text": "Your case is about headphones.", "start": 30.0,
+                     "end": 32.0, "speaker": "personaplex"},
+                ]},
+            }
+            timing = {
+                "schema": "hmo.timing-analysis.v4",
+                "status": "estimated_pending_validation",
+                "participant_intervals": [
+                    {"start_ms": 20000.0, "end_ms": 22000.0, "detector": "rms"}],
+                "assistant_intervals": [
+                    {"start_ms": 10100.0, "end_ms": 12900.0, "detector": "rms"}],
+                "route_switches": [], "overlaps": [], "barge_ins": [],
+                "integrity": {"participant_capture_latency_correction_ms": 0.0},
+                "result_artifact": {"path": "analysis/timing/timing.json"},
+            }
+
+            def transcribe(_path: str) -> dict:
+                return {"text": "Participant utterance.", "segments": [],
+                        "status": "complete", "error": None}
+
+            result = prepare_dialogue_transcript(
+                session, root, "analysis-3", timing, transcribe)
+
+            self.assertEqual([row["speaker"] for row in result["utterances"]],
+                             ["assistant", "participant", "assistant"])
+            self.assertEqual([row["id"] for row in result["utterances"]],
+                             ["assistant_001", "participant_001", "assistant_002"])
+            self.assertEqual(result["utterances"][0]["text"],
+                             "Got it. Let me check.")
 
 
 if __name__ == "__main__":

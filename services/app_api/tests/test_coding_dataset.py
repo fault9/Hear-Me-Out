@@ -349,29 +349,6 @@ class PacketTests(FixtureCase):
         self.assertEqual(meta["boundary_kind"], "switch")
         self.assertEqual(meta["boundary_participant_timeline_ms"], 45000.0)
 
-    def test_assistant_fragments_merge_into_turns_without_losing_words(self):
-        from study.coding.packets import _merge_assistant_runs
-
-        utterances = [
-            {"id": "assistant_001", "speaker": "assistant", "text": "Got it.",
-             "start_ms": 10100.0, "end_ms": 10900.0},
-            {"id": "assistant_002", "speaker": "assistant", "text": "123.",
-             "start_ms": 10900.0, "end_ms": 11200.0},
-            {"id": "participant_004", "speaker": "participant",
-             "text": "Correct.", "start_ms": 51230.0, "end_ms": 51490.0},
-            {"id": "assistant_003", "speaker": "assistant", "text": "Great.",
-             "start_ms": 51600.0, "end_ms": 52400.0},
-        ]
-        merged = _merge_assistant_runs(utterances)
-
-        self.assertEqual([row["text"] for row in merged],
-                         ["Got it. 123.", "Correct.", "Great."])
-        # The participant carries the ids the coded measures and the
-        # transmitted crosswalk key on, so merging must not touch them.
-        self.assertEqual([row["id"] for row in merged],
-                         ["assistant_001", "participant_004", "assistant_002"])
-        self.assertEqual(merged[0]["end_ms"], 11200.0)
-
     def test_explicitly_excluded_session_never_becomes_a_coding_packet(self):
         sessions = self._sessions()
         for session in sessions:

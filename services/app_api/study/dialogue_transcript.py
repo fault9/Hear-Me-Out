@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from .artifacts import atomic_write_json, file_record
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v3"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v4"
 _ASR_PADDING_MS = 200.0
 
 Transcriber = Callable[[str], dict]
@@ -226,9 +226,33 @@ def _assistant_utterances(fragments: list[dict]) -> tuple[list[dict], list[dict]
             "text_provenance": {
                 "source": "model_transcript.json",
                 "method": "verbatim_model_fragment",
+                "fragment_count": 1,
             },
         })
     return utterances, unassigned
+
+
+def _merge_assistant_runs(utterances: list[dict]) -> list[dict]:
+    # The model emits text roughly per sentence, so one spoken turn arrives as
+    # several fragments. A run is closed by the participant speaking, which
+    # keeps a barge-in visible at the point it happened.
+    merged: list[dict] = []
+    for row in utterances:
+        previous = merged[-1] if merged else None
+        if (row["speaker"] != "assistant" or previous is None
+                or previous["speaker"] != "assistant"):
+            merged.append(copy.deepcopy(row))
+            continue
+        previous["text"] = " ".join(
+            part for part in (previous["text"], row["text"]) if part)
+        previous["end_ms"] = row["end_ms"]
+        previous["text_provenance"]["fragment_count"] += 1
+    index = 0
+    for row in merged:
+        if row["speaker"] == "assistant":
+            index += 1
+            row["id"] = f"assistant_{index:03d}"
+    return merged
 
 
 def prepare_dialogue_transcript(session: dict, data_root: Path,
@@ -261,10 +285,10 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
             transcriber or _default_transcriber, Path(temporary),
         )
     assistant, unassigned = _assistant_utterances(model_fragments)
-    utterances = sorted(
+    utterances = _merge_assistant_runs(sorted(
         participant + assistant,
         key=lambda row: (row["start_ms"], 0 if row["speaker"] == "assistant" else 1),
-    )
+    ))
     failed_asr = sum(
         row["text_provenance"].get("asr_status") != "complete"
         for row in participant
@@ -289,7 +313,9 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
         "unassigned_model_fragments": unassigned,
         "summary": {
             "participant_utterances": len(participant),
-            "assistant_utterances": len(assistant),
+            "assistant_utterances": sum(row["speaker"] == "assistant"
+                                        for row in utterances),
+            "model_fragments": len(assistant),
             "participant_asr_failures": failed_asr,
             "unassigned_model_fragments": len(unassigned),
         },
