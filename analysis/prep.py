@@ -81,14 +81,10 @@ def main():
     print(f"scenarios: {len(scenarios)} rows, {len(included)} included")
     write_frame("scenario_level.csv", included, SCENARIO_KEEP)
 
-    # Prespecified sensitivity analysis: remove a participant entirely when
-    # any analytical attempt was technically invalid. The verdict must come
-    # from technical_status: valid_for_condition_analysis is also false for
-    # attempts that were never evaluated (abandoned captures), and an
-    # unevaluated attempt is not an invalid one. Those are reported separately.
-    # Scoped to participants who are actually in the primary frame: an invalid
-    # attempt by someone with no included session removes nothing, and naming
-    # them here would overstate the rule's effect.
+    # Prespecified sensitivity analysis: drop participants with any technically
+    # invalid attempt. The verdict comes from technical_status, since
+    # valid_for_condition_analysis is also false for never-evaluated captures,
+    # and is scoped to the frame — excluding an absent participant removes nothing.
     invalid_participants = {
         row["participant_id"] for row in scenarios
         if str(row.get("technical_status")).strip().lower() == "invalid"
