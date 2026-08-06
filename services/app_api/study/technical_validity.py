@@ -11,7 +11,7 @@ from .artifacts import atomic_write_json, file_record, sha256_file
 from .continuity import run_for_session_dir as run_continuity_check
 from .transition_analysis import read_events
 
-TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v6"
+TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v7"
 BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
 
 DEFAULT_THRESHOLDS = {
