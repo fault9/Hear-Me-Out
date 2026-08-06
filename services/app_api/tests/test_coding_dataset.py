@@ -1006,6 +1006,19 @@ class VerdictGatingTests(unittest.TestCase):
         self.assertEqual(gated["verification_note"], "wind noise")
 
 
+class AsrLowConfidenceTests(unittest.TestCase):
+    def test_only_short_participant_intervals_are_flagged(self):
+        from study.coding.packets import asr_low_confidence
+
+        self.assertTrue(asr_low_confidence(
+            {"speaker": "participant", "start_ms": 1000.0, "end_ms": 1300.0}))
+        self.assertFalse(asr_low_confidence(
+            {"speaker": "participant", "start_ms": 1000.0, "end_ms": 1700.0}))
+        self.assertFalse(asr_low_confidence(
+            {"speaker": "assistant", "start_ms": 1000.0, "end_ms": 1300.0}))
+        self.assertFalse(asr_low_confidence({"speaker": "participant"}))
+
+
 class TurnEventKeyTests(unittest.TestCase):
     def test_key_survives_episode_renumbering(self):
         from study.dataset_export import turn_event_key

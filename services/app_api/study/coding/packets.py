@@ -26,6 +26,11 @@ from typing import Any, Iterable
 from ..artifacts import load_manifest_artifact
 
 PACKET_SCHEMA = "hmo.coding-packet.v1"
+# Interval ASR hallucinates stock phrases on sub-speech vocalizations (breath,
+# playback bleed): pooled, 127 of the 577 participant intervals under 600 ms
+# read "thank you.", and those overlap assistant audio at twice the rate of
+# other short intervals. The text is kept but flagged - the coder has no audio.
+ASR_LOW_CONFIDENCE_MS = 600.0
 # Mechanical transmitted-presence rule (codebook §3): content-word recall of
 # the raw delivery text within the transmitted-track text of the same
 # intervals. Content words are alphanumeric tokens of length >= 4 or numbers.
@@ -86,6 +91,15 @@ def _scenario_spec(session: dict, scenario_row: dict | None) -> dict:
     }
 
 
+def asr_low_confidence(row: dict) -> bool:
+    if row.get("speaker") != "participant":
+        return False
+    try:
+        return (float(row["end_ms"]) - float(row["start_ms"])) < ASR_LOW_CONFIDENCE_MS
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _walk(value: Any) -> Iterable[tuple[str, Any]]:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -127,6 +141,7 @@ def build_packet(session: dict, data_root: Path, salt: str,
             "text": str(row.get("text") or ""),
             "asr_ok": (row.get("speaker") != "participant"
                        or (row.get("text_provenance") or {}).get("asr_status") == "complete"),
+            "asr_low_confidence": asr_low_confidence(row),
         })
         utterance_times.append({
             "id": row["id"],
@@ -147,6 +162,7 @@ def build_packet(session: dict, data_root: Path, salt: str,
             "speaker": "participant",
             "text": str(row.get("text") or ""),
             "asr_ok": (row.get("text_provenance") or {}).get("asr_status") == "complete",
+            "asr_low_confidence": asr_low_confidence(row),
         }
         for row in (transmitted or {}).get("utterances") or []
     ]
@@ -168,8 +184,12 @@ def build_packet(session: dict, data_root: Path, salt: str,
         "notes_for_coder": (
             "Participant utterances with asr_ok=false had incomplete automatic "
             "transcription; treat absent text as unavailable evidence, not as "
-            "silence. transmitted_utterances shares utterance ids with the "
-            "transcript and shows what reached the assistant."
+            "silence. Utterances with asr_low_confidence=true are very short "
+            "vocalizations whose automatic transcription is unreliable (the "
+            "recognizer emits stock politeness phrases on near-silent input); "
+            "do not treat their text as evidence. transmitted_utterances "
+            "shares utterance ids with the transcript and shows what reached "
+            "the assistant."
         ),
     }
     assert_blinded(packet)

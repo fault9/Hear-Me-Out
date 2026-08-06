@@ -220,6 +220,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   if (!event) return <p className="text-sm text-muted-foreground">Queue is empty.</p>
 
   const [from, to] = eventWindow(event)
+  const participantTurnMs =
+    parseFloat(event.participant_offset_ms) - parseFloat(event.participant_onset_ms)
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -235,6 +237,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
           {[["session", event.session_id], ["episode", event.episode_id],
             ["initiator", event.initiator],
             ["overlap (ms)", event.overlap_duration_ms || "—"],
+            ["participant turn (ms)",
+             Number.isFinite(participantTurnMs) ? Math.round(participantTurnMs) : "—"],
             ["≥200 ms nominated", event.overlap_200ms_candidate],
             ["barge-in nominated", event.participant_barge_in_candidate],
             ["premature onset nominated", event.assistant_premature_onset_candidate],
@@ -296,13 +300,23 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
         {context.map((u) => {
           const inEvent = (u.end_ms ?? 0) >= (from + WINDOW_PAD_MS)
             && (u.start_ms ?? 0) <= (to - WINDOW_PAD_MS)
+          // Interval ASR hallucinates stock phrases on sub-speech blips, so
+          // short participant lines are labels to check, not evidence.
+          const lowConfidence = u.speaker === "participant"
+            && (u.end_ms ?? 0) - (u.start_ms ?? 0) < 600
           return (
             <p key={u.id} className={inEvent ? "rounded bg-primary/10 px-1" : ""}>
               <span className="font-mono text-xs text-muted-foreground">
                 {u.speaker === "participant" ? "P" : "A"}{" "}
                 {((u.start_ms ?? 0) / 1000).toFixed(1)}–{((u.end_ms ?? 0) / 1000).toFixed(1)}s
               </span>{" "}
-              {u.text || <em className="text-muted-foreground">(no text)</em>}
+              {lowConfidence ? (
+                <em className="text-muted-foreground">
+                  {u.text || "(no text)"} · short — verify by ear
+                </em>
+              ) : (
+                u.text || <em className="text-muted-foreground">(no text)</em>
+              )}
             </p>
           )
         })}
