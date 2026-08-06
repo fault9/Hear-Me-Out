@@ -50,6 +50,13 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     target: number; at: number; duration: number }>>({})
   const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map())
   const stopTimers = useRef<number[]>([])
+  // Both speakers in one mono channel mask each other. Panning the participant
+  // left and the assistant right makes simultaneous speech separable, which is
+  // the judgement this pass exists to make.
+  const ctxRef = useRef<AudioContext | null>(null)
+  const gainRef = useRef<Map<string, GainNode>>(new Map())
+  const [levels, setLevels] = useState<Record<string, number>>(
+    { participant_raw: 1, assistant: 1 })
 
   const event = events[index]
   const done = events.filter((e) => e.verdict).length
@@ -84,9 +91,23 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       element.addEventListener("loadedmetadata", () => resolve(), { once: true })
       element.addEventListener("error", () => resolve(), { once: true })
     })
+    // createMediaElementSource may only be called once per element, so the
+    // graph is built alongside the cache entry.
+    try {
+      if (!ctxRef.current) ctxRef.current = new AudioContext()
+      const ctx = ctxRef.current
+      const panner = ctx.createStereoPanner()
+      panner.pan.value = track === "participant_raw" ? -0.85 : 0.85
+      const gain = ctx.createGain()
+      gain.gain.value = levels[track] ?? 1
+      ctx.createMediaElementSource(element).connect(panner)
+      panner.connect(gain)
+      gain.connect(ctx.destination)
+      gainRef.current.set(key, gain)
+    } catch { /* fall back to plain element playback */ }
     audioRef.current.set(key, element)
     return element
-  }, [token, studyId])
+  }, [token, studyId, levels])
 
   const stopAll = useCallback(() => {
     stopTimers.current.forEach((id) => window.clearTimeout(id))
@@ -98,6 +119,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     if (!event) return
     stopAll()
     const [from, to] = eventWindow(event)
+    await ctxRef.current?.resume().catch(() => {})
     const tracks = only ? [only] : ["participant_raw", "assistant"]
     for (const track of tracks) {
       try {
@@ -215,6 +237,24 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
           <Button size="sm" variant="secondary" onClick={() => play("participant_raw")}>Participant only</Button>
           <Button size="sm" variant="secondary" onClick={() => play("assistant")}>Assistant only</Button>
           <Button size="sm" variant="ghost" onClick={stopAll}>Stop</Button>
+          <span className="self-center text-xs text-muted-foreground">
+            participant left · assistant right
+          </span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-4">
+          {(["participant_raw", "assistant"] as const).map((track) => (
+            <label key={track} className="flex items-center gap-2 text-xs text-muted-foreground">
+              {track === "participant_raw" ? "participant" : "assistant"} level
+              <input type="range" min="0" max="3" step="0.1" value={levels[track]}
+                onChange={(e) => {
+                  const value = Number(e.target.value)
+                  setLevels((l) => ({ ...l, [track]: value }))
+                  gainRef.current.forEach((gain, key) => {
+                    if (key.endsWith(`:${track}`)) gain.gain.value = value
+                  })
+                }} />
+            </label>
+          ))}
         </div>
         {Object.keys(seek).length > 0 && (
           <p className="mt-2 font-mono text-xs text-muted-foreground">
