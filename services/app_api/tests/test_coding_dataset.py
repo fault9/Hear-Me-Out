@@ -989,13 +989,15 @@ class VerdictGatingTests(unittest.TestCase):
             "verified_participant_barge_in": "0",
             "verified_assistant_premature_onset": "1",
             "successful_assistant_yielding": "0",
-            "disruptive_assistant_interruption": "1",
+            "disruptive_assistant_interruption": "0",
+            "assistant_backchannel_onset": "1",
             "verified_assistant_stop_latency_ms": "240",
             "verified_participant_stop_latency_ms": "310",
         })
         self.assertIsNone(gated["successful_assistant_yielding"])
         self.assertIsNone(gated["verified_assistant_stop_latency_ms"])
-        self.assertEqual(gated["disruptive_assistant_interruption"], "1")
+        self.assertEqual(gated["disruptive_assistant_interruption"], "0")
+        self.assertEqual(gated["assistant_backchannel_onset"], "1")
         self.assertEqual(gated["verified_participant_stop_latency_ms"], "310")
 
     def test_no_real_speech_blanks_everything_downstream(self):
@@ -1011,7 +1013,8 @@ class VerdictGatingTests(unittest.TestCase):
         for field in ("verified_participant_barge_in",
                       "verified_assistant_premature_onset",
                       "successful_assistant_yielding",
-                      "disruptive_assistant_interruption"):
+                      "disruptive_assistant_interruption",
+                      "assistant_backchannel_onset"):
             self.assertIsNone(gated[field])
         self.assertEqual(gated["verification_note"], "wind noise")
 

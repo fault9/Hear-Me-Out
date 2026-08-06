@@ -26,6 +26,9 @@ const QUESTIONS: { key: string; label: string; hint?: string; dependsOn?: string
   { key: "disruptive_assistant_interruption", label: "Disruptive assistant interruption?",
     hint: "did it cut the participant off or derail them",
     dependsOn: "verified_assistant_premature_onset" },
+  { key: "assistant_backchannel_onset", label: "Backchannel onset?",
+    hint: "the early onset was a continuer (mm-hm, okay), not an attempt to take the turn",
+    dependsOn: "verified_assistant_premature_onset" },
 ]
 
 // A question only applies while every ancestor is "yes": yielding is only a

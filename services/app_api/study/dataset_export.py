@@ -302,7 +302,8 @@ def _manual_turn_verification_eligible(session: dict, timing: dict) -> bool:
 VERDICT_FIELDS = (
     "verified_overlap", "verified_participant_barge_in",
     "verified_assistant_premature_onset", "successful_assistant_yielding",
-    "disruptive_assistant_interruption", "verified_assistant_stop_latency_ms",
+    "disruptive_assistant_interruption", "assistant_backchannel_onset",
+    "verified_assistant_stop_latency_ms",
     "verified_participant_stop_latency_ms", "verifier_initials",
     "verification_note",
 )
@@ -316,12 +317,13 @@ TURN_VERDICT_GATES = (
     ("verified_overlap", (
         "verified_participant_barge_in", "verified_assistant_premature_onset",
         "successful_assistant_yielding", "disruptive_assistant_interruption",
+        "assistant_backchannel_onset",
         "verified_assistant_stop_latency_ms",
         "verified_participant_stop_latency_ms")),
     ("verified_participant_barge_in", (
         "successful_assistant_yielding", "verified_assistant_stop_latency_ms")),
     ("verified_assistant_premature_onset", (
-        "disruptive_assistant_interruption",
+        "disruptive_assistant_interruption", "assistant_backchannel_onset",
         "verified_participant_stop_latency_ms")),
 )
 
@@ -733,7 +735,8 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "participant_stop_latency_ms_candidate", "legacy_reconstruction",
         "verified_overlap", "verified_participant_barge_in",
         "verified_assistant_premature_onset", "successful_assistant_yielding",
-        "disruptive_assistant_interruption", "verified_assistant_stop_latency_ms",
+        "disruptive_assistant_interruption", "assistant_backchannel_onset",
+        "verified_assistant_stop_latency_ms",
         "verified_participant_stop_latency_ms", "verifier_initials",
         "verification_note",
     ]
@@ -962,7 +965,11 @@ raw-participant and assistant tracks. `successful_assistant_yielding` applies
 only to verified participant barge-ins and records whether the assistant ceded
 the floor. `disruptive_assistant_interruption` applies only to verified
 assistant premature onsets and records whether that onset cut off or disrupted
-the participant. These are manual judgments, not threshold-derived labels.
+the participant. `assistant_backchannel_onset` applies to the same verified
+premature onsets and records the cooperative case: the early onset was a
+continuer ("mm-hm", "okay") rather than an attempt to take the turn, so the
+two are expected to be mutually exclusive on any one event. These are manual
+judgments, not threshold-derived labels.
 `participant_raw_path` and `assistant_model_path` identify the two tracks to
 inspect. Only verified measures enter confirmatory analysis.
 

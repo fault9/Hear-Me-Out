@@ -41,6 +41,7 @@ TURN_EVENT_KEEP = [
     "participant_stop_latency_ms_candidate", "verified_overlap",
     "verified_participant_barge_in", "verified_assistant_premature_onset",
     "successful_assistant_yielding", "disruptive_assistant_interruption",
+    "assistant_backchannel_onset",
     "verified_assistant_stop_latency_ms", "verified_participant_stop_latency_ms",
 ]
 
