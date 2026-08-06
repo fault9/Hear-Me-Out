@@ -54,7 +54,8 @@ from study.session_scope import annotate_analysis_scopes  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 from study.timing_analysis import (BOUNDARY_CONFIRMATION_STATUS,
                                    resolve_boundary_validation)  # noqa: E402
-from study.turn_taking import turn_events_from_timing  # noqa: E402
+from study.turn_taking import (OVERLAP_MINIMUM_MS,
+                               turn_events_from_timing)  # noqa: E402
 
 MISSING = ""
 
@@ -747,11 +748,15 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "verified_gap_end_ms", "verified_gap_duration_ms",
         "verifier_initials", "verification_note",
     ]
+    # Below the prespecified 200 ms of summed overlap there is no simultaneous
+    # speech to affirm - the detectors work in 20 ms frames - so such episodes
+    # stay in turn_events.csv as audit rows but are not queued for listening.
     verification_rows = [
         row for row in event_rows
         if (row.get("analysis_included")
             and row.get("valid_for_manual_turn_verification")
-            and row.get("crosswalk_complete"))
+            and row.get("crosswalk_complete")
+            and float(row.get("overlap_duration_ms") or 0) >= OVERLAP_MINIMUM_MS)
     ]
     gap_verification_rows = [
         row for row in gap_rows
@@ -963,8 +968,11 @@ inspect. Only verified measures enter confirmatory analysis.
 
 ## turn_verification_queue.csv
 The subset of `turn_events.csv` belonging to canonical, analysis-included
-sessions that are eligible for manual turn verification and have a complete
-browser capture/playback crosswalk. This is the worksheet to annotate; the
+sessions that are eligible for manual turn verification, have a complete
+browser capture/playback crosswalk, and carry at least the prespecified
+200 ms of summed overlap - below that the detectors (20 ms frames) offer no
+simultaneous speech to affirm, so verified stop latencies are conditional on
+an overlap of at least 200 ms. This is the worksheet to annotate; the
 full event table remains an audit trail for excluded and superseded attempts.
 
 ## turn_gaps.csv

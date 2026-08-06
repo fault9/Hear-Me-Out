@@ -233,6 +233,10 @@ class FixtureCase(unittest.TestCase):
             "assistant_intervals": [
                 {"start_ms": 500.0, "end_ms": 1500.0},
                 {"start_ms": 4500.0, "end_ms": 5500.0},
+                # A 50 ms sliver onto the participant's last turn: a directional
+                # candidate below the 200 ms overlap floor, so it must reach
+                # turn_events.csv but never the verification queue.
+                {"start_ms": 7450.0, "end_ms": 8000.0},
             ],
             "overlaps": [{"start_ms": 46000.0, "end_ms": 46400.0,
                           "duration_ms": 400.0}],
@@ -559,13 +563,13 @@ class ReviewAndExportTests(FixtureCase):
         self.assertEqual(summary["coded_sessions"], 1)
         self.assertEqual(summary["unit_rows"], 2)
         self.assertEqual(summary["repair_rows"], 1)
-        self.assertEqual(summary["turn_event_candidates"], 2)
+        self.assertEqual(summary["turn_event_candidates"], 3)
         self.assertEqual(summary["turn_verification_candidates"], 2)
         self.assertEqual(summary["turn_gap_verification_candidates"], 1)
         self.assertEqual(summary["turn_sessions_requiring_full_review"], 1)
         self.assertEqual(summary["overlap_200ms_candidates"], 2)
         self.assertEqual(summary["participant_barge_in_candidates"], 1)
-        self.assertEqual(summary["assistant_premature_onset_candidates"], 1)
+        self.assertEqual(summary["assistant_premature_onset_candidates"], 2)
         self.assertEqual(summary["positive_response_gap_candidates"], 1)
 
         import csv as csv_module
@@ -583,7 +587,7 @@ class ReviewAndExportTests(FixtureCase):
         self.assertEqual(row["post_effort"], "3")
         self.assertEqual(row["overlap_candidates_200ms"], "2")
         self.assertEqual(row["participant_barge_in_candidates"], "1")
-        self.assertEqual(row["assistant_premature_onset_candidates"], "1")
+        self.assertEqual(row["assistant_premature_onset_candidates"], "2")
         self.assertEqual(row["assistant_response_gap_candidates"], "0")
         self.assertEqual(row["participant_response_gap_candidates"], "1")
 
@@ -601,7 +605,7 @@ class ReviewAndExportTests(FixtureCase):
 
         with (out_dir / "turn_events.csv").open() as handle:
             event_rows = list(csv_module.DictReader(handle))
-        self.assertEqual(len(event_rows), 2)
+        self.assertEqual(len(event_rows), 3)
         self.assertEqual(
             sum(r["participant_barge_in_candidate"] == "1" for r in event_rows),
             1,
@@ -609,7 +613,7 @@ class ReviewAndExportTests(FixtureCase):
         self.assertEqual(
             sum(r["assistant_premature_onset_candidate"] == "1"
                 for r in event_rows),
-            1,
+            2,
         )
         self.assertTrue(all(r["verified_overlap"] == "" for r in event_rows))
         self.assertTrue(all(r["successful_assistant_yielding"] == ""
@@ -620,6 +624,12 @@ class ReviewAndExportTests(FixtureCase):
         with (out_dir / "turn_verification_queue.csv").open() as handle:
             verification_rows = list(csv_module.DictReader(handle))
         self.assertEqual(len(verification_rows), 2)
+        # The sliver is an audit row, not a listening task.
+        sliver = [r for r in event_rows
+                  if float(r["overlap_duration_ms"]) < 200]
+        self.assertEqual(len(sliver), 1)
+        self.assertNotIn(sliver[0]["event_key"],
+                         {r["event_key"] for r in verification_rows})
 
         with (out_dir / "turn_gaps.csv").open() as handle:
             gap_rows = list(csv_module.DictReader(handle))
@@ -794,7 +804,7 @@ class ReviewAndExportTests(FixtureCase):
         out_dir = self.data_root / "exports" / "invalid-timing"
         summary = build_dataset(self.study_id, out_dir)
 
-        self.assertEqual(summary["turn_event_candidates"], 2)
+        self.assertEqual(summary["turn_event_candidates"], 3)
         self.assertEqual(summary["turn_verification_candidates"], 0)
         with (out_dir / "turn_events.csv").open() as handle:
             event_rows = list(csv.DictReader(handle))
@@ -1197,14 +1207,14 @@ class ProductionLayoutTests(FixtureCase):
     def test_export_loads_timing_and_emits_turn_events(self):
         out_dir = self.data_root / "exports" / "production"
         summary = build_dataset(self.study_id, out_dir)
-        self.assertEqual(summary["turn_event_candidates"], 2)
+        self.assertEqual(summary["turn_event_candidates"], 3)
         self.assertEqual(summary["artifact_coverage"]["timing_latest.loaded"], 1)
         self.assertEqual(summary["warnings"], [])
         with (out_dir / "scenarios.csv").open() as handle:
             row = list(csv.DictReader(handle))[0]
         self.assertEqual(row["overlap_candidates_200ms"], "2")
         self.assertEqual(row["barge_in_candidates"], "1")
-        self.assertEqual(row["assistant_premature_onset_candidates"], "1")
+        self.assertEqual(row["assistant_premature_onset_candidates"], "2")
         self.assertEqual(row["crosswalk_complete"], "1")
         self.assertEqual(row["capture_gap_total_ms"], "12.0")
 
