@@ -963,8 +963,7 @@ class AgreementMathTests(unittest.TestCase):
 
 
 class DatasetDownloadTests(FixtureCase):
-    """The admin Data tab builds the analysis tables on demand and streams
-    them as their own small archive, separate from the audio export."""
+    """The admin dataset download: tables built on demand, streamed as a zip."""
 
     manifest_paths_relative_to_media = True
 
@@ -1026,10 +1025,8 @@ class DatasetDownloadTests(FixtureCase):
 
 
 class ProductionLayoutTests(FixtureCase):
-    """The real container layout: data_root/media/sessions/... with manifest
-    paths recorded relative to the media dir ("sessions/..."). Readers hold
-    STUDY_DATA_ROOT, so joining it directly to the path silently produced
-    empty timing, no turn events, and packets without transcripts."""
+    """The real container layout: manifest paths relative to the media dir,
+    which readers holding STUDY_DATA_ROOT silently failed to resolve."""
 
     manifest_paths_relative_to_media = True
 

@@ -262,8 +262,7 @@ class TechnicalValidityTests(unittest.TestCase):
                       {warning["code"] for warning in result["warnings"]})
 
     def _failed_delivery_fixture(self, root: Path, *, contiguous: bool):
-        """A session whose end-of-call proxy delivery never arrived: no proxy
-        artifacts, a truncated event stream (no stream_stop), no crosswalk."""
+        """No proxy artifacts, a truncated event stream, no crosswalk."""
         session, timing = self._fixture(root)
         artifacts = session["artifact_manifest"]["artifacts"]
         for name in ("proxy_received.wav", "participant_proxy.wav",
