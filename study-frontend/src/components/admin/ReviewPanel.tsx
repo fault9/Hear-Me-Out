@@ -10,10 +10,6 @@ const WINDOW_PAD_MS = 2000
 
 type Verdict = Record<string, string | null>
 type Event = Record<string, any>
-type Utterance = {
-  id: string; speaker: string; text: string
-  start_ms: number | null; end_ms: number | null
-}
 
 const QUESTIONS: { key: string; label: string; hint?: string; dependsOn?: string }[] = [
   { key: "verified_overlap",
@@ -62,7 +58,6 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const [index, setIndex] = useState(0)
   const [answers, setAnswers] = useState<Verdict>({})
   const [note, setNote] = useState("")
-  const [context, setContext] = useState<Utterance[]>([])
   const [correctionMs, setCorrectionMs] = useState(0)
   const [exportName, setExportName] = useState("")
   const [err, setErr] = useState<string | null>(null)
@@ -143,29 +138,20 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     }
   }, [event, audioFor, correctionMs, stopAll])
 
-  // Load the transcript window, and warm the next item's audio so the reviewer
-  // never waits on a fetch mid-pass.
+  // Warm the next item's audio so the reviewer never waits on a fetch
+  // mid-pass. Verification is by ear alone: no transcript is shown, because
+  // interval ASR stamps stock phrases on sub-speech blips and the assistant's
+  // text times run ahead of its audio - both misread as evidence.
   useEffect(() => {
     if (!event) return
     setAnswers(withInapplicableCleared({ ...(event.verdict || {}) }))
     setNote(event.verdict?.verification_note || "")
-    // Clear first: showing the previous item's transcript while the next one
-    // loads is worse than showing nothing, and a late response from an earlier
-    // item must never overwrite the current one.
-    setContext([])
-    let cancelled = false
-    const [from, to] = eventWindow(event)
-    adminApi.reviewContext(token, studyId, event.session_id, from, to)
-      .then((r) => { if (!cancelled) setContext(r.utterances || []) })
-      .catch(() => { if (!cancelled) setContext([]) })
     const upcoming = events[index + 1]
     if (upcoming) {
       audioFor(upcoming.session_id, "participant_raw").catch(() => {})
       audioFor(upcoming.session_id, "assistant").catch(() => {})
     }
-    return () => { cancelled = true; stopAll() }
-    // Keyed on the event itself: re-fetching on every saved verdict would
-    // reopen the race for no benefit.
+    return () => { stopAll() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [event?.event_key, token, studyId])
 
@@ -293,33 +279,6 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
             ))}
           </p>
         )}
-      </div>
-
-      <div className="max-h-56 overflow-auto rounded-lg border p-3 text-sm">
-        {context.length === 0 && <p className="text-muted-foreground">No transcript in window.</p>}
-        {context.map((u) => {
-          const inEvent = (u.end_ms ?? 0) >= (from + WINDOW_PAD_MS)
-            && (u.start_ms ?? 0) <= (to - WINDOW_PAD_MS)
-          // Interval ASR hallucinates stock phrases on sub-speech blips, so
-          // short participant lines are labels to check, not evidence.
-          const lowConfidence = u.speaker === "participant"
-            && (u.end_ms ?? 0) - (u.start_ms ?? 0) < 600
-          return (
-            <p key={u.id} className={inEvent ? "rounded bg-primary/10 px-1" : ""}>
-              <span className="font-mono text-xs text-muted-foreground">
-                {u.speaker === "participant" ? "P" : "A"}{" "}
-                {((u.start_ms ?? 0) / 1000).toFixed(1)}–{((u.end_ms ?? 0) / 1000).toFixed(1)}s
-              </span>{" "}
-              {lowConfidence ? (
-                <em className="text-muted-foreground">
-                  {u.text || "(no text)"} · short — verify by ear
-                </em>
-              ) : (
-                u.text || <em className="text-muted-foreground">(no text)</em>
-              )}
-            </p>
-          )
-        })}
       </div>
 
       <div className="rounded-lg border p-3">
