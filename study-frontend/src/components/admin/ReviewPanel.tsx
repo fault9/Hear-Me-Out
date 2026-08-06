@@ -267,6 +267,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
 
   if (!event) return <p className="text-sm text-muted-foreground">Queue is empty.</p>
 
+  const [from, to] = eventWindow(event)
   const overlapStart = parseFloat(event.overlap_start_ms)
   const overlapEnd = parseFloat(event.overlap_end_ms)
   const overlapAt = Number.isFinite(overlapStart) && Number.isFinite(overlapEnd)
@@ -297,16 +298,17 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button size="sm" disabled={!duration}
-            onClick={() => (playing ? pauseAll() : playFrom(position))}>
+            onClick={() => (playing ? pauseAll() : playFrom(position, to / 1000))}>
             {playing ? "⏸ Pause" : "▶ Play"}
           </Button>
           <Button size="sm" variant="secondary" disabled={!duration}
-            onClick={playEvent}>▶ Event</Button>
-          <input type="range" min={0} max={duration || 0} step={0.1}
-            value={Math.min(position, duration || 0)} className="min-w-40 flex-1"
+            onClick={playEvent}>↺ Replay</Button>
+          <input type="range" min={from / 1000} max={to / 1000} step={0.05}
+            value={Math.min(Math.max(position, from / 1000), to / 1000)}
+            className="min-w-40 flex-1"
             onChange={(e) => seekTo(parseFloat(e.target.value))} />
           <span className="font-mono text-xs text-muted-foreground">
-            {position.toFixed(1)}s / {duration ? duration.toFixed(1) : "…"}s
+            {position.toFixed(1)}s of {(from / 1000).toFixed(1)}–{(to / 1000).toFixed(1)}s
           </span>
         </div>
         <div className="mt-2 flex items-center gap-2">
