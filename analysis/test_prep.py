@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import importlib.util
 import tempfile
 import unittest
@@ -25,17 +26,26 @@ class PrepTests(unittest.TestCase):
             data.mkdir()
             scenario_fields = sorted(set(prep.SCENARIO_KEEP) | {
                 "analysis_included", "session_id", "participant_id",
+                "technical_status",
             })
             scenarios = [
                 {"session_id": "S1", "participant_id": "P1",
                  "analysis_included": "1", "valid_for_condition_analysis": "1",
-                 "demonstrated_grounding": ""},
+                 "technical_status": "valid", "demonstrated_grounding": ""},
                 {"session_id": "S2", "participant_id": "P2",
                  "analysis_included": "1", "valid_for_condition_analysis": "1",
-                 "demonstrated_grounding": "1"},
+                 "technical_status": "valid", "demonstrated_grounding": "1"},
                 {"session_id": "S2_failed", "participant_id": "P2",
                  "analysis_included": "0", "valid_for_condition_analysis": "0",
-                 "demonstrated_grounding": ""},
+                 "technical_status": "invalid", "demonstrated_grounding": ""},
+                # Abandoned capture: never evaluated, so it is neither valid nor
+                # invalid and must not remove P3 from the sensitivity frame.
+                {"session_id": "S3", "participant_id": "P3",
+                 "analysis_included": "1", "valid_for_condition_analysis": "1",
+                 "technical_status": "valid", "demonstrated_grounding": ""},
+                {"session_id": "S3_abandoned", "participant_id": "P3",
+                 "analysis_included": "0", "valid_for_condition_analysis": "0",
+                 "technical_status": "pending", "demonstrated_grounding": ""},
             ]
             with (data / "scenarios.csv").open("w", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=scenario_fields)
@@ -52,9 +62,15 @@ class PrepTests(unittest.TestCase):
                 primary = list(csv.DictReader(handle))
             with (output / "scenario_level_sensitivity_complete_technical.csv").open() as handle:
                 sensitivity = list(csv.DictReader(handle))
-            self.assertEqual([row["participant_id"] for row in primary], ["P1", "P2"])
-            self.assertEqual([row["participant_id"] for row in sensitivity], ["P1"])
+            self.assertEqual([row["participant_id"] for row in primary],
+                             ["P1", "P2", "P3"])
+            self.assertEqual([row["participant_id"] for row in sensitivity],
+                             ["P1", "P3"])
             self.assertEqual(primary[0]["demonstrated_grounding"], "")
+            with (output / "sensitivity_complete_technical.json").open() as handle:
+                report = json.load(handle)
+            self.assertEqual(report["excluded_participant_ids"], ["P2"])
+            self.assertEqual(report["unevaluated_session_ids"], ["S3_abandoned"])
 
     def test_turn_frames_keep_only_certified_synchronization(self):
         prep = _load_prep()

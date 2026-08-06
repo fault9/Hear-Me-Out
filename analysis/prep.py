@@ -82,14 +82,19 @@ def main():
     write_frame("scenario_level.csv", included, SCENARIO_KEEP)
 
     # Prespecified sensitivity analysis: remove a participant entirely when
-    # any retained analytical attempt was technically invalid. Pending or
-    # missing evaluations are reported separately and are never treated as
-    # either valid or invalid by this rule.
+    # any analytical attempt was technically invalid. The verdict must come
+    # from technical_status: valid_for_condition_analysis is also false for
+    # attempts that were never evaluated (abandoned captures), and an
+    # unevaluated attempt is not an invalid one. Those are reported separately.
     invalid_participants = {
         row["participant_id"] for row in scenarios
-        if str(row.get("valid_for_condition_analysis")).strip().lower()
-        in ("0", "false", "no")
+        if str(row.get("technical_status")).strip().lower() == "invalid"
     }
+    unevaluated = sorted(
+        row["session_id"] for row in scenarios
+        if str(row.get("technical_status")).strip().lower() not in
+        ("valid", "invalid")
+    )
     sensitivity = [row for row in included
                    if row["participant_id"] not in invalid_participants]
     write_frame("scenario_level_sensitivity_complete_technical.csv",
@@ -99,8 +104,9 @@ def main():
               encoding="utf-8") as handle:
         json.dump({
             "rule": ("exclude every participant with any analytical attempt "
-                     "where valid_for_condition_analysis is explicitly false"),
+                     "whose technical_status is invalid"),
             "excluded_participant_ids": sorted(invalid_participants),
+            "unevaluated_session_ids": unevaluated,
             "primary_rows": len(included),
             "sensitivity_rows": len(sensitivity),
         }, handle, indent=2, sort_keys=True)
