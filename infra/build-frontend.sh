@@ -26,6 +26,12 @@ if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ] || [ package.
   npm install
 fi
 
+# The HMO app is always served under /hmo (never at "/", where participants
+# arrive), so its assets must be built with that base path.
+if [ "$WS" = "frontend" ]; then
+  export VITE_BASE="/hmo/"
+fi
+
 npm run build -w "$WS"
 
 echo "=== Build complete → $PROJECT_DIR/$WS/dist ==="
