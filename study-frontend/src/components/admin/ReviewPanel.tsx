@@ -62,16 +62,16 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const [exportName, setExportName] = useState("")
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Where each track actually landed, so a discarded seek is visible rather
-  // than sounding like broken audio.
-  const [seek, setSeek] = useState<Record<string, {
-    target: number; at: number; duration: number }>>({})
   const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map())
-  const stopTimers = useRef<number[]>([])
-  // Native controls per track: the reviewer can scrub freely, and what is
-  // actually loaded and playing is visible rather than inferred.
-  const [urls, setUrls] = useState<Record<string, string>>({})
-  const playerRef = useRef<Record<string, HTMLAudioElement | null>>({})
+  // One transport drives both tracks in lockstep; solo is a mute, not a
+  // separate player, so isolating a track never desynchronizes the position.
+  const [playing, setPlaying] = useState(false)
+  const [position, setPosition] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [solo, setSolo] = useState<"both" | "participant_raw" | "assistant">("both")
+  const deck = useRef<{ p: HTMLAudioElement | null; a: HTMLAudioElement | null }>(
+    { p: null, a: null })
+  const stopAt = useRef<number | null>(null)
 
   const event = events[index]
   const done = events.filter((e) => e.verdict).length
@@ -97,7 +97,6 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     const cached = audioRef.current.get(key)
     if (cached) return cached
     const url = await adminApi.reviewAudio(token, studyId, sessionId, track)
-    setUrls((u) => ({ ...u, [`${sessionId}:${track}`]: url }))
     const element = new Audio(url)
     element.preload = "auto"
     // Seeking before metadata loads is silently discarded and playback starts
@@ -111,32 +110,80 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     return element
   }, [token, studyId])
 
-  const stopAll = useCallback(() => {
-    stopTimers.current.forEach((id) => window.clearTimeout(id))
-    stopTimers.current = []
-    audioRef.current.forEach((element) => element.pause())
+  const pauseAll = useCallback(() => {
+    deck.current.p?.pause()
+    deck.current.a?.pause()
+    stopAt.current = null
+    setPlaying(false)
   }, [])
 
-  const play = useCallback(async (only?: string) => {
+  // Event times carry the frozen capture correction; the raw microphone file
+  // is in capture time, so it sits correction-late relative to the timeline.
+  const seekTo = useCallback((t: number) => {
+    const { p, a } = deck.current
+    if (p) p.currentTime = Math.max(0, t + correctionMs / 1000)
+    if (a) a.currentTime = Math.max(0, t)
+    setPosition(t)
+  }, [correctionMs])
+
+  const playFrom = useCallback(async (t: number, until: number | null = null) => {
+    const { p, a } = deck.current
+    if (!p || !a) return
+    seekTo(t)
+    stopAt.current = until
+    p.muted = solo === "assistant"
+    a.muted = solo === "participant_raw"
+    try { await Promise.all([p.play(), a.play()]) }
+    catch (e: any) { setErr(e?.message || String(e)) }
+    setPlaying(true)
+  }, [seekTo, solo])
+
+  const playEvent = useCallback(() => {
     if (!event) return
-    stopAll()
     const [from, to] = eventWindow(event)
-    const tracks = only ? [only] : ["participant_raw", "assistant"]
-    for (const track of tracks) {
-      try {
-        const element = await audioFor(event.session_id, track)
-        // Event times carry the frozen capture correction; the raw microphone
-        // file is in capture time, so add it back when seeking that track.
-        const offset = track === "participant_raw" ? correctionMs : 0
-        const target = Math.max(0, (from + offset) / 1000)
-        element.currentTime = target
-        setSeek((s) => ({ ...s, [track]: { target, at: element.currentTime,
-                                           duration: element.duration } }))
-        await element.play()
-        stopTimers.current.push(window.setTimeout(() => element.pause(), to - from))
-      } catch (e: any) { setErr(e?.message || String(e)) }
-    }
-  }, [event, audioFor, correctionMs, stopAll])
+    playFrom(from / 1000, to / 1000)
+  }, [event, playFrom])
+
+  // Load both tracks for the current item and park the transport at the
+  // event window so the first play needs no seeking.
+  useEffect(() => {
+    deck.current = { p: null, a: null }
+    setPlaying(false); setPosition(0); setDuration(0)
+    if (!event) return
+    let cancelled = false
+    Promise.all([
+      audioFor(event.session_id, "participant_raw"),
+      audioFor(event.session_id, "assistant"),
+    ]).then(([p, a]) => {
+      if (cancelled) return
+      deck.current = { p, a }
+      setDuration(Math.max((p.duration || 0) - correctionMs / 1000, a.duration || 0))
+      seekTo(eventWindow(event)[0] / 1000)
+    }).catch((e: any) => setErr(e?.message || String(e)))
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event?.event_key, audioFor, correctionMs])
+
+  // The participant element is the clock; the assistant follows, and a
+  // window play pauses itself at the window's end.
+  useEffect(() => {
+    if (!playing) return
+    const id = window.setInterval(() => {
+      const { p, a } = deck.current
+      if (!p) return
+      const t = Math.max(0, p.currentTime - correctionMs / 1000)
+      setPosition(t)
+      if (a && Math.abs(a.currentTime - t) > 0.3) a.currentTime = t
+      if (stopAt.current != null && t >= stopAt.current) pauseAll()
+    }, 100)
+    return () => window.clearInterval(id)
+  }, [playing, correctionMs, pauseAll])
+
+  useEffect(() => {
+    const { p, a } = deck.current
+    if (p) p.muted = solo === "assistant"
+    if (a) a.muted = solo === "participant_raw"
+  }, [solo])
 
   // Warm the next item's audio so the reviewer never waits on a fetch
   // mid-pass. Verification is by ear alone: no transcript is shown, because
@@ -151,7 +198,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       audioFor(upcoming.session_id, "participant_raw").catch(() => {})
       audioFor(upcoming.session_id, "assistant").catch(() => {})
     }
-    return () => { stopAll() }
+    return () => { pauseAll() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [event?.event_key, token, studyId])
 
@@ -176,14 +223,17 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     if (!started) return
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return
-      if (e.code === "Space") { e.preventDefault(); play() }
+      if (e.code === "Space") {
+        e.preventDefault()
+        if (playing) pauseAll(); else playEvent()
+      }
       if (e.key === "1") setAnswers((a) => withInapplicableCleared({ ...a, verified_overlap: "1" }))
       if (e.key === "2") setAnswers((a) => withInapplicableCleared({ ...a, verified_overlap: "0" }))
       if (e.key === "Enter") save()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [started, play, save])
+  }, [started, playing, playEvent, pauseAll, save])
 
   if (!started) {
     return (
@@ -236,49 +286,29 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
             </div>
           ))}
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => play()}>▶ Play both</Button>
-          <Button size="sm" variant="secondary" onClick={() => play("participant_raw")}>Participant only</Button>
-          <Button size="sm" variant="secondary" onClick={() => play("assistant")}>Assistant only</Button>
-          <Button size="sm" variant="ghost" onClick={stopAll}>Stop</Button>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" disabled={!duration}
+            onClick={() => (playing ? pauseAll() : playFrom(position))}>
+            {playing ? "⏸ Pause" : "▶ Play"}
+          </Button>
+          <Button size="sm" variant="secondary" disabled={!duration}
+            onClick={playEvent}>▶ Event</Button>
+          <input type="range" min={0} max={duration || 0} step={0.1}
+            value={Math.min(position, duration || 0)} className="min-w-40 flex-1"
+            onChange={(e) => seekTo(parseFloat(e.target.value))} />
+          <span className="font-mono text-xs text-muted-foreground">
+            {position.toFixed(1)}s / {duration ? duration.toFixed(1) : "…"}s
+          </span>
         </div>
-        <div className="mt-3 flex flex-col gap-2">
-          {(["participant_raw", "assistant"] as const).map((track) => {
-            const url = urls[`${event.session_id}:${track}`]
-            const offset = track === "participant_raw" ? correctionMs : 0
-            return (
-              <div key={track} className="flex flex-wrap items-center gap-2">
-                <span className="w-28 text-xs text-muted-foreground">
-                  {track === "participant_raw" ? "participant" : "assistant"}
-                </span>
-                {url ? (
-                  <>
-                    <audio controls preload="auto" src={url} className="h-8 flex-1"
-                      ref={(el) => { playerRef.current[track] = el }} />
-                    <Button size="sm" variant="secondary" onClick={() => {
-                      const el = playerRef.current[track]
-                      if (el) { el.currentTime = Math.max(0, (from + offset) / 1000); el.play() }
-                    }}>Jump to event</Button>
-                  </>
-                ) : (
-                  <Button size="sm" variant="secondary"
-                    onClick={() => audioFor(event.session_id, track)}>Load</Button>
-                )}
-              </div>
-            )
-          })}
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">hear</span>
+          {([["both", "Both"], ["participant_raw", "Participant"],
+             ["assistant", "Assistant"]] as const).map(([value, label]) => (
+            <Button key={value} size="sm"
+              variant={solo === value ? "default" : "secondary"}
+              onClick={() => setSolo(value)}>{label}</Button>
+          ))}
         </div>
-        {Object.keys(seek).length > 0 && (
-          <p className="mt-2 font-mono text-xs text-muted-foreground">
-            {Object.entries(seek).map(([track, s]) => (
-              <span key={track} className="mr-4">
-                {track}: seeked {s.at.toFixed(1)}s
-                {Math.abs(s.at - s.target) > 0.5 && ` (wanted ${s.target.toFixed(1)}s — seek failed)`}
-                {" "}of {Number.isFinite(s.duration) ? s.duration.toFixed(1) : "?"}s
-              </span>
-            ))}
-          </p>
-        )}
       </div>
 
       <div className="rounded-lg border p-3">
