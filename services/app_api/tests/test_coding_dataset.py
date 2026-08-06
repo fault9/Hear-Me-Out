@@ -1006,6 +1006,26 @@ class VerdictGatingTests(unittest.TestCase):
         self.assertEqual(gated["verification_note"], "wind noise")
 
 
+class TurnEventKeyTests(unittest.TestCase):
+    def test_key_survives_episode_renumbering(self):
+        from study.dataset_export import turn_event_key
+
+        before = {"episode_id": "overlap_0003",
+                  "participant_onset_ms": 36874.3, "assistant_onset_ms": 35290.0}
+        after = {"episode_id": "overlap_0002",
+                 "participant_onset_ms": "36874.3", "assistant_onset_ms": "35290.0"}
+        self.assertEqual(turn_event_key("P1_R01_S02_A01", before),
+                         turn_event_key("P1_R01_S02_A01", after))
+        self.assertEqual(turn_event_key("P1_R01_S02_A01", before),
+                         "P1_R01_S02_A01::p36874::a35290")
+
+    def test_missing_onsets_still_produce_a_key(self):
+        from study.dataset_export import turn_event_key
+
+        self.assertEqual(turn_event_key("P1_R01_S02_A01", {}),
+                         "P1_R01_S02_A01::pna::ana")
+
+
 class DatasetDownloadTests(FixtureCase):
     """The admin dataset download: tables built on demand, streamed as a zip."""
 

@@ -19,12 +19,16 @@ const QUESTIONS: { key: string; label: string; hint?: string; dependsOn?: string
   { key: "verified_overlap",
     label: "Real simultaneous speech (not noise or leakage)?", hint: "1 / 2" },
   { key: "verified_participant_barge_in", label: "Participant barge-in?",
+    hint: "a genuine attempt to take the floor — a backchannel or continuer is No",
     dependsOn: "verified_overlap" },
   { key: "verified_assistant_premature_onset", label: "Assistant premature onset?",
+    hint: "the assistant started while the participant held the floor",
     dependsOn: "verified_overlap" },
   { key: "successful_assistant_yielding", label: "Assistant yielded successfully?",
+    hint: "did the assistant cede the floor — descriptive, not approval",
     dependsOn: "verified_participant_barge_in" },
   { key: "disruptive_assistant_interruption", label: "Disruptive assistant interruption?",
+    hint: "did it cut the participant off or derail them",
     dependsOn: "verified_assistant_premature_onset" },
 ]
 

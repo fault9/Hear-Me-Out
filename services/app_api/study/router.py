@@ -691,7 +691,9 @@ def build_study_router() -> APIRouter:
         # Condition is withheld: verification is about what the audio shows.
         events = []
         for row in rows:
-            key = f"{row['session_id']}::{row['episode_id']}"
+            # Onset-based key from the export; positional fallback for exports
+            # that predate it.
+            key = row.get("event_key") or f"{row['session_id']}::{row['episode_id']}"
             events.append({k: v for k, v in row.items() if k != "condition"}
                           | {"event_key": key, "verdict": verdicts.get(key)})
         # Event times carry the frozen capture correction, so seeking the raw
@@ -741,7 +743,7 @@ def build_study_router() -> APIRouter:
                     claims[str(row.get("event_key"))] = row
         now = time.time()
         for row in rows:
-            key = f"{row['session_id']}::{row['episode_id']}"
+            key = row.get("event_key") or f"{row['session_id']}::{row['episode_id']}"
             if key in verdicts:
                 continue
             held = claims.get(key)

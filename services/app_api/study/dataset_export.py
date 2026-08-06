@@ -334,8 +334,22 @@ def gate_turn_verdict(record: dict) -> dict:
     return gated
 
 
+def turn_event_key(session_id: str, event: dict) -> str:
+    """Identity that survives re-analysis. The episode index is positional and
+    shifts whenever the episode set changes, but a turn's onsets are
+    deterministic recomputations from the stored audio, so verdicts keyed on
+    them still resolve after a re-run."""
+    parts = []
+    for field in ("participant_onset_ms", "assistant_onset_ms"):
+        try:
+            parts.append(str(int(round(float(event.get(field))))))
+        except (TypeError, ValueError):
+            parts.append("na")
+    return f"{session_id}::p{parts[0]}::a{parts[1]}"
+
+
 def load_turn_verdicts(data_root: Path, study_id: int) -> dict[str, dict]:
-    """Manual turn-verification decisions, keyed session_id::episode_id.
+    """Manual turn-verification decisions, keyed by turn_event_key.
 
     The file is append-only so the review pass keeps its history; the last
     record for an event is the one the dataset uses.
@@ -665,6 +679,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
             event_rows.append({
                 **common,
                 "episode_id": event.get("episode_id"),
+                "event_key": turn_event_key(sid, event),
                 "participant_interval": event.get("participant_interval"),
                 "assistant_interval": event.get("assistant_interval"),
                 "initiator": event.get("initiator"),
@@ -689,8 +704,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
                 # Manual decisions come from the review pass; an unverified
                 # event keeps them empty. Onset direction is automatic;
                 # yielding/disruption require listening.
-                **_verdict_fields(verdicts.get(
-                    f"{sid}::{event.get('episode_id')}")),
+                **_verdict_fields(verdicts.get(turn_event_key(sid, event))),
             })
         for gap in response_gaps:
             gap_rows.append({
@@ -708,7 +722,8 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "valid_for_confirmatory_timing_analysis",
         "valid_for_manual_turn_verification", "crosswalk_complete",
         "participant_raw_path", "assistant_model_path",
-        "episode_id", "participant_interval", "assistant_interval", "initiator",
+        "episode_id", "event_key", "participant_interval", "assistant_interval",
+        "initiator",
         "participant_onset_ms", "participant_offset_ms", "assistant_onset_ms",
         "assistant_offset_ms", "overlap_start_ms", "overlap_end_ms",
         "overlap_duration_ms", "overlap_200ms_candidate",
@@ -931,7 +946,10 @@ One row per coded repair move. `post_boundary` uses the same boundary as
 `repair_post_boundary` above.
 
 ## turn_events.csv
-One row per linked participant/assistant overlap episode. The automatic flags
+One row per linked participant/assistant overlap episode. `event_key` names an
+episode by session and onset times and is what verdicts are recorded against,
+so they survive a re-analysis; `episode_id` is positional within one export.
+The automatic flags
 separate neutral overlap (at least 200 ms), participant-initiated barge-in, and
 assistant-initiated premature onset without duplicating one episode across
 rows. Fill the applicable `verified_*` fields while listening to the
