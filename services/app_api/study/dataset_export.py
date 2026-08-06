@@ -298,6 +298,42 @@ def _manual_turn_verification_eligible(session: dict, timing: dict) -> bool:
     )
 
 
+VERDICT_FIELDS = (
+    "verified_overlap", "verified_participant_barge_in",
+    "verified_assistant_premature_onset", "successful_assistant_yielding",
+    "disruptive_assistant_interruption", "verified_assistant_stop_latency_ms",
+    "verified_participant_stop_latency_ms", "verifier_initials",
+    "verification_note",
+)
+
+
+def load_turn_verdicts(data_root: Path, study_id: int) -> dict[str, dict]:
+    """Manual turn-verification decisions, keyed session_id::episode_id.
+
+    The file is append-only so the review pass keeps its history; the last
+    record for an event is the one the dataset uses.
+    """
+    path = Path(data_root) / "review" / f"study{int(study_id)}" / "turn_verdicts.jsonl"
+    verdicts: dict[str, dict] = {}
+    if not path.is_file():
+        return verdicts
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        key = record.get("event_key")
+        if key:
+            verdicts[str(key)] = record
+    return verdicts
+
+
+def _verdict_fields(verdict: dict | None) -> dict:
+    return {field: (verdict or {}).get(field) for field in VERDICT_FIELDS}
+
+
 def _coverage_warnings(coverage: Counter, analytical_count: int) -> list[str]:
     """Flag artifact-loading shortfalls so an empty export is never mistaken
     for a study with genuinely no timing or events."""
@@ -371,6 +407,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
     vc_quality_rows = _vc_quality_rows(analytical, target_refs)
     # Load each session's timing artifact once; scenarios.csv and turn_events.csv
     # both read it, and one pass keeps the coverage tally per session.
+    verdicts = load_turn_verdicts(data_root, study_id)
     coverage: Counter = Counter()
     timing_by_session = {
         str(session["session_id"]):
@@ -622,17 +659,11 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
                 "participant_stop_latency_ms_candidate": event.get(
                     "participant_stop_latency_ms"),
                 "legacy_reconstruction": event.get("legacy_reconstruction", False),
-                # Manual decisions are deliberately empty. Onset direction is
-                # automatic; yielding/disruption require listening.
-                "verified_overlap": None,
-                "verified_participant_barge_in": None,
-                "verified_assistant_premature_onset": None,
-                "successful_assistant_yielding": None,
-                "disruptive_assistant_interruption": None,
-                "verified_assistant_stop_latency_ms": None,
-                "verified_participant_stop_latency_ms": None,
-                "verifier_initials": None,
-                "verification_note": None,
+                # Manual decisions come from the review pass; an unverified
+                # event keeps them empty. Onset direction is automatic;
+                # yielding/disruption require listening.
+                **_verdict_fields(verdicts.get(
+                    f"{sid}::{event.get('episode_id')}")),
             })
         for gap in response_gaps:
             gap_rows.append({
@@ -784,6 +815,10 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "unit_rows": len(unit_rows),
         "repair_rows": len(repair_rows),
         "turn_event_candidates": len(event_rows),
+        "turn_events_verified": sum(
+            1 for row in event_rows if row.get("verifier_initials")),
+        "turn_events_pending_verification": sum(
+            1 for row in verification_rows if not row.get("verifier_initials")),
         "turn_verification_candidates": len(verification_rows),
         "turn_gap_verification_candidates": len(gap_verification_rows),
         "turn_sessions_requiring_full_review": len(session_review_rows),

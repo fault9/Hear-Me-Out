@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import csv
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ from starlette.background import BackgroundTask
 
 from .analysis import get_runner
 from .artifacts import (append_jsonl, atomic_write_bytes, atomic_write_json,
+                        load_manifest_artifact,
                         canonical_json_bytes, file_record, git_revision,
                         immutable_copy, sha256_bytes)
 from .counterbalance import (CounterbalanceError, allocate as allocate_variants,
@@ -89,6 +91,9 @@ except OSError:
 
 ADMIN_TOKEN = os.environ.get("STUDY_ADMIN_TOKEN") or "changeme-study-admin"
 EVENT_TOKEN = os.environ.get("STUDY_EVENT_TOKEN") or "local-study-events"
+# An abandoned verification claim returns to the queue after this long, so a
+# reviewer who closes the tab does not strand items.
+REVIEW_CLAIM_LEASE_S = 30 * 60
 SESSION_JSON_UPLOAD_MAX_BYTES = int(os.environ.get(
     "STUDY_SESSION_JSON_UPLOAD_MAX_BYTES", str(32 * 1024 * 1024)))
 if ADMIN_TOKEN == "changeme-study-admin":
@@ -621,6 +626,171 @@ def build_study_router() -> APIRouter:
             filename=f"study{study_id}_export.zip",
             background=BackgroundTask(archive_path.unlink, missing_ok=True),
         )
+
+    # ---------- manual turn verification ----------
+    # The method retains overlap, barge-in and stop-latency events only after
+    # verification against the raw-participant and assistant tracks. The queue
+    # comes from the latest dataset export (a stable item set for one pass);
+    # verdicts are appended to an audit trail, last entry per event winning.
+    def _review_dir(study_id: int) -> Path:
+        return Path(os.path.expanduser(_DATA_ROOT)) / "review" / f"study{study_id}"
+
+    def _pinned_export(study_id: int) -> Optional[Path]:
+        """The export this review pass runs against. Pinned on first use so a
+        later export cannot change the item set mid-pass."""
+        base = Path(os.path.expanduser(_DATA_ROOT)) / "exports" / f"study{study_id}"
+        pass_file = _review_dir(study_id) / "pass.json"
+        if pass_file.is_file():
+            pinned = base / json.loads(pass_file.read_text()).get("export", "")
+            if pinned.is_dir():
+                return pinned
+        exports = sorted(base.glob("dataset_*")) if base.is_dir() else []
+        if not exports:
+            return None
+        pass_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(pass_file, {"export": exports[-1].name,
+                                      "pinned_at_unix_s": time.time()})
+        return exports[-1]
+
+    def _verdict_path(study_id: int) -> Path:
+        return _review_dir(study_id) / "turn_verdicts.jsonl"
+
+    def _load_verdicts(study_id: int) -> dict:
+        path = _verdict_path(study_id)
+        verdicts: dict[str, dict] = {}
+        if not path.is_file():
+            return verdicts
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            verdicts[str(row.get("event_key"))] = row
+        return verdicts
+
+    def _queue_rows(study_id: int) -> tuple[Path, list[dict]]:
+        export = _pinned_export(study_id)
+        if export is None:
+            raise HTTPException(status_code=409, detail=(
+                "No dataset export found. Download the analysis dataset first "
+                "so the verification queue is a fixed item set."))
+        path = export / "turn_verification_queue.csv"
+        if not path.is_file():
+            raise HTTPException(status_code=409,
+                                detail="Export has no turn_verification_queue.csv")
+        with path.open(newline="") as handle:
+            return export, list(csv.DictReader(handle))
+
+    @router.get("/studies/{study_id}/review/turn-queue",
+                dependencies=[Depends(require_admin)])
+    async def review_turn_queue(study_id: int):
+        export, rows = _queue_rows(study_id)
+        verdicts = _load_verdicts(study_id)
+        # Condition is withheld: verification is about what the audio shows.
+        events = []
+        for row in rows:
+            key = f"{row['session_id']}::{row['episode_id']}"
+            events.append({k: v for k, v in row.items() if k != "condition"}
+                          | {"event_key": key, "verdict": verdicts.get(key)})
+        return {"export": export.name, "events": events,
+                "completed": sum(1 for e in events if e["verdict"])}
+
+    @router.post("/studies/{study_id}/review/turn-verdict",
+                 dependencies=[Depends(require_admin)])
+    async def review_turn_verdict(study_id: int, body: dict):
+        key = str(body.get("event_key") or "").strip()
+        if not key:
+            raise HTTPException(status_code=422, detail="event_key is required")
+        record = {**body, "event_key": key, "recorded_at_unix_s": time.time()}
+        path = _verdict_path(study_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        append_jsonl(path, [record])
+        return {"ok": True, "event_key": key}
+
+    @router.post("/studies/{study_id}/review/claim",
+                 dependencies=[Depends(require_admin)])
+    async def review_claim(study_id: int, body: dict):
+        """Hand the caller the next unverified, unclaimed event. Leases expire
+        so an abandoned claim returns to the pool."""
+        reviewer = str(body.get("reviewer") or "").strip()
+        if not reviewer:
+            raise HTTPException(status_code=422, detail="reviewer is required")
+        _, rows = _queue_rows(study_id)
+        verdicts = _load_verdicts(study_id)
+        claims_path = _review_dir(study_id) / "claims.jsonl"
+        claims: dict[str, dict] = {}
+        if claims_path.is_file():
+            for line in claims_path.read_text().splitlines():
+                if line.strip():
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    claims[str(row.get("event_key"))] = row
+        now = time.time()
+        for row in rows:
+            key = f"{row['session_id']}::{row['episode_id']}"
+            if key in verdicts:
+                continue
+            held = claims.get(key)
+            if (held and held.get("reviewer") != reviewer
+                    and now - float(held.get("claimed_at_unix_s") or 0) < REVIEW_CLAIM_LEASE_S):
+                continue
+            claims_path.parent.mkdir(parents=True, exist_ok=True)
+            append_jsonl(claims_path, [{"event_key": key, "reviewer": reviewer,
+                                        "claimed_at_unix_s": now}])
+            return {"event_key": key}
+        return {"event_key": None}
+
+    @router.get("/studies/{study_id}/review/context",
+                dependencies=[Depends(require_admin)])
+    async def review_context(study_id: int, session_id: str,
+                             from_ms: float, to_ms: float):
+        """Raw dialogue utterances overlapping the event window. Voice mode and
+        route segments are dropped: they name the condition."""
+        session = backend.get_session(session_id)
+        if not session or str(session.get("study_id")) != str(study_id):
+            raise HTTPException(status_code=404, detail="Unknown session")
+        dialogue = load_manifest_artifact(
+            session, STUDY_DATA_DIR, "dialogue_transcript_latest") or {}
+        utterances = [
+            {"id": row.get("id"), "speaker": row.get("speaker"),
+             "text": row.get("text"), "start_ms": row.get("start_ms"),
+             "end_ms": row.get("end_ms")}
+            for row in dialogue.get("utterances") or []
+            if (row.get("end_ms") or 0) >= from_ms and (row.get("start_ms") or 0) <= to_ms
+        ]
+        return {"utterances": utterances}
+
+    @router.get("/studies/{study_id}/review/audio",
+                dependencies=[Depends(require_admin)])
+    async def review_audio(study_id: int, session_id: str, track: str):
+        column = {"participant_raw": "participant_raw_path",
+                  "assistant": "assistant_model_path"}.get(track)
+        if track == "merged":
+            session = backend.get_session(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Unknown session")
+            relative = ((session.get("files") or {}).get("merged"))
+            if not relative:
+                raise HTTPException(status_code=404, detail="No merged audio")
+            path = (STUDY_DATA_DIR / relative).resolve()
+            if not path.is_file() or STUDY_DATA_DIR.resolve() not in path.parents:
+                raise HTTPException(status_code=404, detail="Audio file is missing")
+            return FileResponse(path, media_type="audio/wav")
+        if column is None:
+            raise HTTPException(status_code=422, detail="Unknown track")
+        _, rows = _queue_rows(study_id)
+        relative = next((row[column] for row in rows
+                         if row["session_id"] == session_id and row.get(column)), None)
+        if not relative:
+            raise HTTPException(status_code=404, detail="No audio for this session")
+        path = (STUDY_DATA_DIR / relative).resolve()
+        if not path.is_file() or STUDY_DATA_DIR.resolve() not in path.parents:
+            raise HTTPException(status_code=404, detail="Audio file is missing")
+        return FileResponse(path, media_type="audio/wav")
 
     @router.get("/studies/{study_id}/dataset", dependencies=[Depends(require_admin)])
     async def export_dataset(study_id: int):
