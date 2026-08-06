@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from .artifacts import atomic_write_json, file_record
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v5"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v6"
 # Silence that ends an assistant turn, measured on the same packet-RMS speech
 # detection as the timing analysis. See _merge_assistant_runs.
 ASSISTANT_TURN_SILENCE_MS = float(
@@ -149,6 +149,32 @@ def _fragment_times(fragment: dict) -> tuple[float, float] | None:
     return start, max(start, end)
 
 
+def _speech_runs(intervals: list[dict]) -> list[list[float]]:
+    runs: list[list[float]] = []
+    for row in sorted(intervals, key=lambda item: float(item["start_ms"])):
+        start, end = float(row["start_ms"]), float(row["end_ms"])
+        if runs and start - runs[-1][1] <= ASSISTANT_TURN_SILENCE_MS:
+            runs[-1][1] = max(runs[-1][1], end)
+        else:
+            runs.append([start, end])
+    return runs
+
+
+def _onset_for(end_ms: float, runs: list[list[float]]) -> float | None:
+    """Start of the audible run the model's text belongs to.
+
+    A fragment's end is anchored to the arrival of its text; its start is
+    back-computed from word count and lands the turn seconds early, which
+    ordered a participant's answer after the reply it prompted. The audible
+    run carrying that arrival gives the onset the participant heard.
+    """
+    for start, end in runs:
+        if start <= end_ms <= end:
+            return start
+    previous = [row for row in runs if row[1] <= end_ms]
+    return previous[-1][0] if previous else None
+
+
 def _participant_utterances(raw_path: Path, intervals: list[dict],
                             origin_ms: float, route_regions: list[dict],
                             transcriber: Transcriber, temporary: Path) -> list[dict]:
@@ -195,12 +221,14 @@ def _participant_utterances(raw_path: Path, intervals: list[dict],
     return utterances
 
 
-def _assistant_utterances(fragments: list[dict]) -> tuple[list[dict], list[dict]]:
+def _assistant_utterances(fragments: list[dict],
+                          intervals: list[dict]) -> tuple[list[dict], list[dict]]:
     # The model emits one fragment per utterance, so the fragments already are
     # the assistant's turns in the order they were spoken. Mapping them onto the
     # detected speech intervals merged and emptied turns whenever the model
-    # paused mid-utterance, and the interval times they would have carried are
-    # used by nothing: only participant times enter the coded measures.
+    # paused mid-utterance; the intervals are used only to place each turn's
+    # onset, which the back-computed start put seconds early.
+    runs = _speech_runs(intervals)
     utterances = []
     unassigned = []
     floor = 0.0
@@ -211,9 +239,9 @@ def _assistant_utterances(fragments: list[dict]) -> tuple[list[dict], list[dict]
             unassigned.append(copy.deepcopy(fragment))
             continue
         start, end = times
-        # A back-computed start can precede the previous fragment's, which would
-        # reorder the turns once the two speakers are merged by time.
-        start = max(start, floor)
+        onset = _onset_for(end, runs)
+        anchor = "audible_run_onset" if onset is not None else "back_computed_from_word_count"
+        start = max(onset if onset is not None else start, floor)
         end = max(end, start)
         floor = start
         utterances.append({
@@ -223,10 +251,10 @@ def _assistant_utterances(fragments: list[dict]) -> tuple[list[dict], list[dict]
             "end_ms": round(end, 3),
             "text": text,
             "timing": {
-                "timeline": "model_emission_clock",
+                "timeline": "browser_audio_clock",
                 "source": "session.transcript.model",
                 "end_anchor": "text_arrival",
-                "start_anchor": "back_computed_from_word_count_monotonic",
+                "start_anchor": anchor,
             },
             "text_provenance": {
                 "source": "model_transcript.json",
@@ -303,7 +331,8 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
             raw_path, participant_intervals, origin_ms, regions,
             transcriber or _default_transcriber, Path(temporary),
         )
-    assistant, unassigned = _assistant_utterances(model_fragments)
+    assistant, unassigned = _assistant_utterances(
+        model_fragments, assistant_intervals)
     utterances = _merge_assistant_runs(sorted(
         participant + assistant,
         key=lambda row: (row["start_ms"], 0 if row["speaker"] == "assistant" else 1),
@@ -323,7 +352,7 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
             "timing_schema": timing.get("schema"),
             "timing_status": timing.get("status"),
             "speech_boundaries": "copied_from_timing_analysis_not_inferred_from_asr",
-            "assistant_times": "model_emission_clock_ordering_only_not_measurement",
+            "assistant_times": "onset_from_audible_run_end_from_text_arrival",
             "assistant_turn_silence_ms": ASSISTANT_TURN_SILENCE_MS,
         },
         "utterances": utterances,

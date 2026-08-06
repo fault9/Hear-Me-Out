@@ -182,7 +182,8 @@ class DialogueTranscriptTests(unittest.TestCase):
                 "participant_intervals": [
                     {"start_ms": 20000.0, "end_ms": 22000.0, "detector": "rms"}],
                 "assistant_intervals": [
-                    {"start_ms": 10100.0, "end_ms": 12900.0, "detector": "rms"}],
+                    {"start_ms": 10100.0, "end_ms": 12900.0, "detector": "rms"},
+                    {"start_ms": 30000.0, "end_ms": 32000.0, "detector": "rms"}],
                 "route_switches": [], "overlaps": [], "barge_ins": [],
                 "integrity": {"participant_capture_latency_correction_ms": 0.0},
                 "result_artifact": {"path": "analysis/timing/timing.json"},
@@ -201,6 +202,59 @@ class DialogueTranscriptTests(unittest.TestCase):
                              ["assistant_001", "participant_001", "assistant_002"])
             self.assertEqual(result["utterances"][0]["text"],
                              "Got it. Let me check.")
+
+    def test_an_answer_orders_before_the_reply_it_prompted(self):
+        """P01001_R01_S02_A01: the model asks at 69-73s, the participant
+        answers "Yes." at 74.9s, the model replies with text arriving at 76.9s
+        whose back-computed start is 74.7s. Sorting on that start put the
+        answer after the reply."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = Path("sessions/order/participant_raw.wav")
+            self._write_wav(root / relative, 90.0)
+            (root / relative).parent.joinpath("client_timeline.json").write_text(
+                json.dumps({"capture": {"chunks": [
+                    {"chunk_sequence": 1, "capture_start_sample": 0,
+                     "sample_count": 2048, "timeline_start_ms": 0.0}]}}))
+            session = {
+                "session_id": "P1_R01_S02_A01",
+                "voice_condition": "stable_natural",
+                "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
+                "files": {"participant_raw": str(relative)},
+                "transcript": {"model": [
+                    {"text": "Is that what you saying?", "start": 69.4,
+                     "end": 73.4, "speaker": "personaplex"},
+                    {"text": "Alright, now what did you do?", "start": 74.7,
+                     "end": 76.9, "speaker": "personaplex"},
+                ]},
+            }
+            timing = {
+                "schema": "hmo.timing-analysis.v4",
+                "status": "estimated_pending_validation",
+                "participant_intervals": [
+                    {"start_ms": 74900.0, "end_ms": 75200.0, "detector": "rms"}],
+                # The model is audible 69.4-73.4 and again from 75.6.
+                "assistant_intervals": [
+                    {"start_ms": 69400.0, "end_ms": 73400.0, "detector": "rms"},
+                    {"start_ms": 75600.0, "end_ms": 76900.0, "detector": "rms"},
+                ],
+                "route_switches": [], "overlaps": [], "barge_ins": [],
+                "integrity": {"participant_capture_latency_correction_ms": 0.0},
+                "result_artifact": {"path": "analysis/timing/timing.json"},
+            }
+
+            def transcribe(_path: str) -> dict:
+                return {"text": "Yes.", "segments": [],
+                        "status": "complete", "error": None}
+
+            result = prepare_dialogue_transcript(
+                session, root, "analysis-5", timing, transcribe)
+
+            self.assertEqual([row["speaker"] for row in result["utterances"]],
+                             ["assistant", "participant", "assistant"])
+            reply = result["utterances"][2]
+            self.assertEqual(reply["start_ms"], 75600.0)
+            self.assertEqual(reply["timing"]["start_anchor"], "audible_run_onset")
 
     def test_the_assistant_falling_silent_ends_its_turn(self):
         """A stall ("one moment please" ... 40s ... a new turn) is two turns
