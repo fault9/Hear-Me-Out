@@ -249,24 +249,18 @@ def build_packet(session: dict, data_root: Path, salt: str,
 
 
 def write_packets(sessions: list[dict], data_root: Path, study_id: int,
-                  scenarios_by_id: dict[str, dict] | None = None,
-                  amended_content_session_ids: set[str] | None = None) -> dict:
+                  scenarios_by_id: dict[str, dict] | None = None) -> dict:
     """Build and persist packets for every analytical session that has a
-    dialogue transcript. A frozen content amendment may admit an otherwise
-    excluded session without changing its primary technical-validity record.
-    Returns a summary dict."""
+    dialogue transcript. Returns a summary dict."""
     root = coding_root(data_root, study_id)
     (root / "packets").mkdir(parents=True, exist_ok=True)
     (root / "meta").mkdir(parents=True, exist_ok=True)
     salt = load_salt(root)
-    amended_ids = set(amended_content_session_ids or ())
     index_rows, skipped = [], []
     for session in sessions:
         session_id = str(session.get("session_id") or "")
-        amended_content = session_id in amended_ids
         if ("analysis_included" in session
-                and session.get("analysis_included") is not True
-                and not amended_content):
+                and session.get("analysis_included") is not True):
             reasons = session.get("analysis_exclusion_reasons") or ["not_included"]
             skipped.append({
                 "session_id": session_id,
@@ -281,9 +275,6 @@ def write_packets(sessions: list[dict], data_root: Path, study_id: int,
             skipped.append({"session_id": session.get("session_id"), "reason": reason})
             continue
         packet, meta = built
-        analysis_scope = (
-            "amended_content" if amended_content else "primary_prespecified")
-        meta["analysis_scope"] = analysis_scope
         (root / "packets" / f"{packet['packet_id']}.json").write_text(
             json.dumps(packet, indent=2, sort_keys=True))
         (root / "meta" / f"{packet['packet_id']}.json").write_text(
@@ -295,19 +286,12 @@ def write_packets(sessions: list[dict], data_root: Path, study_id: int,
             "scenario_title": meta["scenario_title"],
             "scenario_order": session.get("scenario_order"),
             "analysis_included": session.get("analysis_included", True),
-            "analysis_scope": analysis_scope,
             "technical_status": (session.get("technical_validity") or {}).get("status"),
         })
     with (root / "index.jsonl").open("w") as handle:
         for row in index_rows:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
-    return {
-        "written": len(index_rows),
-        "amended_content_written": sum(
-            row["analysis_scope"] == "amended_content" for row in index_rows),
-        "skipped": skipped,
-        "root": str(root),
-    }
+    return {"written": len(index_rows), "skipped": skipped, "root": str(root)}
 
 
 def read_index(root: Path) -> list[dict]:

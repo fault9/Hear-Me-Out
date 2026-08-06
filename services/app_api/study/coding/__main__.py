@@ -11,9 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from study.coding import agreement, freeze, packets, review, runner  # noqa: E402
 
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-
-
 def _data_root() -> Path:
     return Path(os.path.expanduser(os.environ.get("STUDY_DATA_ROOT", "/workspace/data")))
 
@@ -24,18 +21,6 @@ def _root(args) -> Path:
 
 def _print(value) -> None:
     print(json.dumps(value, indent=2, sort_keys=True, default=str))
-
-
-def _content_amendment_ids() -> set[str]:
-    path = REPO_ROOT / "analysis" / "amendments.json"
-    if not path.exists():
-        return set()
-    rows = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        str(row["session_id"])
-        for row in rows
-        if "content" in row.get("analysis_scopes", [])
-    }
 
 
 def main() -> None:
@@ -74,12 +59,7 @@ def main() -> None:
             backend.list_sessions(args.study_id), backend.list_runs(args.study_id))
         scenarios = {str(row["id"]): row for row in backend.list_scenarios(args.study_id)}
         _print(packets.write_packets(
-            sessions,
-            _data_root(),
-            args.study_id,
-            scenarios,
-            amended_content_session_ids=_content_amendment_ids(),
-        ))
+            sessions, _data_root(), args.study_id, scenarios))
     elif args.command == "freeze":
         client = runner.LLMClient(model=args.model)
         _print(freeze.freeze(root, client.decoding(), note=args.note))

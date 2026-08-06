@@ -19,26 +19,19 @@ suppressMessages({
 args <- commandArgs(trailingOnly = TRUE)
 permute <- "--permute" %in% args
 confirmatory <- "--confirmatory" %in% args
-amended <- "--amended" %in% args
 sensitivity <- "--complete-technical-sensitivity" %in% args
 if (!xor(permute, confirmatory)) {
   stop("pass exactly one of --permute or --confirmatory")
 }
-if (amended && sensitivity) {
-  stop("--amended and --complete-technical-sensitivity are separate analysis frames")
-}
 
 here <- dirname(sub("--file=", "", grep("--file=", commandArgs(), value = TRUE)))
 frames <- file.path(here, "output", "frames")
-frame_file <- if (amended) {
-  "scenario_level_amended.csv"
-} else if (sensitivity) {
+frame_file <- if (sensitivity) {
   "scenario_level_sensitivity_complete_technical.csv"
 } else {
   "scenario_level.csv"
 }
 dat <- read.csv(file.path(frames, frame_file), stringsAsFactors = FALSE)
-if (amended) cat("(amended frame: includes sessions admitted per analysis/amendments.json)\n")
 if (sensitivity) cat("(sensitivity frame: excludes participants with any technically invalid analytical attempt)\n")
 
 parse_binary <- function(values, field) {
@@ -132,7 +125,6 @@ for (name in names(contrasts)) {
 
 results$p_holm <- p.adjust(results$p, method = "holm")
 stem <- if (permute) "smoke_results" else "confirmatory_results"
-if (amended) stem <- paste0(stem, "_amended")
 if (sensitivity) stem <- paste0(stem, "_sensitivity_complete_technical")
 out <- file.path(here, "output", paste0(stem, ".csv"))
 dir.create(dirname(out), showWarnings = FALSE, recursive = TRUE)

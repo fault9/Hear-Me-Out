@@ -208,7 +208,7 @@ class TurnReconstructionTests(unittest.TestCase):
         self.assertEqual(len(artifacts), 1)
         artifact = json.loads(artifacts[0].read_text())
         self.assertEqual(
-            artifact["status"], "eligible_for_amended_turn_sensitivity")
+            artifact["status"], "eligible_for_reconstructed_turn_sensitivity")
         self.assertTrue(artifact["certification"][
             "certified_prefix_crosswalk_complete"])
 

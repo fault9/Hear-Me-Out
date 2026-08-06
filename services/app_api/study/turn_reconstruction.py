@@ -513,7 +513,7 @@ def reconstruct(session: dict, data_root: Path, out_dir: Path | None = None) -> 
         "schema": RECONSTRUCTION_SCHEMA,
         "analysis_id": analysis_id,
         "session_id": sid,
-        "status": "eligible_for_amended_turn_sensitivity",
+        "status": "eligible_for_reconstructed_turn_sensitivity",
         "analysis_scope": "reconstructed_common_prefix_sensitivity",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "git_revision": git_revision(Path(__file__).resolve().parents[3]),

@@ -59,29 +59,8 @@ def write_frame(name, rows, columns):
 def main():
     scenarios = read_rows("scenarios.csv")
     included = [r for r in scenarios if truthy(r.get("analysis_included"))]
-
-    # Sessions admitted under dated validity amendments (analysis-time rule;
-    # the export's frozen inclusion flags are never rewritten).
-    admitted = []
-    amendments_path = os.path.join(HERE, "amendments.json")
-    if os.path.exists(amendments_path):
-        with open(amendments_path, encoding="utf-8") as handle:
-            amendments = json.load(handle)
-            admitted_ids = {
-                amendment["session_id"]
-                for amendment in amendments
-                if "content" in amendment.get("analysis_scopes", ["content"])
-            }
-        admitted = [r for r in scenarios if r["session_id"] in admitted_ids
-                    and not truthy(r.get("analysis_included"))]
-        missing = admitted_ids - {r["session_id"] for r in scenarios}
-        if missing:
-            print("WARNING: amended session(s) not in export:", sorted(missing))
-
-    print(f"scenarios: {len(scenarios)} rows, {len(included)} included, "
-          f"{len(admitted)} amended in")
+    print(f"scenarios: {len(scenarios)} rows, {len(included)} included")
     write_frame("scenario_level.csv", included, SCENARIO_KEEP)
-    write_frame("scenario_level_amended.csv", included + admitted, SCENARIO_KEEP)
 
     # Prespecified sensitivity analysis: remove a participant entirely when
     # any retained analytical attempt was technically invalid. Pending or
@@ -109,11 +88,8 @@ def main():
 
     units = read_rows("units.csv")
     keep_ids = {r["session_id"] for r in included}
-    amended_ids = keep_ids | {r["session_id"] for r in admitted}
     write_frame("unit_level.csv",
                 [u for u in units if u["session_id"] in keep_ids], UNIT_KEEP)
-    write_frame("unit_level_amended.csv",
-                [u for u in units if u["session_id"] in amended_ids], UNIT_KEEP)
     sensitivity_ids = {row["session_id"] for row in sensitivity}
     write_frame("unit_level_sensitivity_complete_technical.csv",
                 [u for u in units if u["session_id"] in sensitivity_ids],
