@@ -16,7 +16,7 @@ from .transition_analysis import read_events
 from .turn_taking import (OVERLAP_MINIMUM_MS, build_positive_response_gaps,
                           build_turn_episodes)
 
-TIMING_SCHEMA = "hmo.timing-analysis.v5"
+TIMING_SCHEMA = "hmo.timing-analysis.v6"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
 
