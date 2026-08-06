@@ -19,10 +19,11 @@ _FINGERPRINT_PACKET = {
     "scenario": {"title": "fingerprint", "unit_definitions": ["a", "b"],
                  "bounded_action": "x", "required_final_account": "y",
                  "outcome_levels": [{"score": 1, "label": "l", "criteria": "c"}],
-                 "final_probe_text": "z"},
+                 "final_probe_text": "z", "system_prompt": "s"},
     "utterances": [{"id": "participant_001", "speaker": "participant",
                     "text": "t", "asr_ok": True}],
-    "final_probe_candidates": [],
+    "transmitted_utterances": [{"id": "participant_001", "speaker": "participant",
+                                "text": "t", "asr_ok": True}],
     "notes_for_coder": "",
 }
 

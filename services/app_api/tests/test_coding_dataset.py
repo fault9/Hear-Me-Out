@@ -336,9 +336,15 @@ class PacketTests(FixtureCase):
         self.assertNotIn("vc_activation", text)
         self.assertNotIn("start_ms", text)
         self.assertNotIn(self.session_id, text)
-        probe_ids = [row["utterance_id"]
-                     for row in packet["final_probe_candidates"]]
-        self.assertIn("participant_006", probe_ids)
+        # The method supplies no final-readback markers: the judge locates the
+        # final-summary request itself from the transcript.
+        self.assertNotIn("final_probe_candidates", packet)
+        # Transmitted speech travels under the same utterance ids, and the
+        # assistant's system prompt is part of the scenario specification.
+        self.assertEqual([row["id"] for row in packet["transmitted_utterances"]],
+                         [row["id"] for row in packet["utterances"]
+                          if row["speaker"] == "participant"])
+        self.assertTrue(packet["scenario"]["system_prompt"])
         meta = json.loads((self._root() / "meta" / f"{pid}.json").read_text())
         self.assertEqual(meta["boundary_kind"], "switch")
         self.assertEqual(meta["boundary_participant_timeline_ms"], 45000.0)

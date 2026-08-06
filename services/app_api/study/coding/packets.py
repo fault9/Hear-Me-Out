@@ -1,8 +1,9 @@
 """Build condition-blinded coding packets from immutable session artifacts.
 
 A packet is the ONLY material a coder (LLM judge or blinded human) receives:
-ordered utterances (speaker + text), the scenario specification, and
-final-probe candidate markers. Everything that could reveal the voice
+ordered utterances (speaker + text), the transmitted participant speech under
+the same ids, and the scenario specification. No final-readback markers are
+supplied — the coder locates that request. Everything that could reveal the voice
 condition is stripped: timestamps, per-utterance voice modes, route segments,
 route switches, overlap/barge-in events, target identifiers, and the raw
 session id (packets are keyed by a salted hash).
@@ -14,7 +15,6 @@ condition, and the session id — and is never part of a coder's input.
 
 from __future__ import annotations
 
-import difflib
 import hashlib
 import json
 import os
@@ -26,7 +26,6 @@ from typing import Any, Iterable
 from ..artifacts import load_manifest_artifact
 
 PACKET_SCHEMA = "hmo.coding-packet.v1"
-FINAL_PROBE_MATCH_THRESHOLD = 0.55
 # Mechanical transmitted-presence rule (codebook §3): content-word recall of
 # the raw delivery text within the transmitted-track text of the same
 # intervals. Content words are alphanumeric tokens of length >= 4 or numbers.
@@ -83,36 +82,8 @@ def _scenario_spec(session: dict, scenario_row: dict | None) -> dict:
         "required_final_account": spec.get("required_final_account") or "",
         "outcome_levels": list(spec.get("outcome_levels") or []),
         "final_probe_text": card.get("final_account_prompt") or "",
+        "system_prompt": scenario.get("system_prompt") or "",
     }
-
-
-_WORDS = re.compile(r"[a-z0-9']+")
-
-
-def _normalize(text: str) -> str:
-    return " ".join(_WORDS.findall(text.lower()))
-
-
-def probe_similarity(text: str, probe_text: str) -> float:
-    a, b = _normalize(text), _normalize(probe_text)
-    if not a or not b:
-        return 0.0
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
-
-def find_final_probe_candidates(utterances: list[dict], probe_text: str,
-                                threshold: float = FINAL_PROBE_MATCH_THRESHOLD) -> list[dict]:
-    """Participant utterances resembling the required final-readback request,
-    best match last-position-first so the protocol-final ask ranks first."""
-    scored = []
-    for utterance in utterances:
-        if utterance.get("speaker") != "participant":
-            continue
-        score = probe_similarity(str(utterance.get("text") or ""), probe_text)
-        if score >= threshold:
-            scored.append({"utterance_id": utterance["id"], "similarity": round(score, 3)})
-    scored.sort(key=lambda row: (-row["similarity"],))
-    return scored
 
 
 def _walk(value: Any) -> Iterable[tuple[str, Any]]:
@@ -164,8 +135,21 @@ def build_packet(session: dict, data_root: Path, salt: str,
             "end_ms": row.get("end_ms"),
         })
 
-    probe_candidates = find_final_probe_candidates(
-        utterances_blind, spec["final_probe_text"])
+    # The transmitted track carries the same interval ids as the raw track, so
+    # the coder can compare what was said with what reached the model. No
+    # markers are added to either transcript: the method requires the judge to
+    # locate the final-summary request itself.
+    transmitted = _load_analysis_artifact(
+        session, data_root, "transmitted_transcript_latest")
+    transmitted_blind = [
+        {
+            "id": row["id"],
+            "speaker": "participant",
+            "text": str(row.get("text") or ""),
+            "asr_ok": (row.get("text_provenance") or {}).get("asr_status") == "complete",
+        }
+        for row in (transmitted or {}).get("utterances") or []
+    ]
 
     packet = {
         "schema": PACKET_SCHEMA,
@@ -177,13 +161,15 @@ def build_packet(session: dict, data_root: Path, salt: str,
             "required_final_account": spec["required_final_account"],
             "outcome_levels": spec["outcome_levels"],
             "final_probe_text": spec["final_probe_text"],
+            "system_prompt": spec["system_prompt"],
         },
         "utterances": utterances_blind,
-        "final_probe_candidates": probe_candidates,
+        "transmitted_utterances": transmitted_blind,
         "notes_for_coder": (
             "Participant utterances with asr_ok=false had incomplete automatic "
             "transcription; treat absent text as unavailable evidence, not as "
-            "silence."
+            "silence. transmitted_utterances shares utterance ids with the "
+            "transcript and shows what reached the assistant."
         ),
     }
     assert_blinded(packet)
@@ -195,8 +181,6 @@ def build_packet(session: dict, data_root: Path, salt: str,
         key=lambda row: float(row["participant_timeline_ms"]),
     )
     switch_ms = float(switches[0]["participant_timeline_ms"]) if switches else None
-    transmitted = _load_analysis_artifact(
-        session, data_root, "transmitted_transcript_latest")
     transmitted_texts = {
         row["id"]: {"text": str(row.get("text") or ""),
                     "asr_status": (row.get("text_provenance") or {}).get("asr_status")}

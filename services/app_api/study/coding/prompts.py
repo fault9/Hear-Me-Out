@@ -67,9 +67,20 @@ def judge_system_prompt() -> str:
     return (
         "You are a blinded conversation-analysis coder for a spoken human-AI "
         "interaction study. You receive a de-identified dialogue transcript, "
-        "the scenario specification, and final-probe candidate markers. You "
-        "do not know, and must not speculate about, any audio-processing "
+        "the transmitted participant speech under the same utterance ids, and "
+        "the scenario specification including the assistant's system prompt. "
+        "You do not know, and must not speculate about, any audio-processing "
         "condition of the session.\n\n"
+        "No final-readback markers are supplied: identify the participant's "
+        "first request for a final summary yourself, and take the first "
+        "assistant response to it. Select an earlier assistant turn only when "
+        "it clearly constitutes a spontaneous final account of the recorded "
+        "information, decision, and next step; if neither occurs, code "
+        "delayed retention as null.\n\n"
+        "Do not infer overlap, barge-in, premature onset, stop latency, "
+        "response gaps, or any other timing outcome from the transcript. "
+        "Those are derived separately from synchronized audio and system "
+        "logs, and the transcript carries no timing information.\n\n"
         "Apply the codebook below exactly. Cite utterance ids as evidence for "
         "every non-null label. When evidence is genuinely ambiguous, choose "
         "the codebook-consistent label and lower your confidence rather than "
@@ -85,10 +96,10 @@ def judge_user_prompt(packet: dict) -> str:
         "Code the following interaction.\n\n"
         "==== SCENARIO SPECIFICATION ====\n"
         + json.dumps(packet["scenario"], indent=2, sort_keys=True)
-        + "\n\n==== FINAL-PROBE CANDIDATES (verify; you may override) ====\n"
-        + json.dumps(packet.get("final_probe_candidates") or [], indent=2, sort_keys=True)
-        + "\n\n==== TRANSCRIPT ====\n"
+        + "\n\n==== TRANSCRIPT (participant raw + assistant) ====\n"
         + json.dumps(packet["utterances"], indent=2, sort_keys=True)
+        + "\n\n==== TRANSMITTED PARTICIPANT SPEECH (same utterance ids) ====\n"
+        + json.dumps(packet.get("transmitted_utterances") or [], indent=2, sort_keys=True)
         + "\n\nNote: " + str(packet.get("notes_for_coder") or "")
         + "\n\nReturn ONLY a JSON object with this structure (values shown as "
           "type descriptions):\n"

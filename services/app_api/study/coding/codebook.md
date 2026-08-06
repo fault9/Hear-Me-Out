@@ -7,10 +7,13 @@ edit invalidates the manifest and the runner refuses to code non-pilot data.)
 This codebook operationalizes the Measures section of the method for
 LLM-assisted and human coding. The coder (LLM judge or blinded human) receives
 only: the de-identified dialogue transcript (speaker + text, in order, without
-timestamps, route, or condition information), the scenario specification
-(critical units, bounded action, outcome levels, required final account), and
-final-probe markers. Condition labels, target-voice identifiers, questionnaire
-responses, and audio are withheld.
+timestamps, route, or condition information), the transmitted participant
+speech under the same utterance ids, and the scenario specification (critical
+units, bounded action, outcome levels, required final account, and the
+assistant's system prompt). No final-readback markers are supplied — the coder
+identifies the final-summary request itself (Section 4). Condition labels,
+target-voice identifiers, questionnaire responses, timing-derived variables,
+and audio are withheld.
 
 ## 1. Units of analysis
 
@@ -71,8 +74,12 @@ volunteers the fact) does NOT count as delivery of the unit.
   contradicted content (e.g., recording "no other person involved" after the
   participant stated another cyclist hit them) is NOT incorporation.
 - `retention` (0/1): the unit's content is correctly present in the
-  assistant's response to the final-readback request (the marked final probe)
-  or in an earlier spontaneous final account.
+  assistant's response to the final-summary request. The coder identifies the
+  participant's FIRST request for a final summary and takes the FIRST
+  assistant response to it. An earlier assistant turn may be used only when it
+  clearly constitutes a spontaneous final account of the recorded information,
+  decision, and next step. When neither occurs, `retention` is `null` and
+  `final_probe.utterance_id` is null.
 - Derived (not judged directly):
   - acknowledgement without uptake = acknowledgement=1 and incorporation=0;
   - false update confirmation (per unit) = update_claim=1 and
