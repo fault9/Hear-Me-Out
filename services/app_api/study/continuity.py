@@ -3,9 +3,9 @@
 For sessions whose end-of-call proxy delivery failed, cross-checks the live
 event diary against the browser's monitor copy of the transmitted audio. A
 PASS verdict means the monitor copy provably contains the complete certified
-transmitted span; admissibility under the dated validity amendment is decided
-at analysis time from this recorded verdict, never by mutating the frozen
-technical-validity status.
+transmitted span; technical validity then records the delivery checks as
+warnings rather than condition-analysis failures. Timing-derived measures stay
+excluded whenever delivery was incomplete, however the checks were recorded.
 """
 
 import json

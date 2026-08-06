@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import atomic_write_json, file_record, sha256_file
+from .continuity import run_for_session_dir as run_continuity_check
 from .transition_analysis import read_events
 
-TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v4"
+TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v6"
 BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
 
 DEFAULT_THRESHOLDS = {
@@ -35,6 +36,16 @@ def _analysis_checkpoint_s(session: dict) -> float | None:
     except (TypeError, ValueError):
         return None
     return checkpoint_s if checkpoint_s > 0 else None
+
+
+def _delivery_continuity(session: dict, data_root: Path) -> dict | None:
+    events_path = _event_path(session, data_root)
+    if not events_path or not events_path.is_file():
+        return None
+    try:
+        return run_continuity_check(str(events_path.parent))
+    except Exception:  # noqa: BLE001 - missing evidence must never be fatal
+        return None
 
 
 def _expected_modes(schedule: list[dict]) -> list[str]:
@@ -118,6 +129,15 @@ def evaluate_technical_validity(session: dict, data_root: Path,
 
     ended = session.get("ended_at") is not None
     add("session_finalized", ended, "The session has an end timestamp.")
+    finalization = manifest.get("finalization")
+    if isinstance(finalization, dict):
+        add(
+            "artifact_finalization",
+            finalization.get("status") == "complete",
+            "The ended session's immutable browser and proxy artifacts were completely sealed.",
+            observed=finalization.get("status"),
+            expected="complete",
+        )
     invalid_end_reasons = set(thresholds.get("invalid_end_reasons") or [])
     end_reason = session.get("end_reason")
     add("end_reason", bool(end_reason) and end_reason not in invalid_end_reasons,
@@ -150,13 +170,25 @@ def evaluate_technical_validity(session: dict, data_root: Path,
             observed=missing_versions, expected=[], warning=True)
 
     expected_proxy = (session.get("config_snapshot") or {}).get("engine") == "xvc"
+    # Failed end-of-call delivery is infrastructure loss, not an unusable
+    # capture: a certified gapless transmitted span covered by the monitor copy
+    # downgrades these checks to warnings. Timing stays excluded regardless.
+    proxy_delivery_incomplete = False
+    delivery_continuity = None
+    delivery_verified = False
     if expected_proxy:
         proxy_names = ["proxy_received.wav", "participant_proxy.wav",
                        "personaplex_input.opus", "proxy_timeline"]
         proxy = _artifact_check(manifest, data_root, proxy_names)
+        proxy_delivery_incomplete = bool(proxy["missing"])
+        if proxy_delivery_incomplete:
+            delivery_continuity = _delivery_continuity(session, data_root)
+            delivery_verified = bool(
+                delivery_continuity
+                and delivery_continuity.get("verdict") == "pass")
         add("proxy_artifacts_present", not proxy["missing"],
             "All required XVC proxy artifacts are present.",
-            observed=proxy["missing"], expected=[])
+            observed=proxy["missing"], expected=[], warning=delivery_verified)
         add("proxy_artifact_hashes", not proxy["hash_mismatches"],
             "XVC proxy artifact hashes match the immutable manifest.",
             observed=proxy["hash_mismatches"], expected=[])
@@ -174,7 +206,8 @@ def evaluate_technical_validity(session: dict, data_root: Path,
         observed=names.count("stream_start"), expected=1)
     add("stream_stop", names.count("stream_stop") == 1,
         "Exactly one stream-stop event was recorded.",
-        observed=names.count("stream_stop"), expected=1)
+        observed=names.count("stream_stop"), expected=1,
+        warning=delivery_verified)
 
     checkpoint_s = _analysis_checkpoint_s(session)
     checkpoint_requested_sample = (
@@ -348,7 +381,8 @@ def evaluate_technical_validity(session: dict, data_root: Path,
         crosswalk_complete = capture.get("crosswalk_complete")
         add("browser_proxy_crosswalk", crosswalk_complete is True,
             "Browser and proxy packet/sample identifiers form a complete crosswalk.",
-            observed=crosswalk_complete, expected=True)
+            observed=crosswalk_complete, expected=True,
+            warning=delivery_verified)
     else:
         add("timing_evidence", False,
             "Timing reconstruction was unavailable, so capture drops and the browser/proxy crosswalk could not be evaluated.",
@@ -375,9 +409,11 @@ def evaluate_technical_validity(session: dict, data_root: Path,
 
     evaluation_complete = timing is not None
     condition_valid = ended and evaluation_complete and not failures
+    # Timing measures need the certified crosswalk itself, so an incomplete
+    # proxy delivery excludes them however the checks above were recorded.
     timing_reconstruction_valid = bool(
         condition_valid and capture.get("valid_for_timing") is True
-        and capture_gap_valid)
+        and capture_gap_valid and not proxy_delivery_incomplete)
     timing_status = (timing or {}).get("status")
     manual_turn_verification_valid = bool(
         timing_reconstruction_valid
@@ -401,6 +437,7 @@ def evaluate_technical_validity(session: dict, data_root: Path,
         "valid_for_manual_turn_verification": manual_turn_verification_valid,
         "valid_for_confirmatory_timing_analysis": confirmatory_timing_valid,
         "speech_boundary_validation_status": timing_status or "unavailable",
+        "delivery_continuity": delivery_continuity,
         "analysis_checkpoint_s": checkpoint_s,
         "thresholds": thresholds,
         "checks": checks,

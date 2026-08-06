@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 
 from study.artifacts import file_record
@@ -98,6 +99,22 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertFalse(result["valid_for_confirmatory_timing_analysis"])
         self.assertFalse(result["valid_for_manual_turn_verification"])
         self.assertEqual(result["failures"], [])
+
+    def test_new_pending_artifact_finalization_blocks_analysis_without_deleting_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._fixture(Path(temp))
+            session["artifact_manifest"]["finalization"] = {
+                "schema": "hmo.session-finalization.v1",
+                "status": "pending",
+            }
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertFalse(result["valid_for_condition_analysis"])
+        self.assertIn(
+            "artifact_finalization",
+            {failure["code"] for failure in result["failures"]},
+        )
 
     def test_confirmed_boundary_audit_unlocks_manual_turn_verification(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -243,6 +260,97 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertTrue(result["valid_for_condition_analysis"])
         self.assertIn("preprocessing_stage",
                       {warning["code"] for warning in result["warnings"]})
+
+    def _failed_delivery_fixture(self, root: Path, *, contiguous: bool):
+        """A session whose end-of-call proxy delivery never arrived: no proxy
+        artifacts, a truncated event stream (no stream_stop), no crosswalk."""
+        session, timing = self._fixture(root)
+        artifacts = session["artifact_manifest"]["artifacts"]
+        for name in ("proxy_received.wav", "participant_proxy.wav",
+                     "personaplex_input.opus", "proxy_timeline"):
+            artifacts.pop(name)
+        integrity = timing["integrity"]
+        integrity["crosswalk_complete"] = False
+        integrity["valid_for_timing"] = False
+
+        session_dir = root / "sessions" / "attempt"
+        windows = [(0, 2048, 1), (2048, 4096, 2)] if contiguous else [(0, 2048, 1),
+                                                                      (3072, 4096, 2)]
+        events = [
+            {"event": "stream_start", "event_sequence": 1},
+            {"event": "route_activated", "event_sequence": 2,
+             "from_mode": None, "to_mode": "vc", "input_sample": 0,
+             "requested_start_s": 0},
+            {"event": "input_chunk", "event_sequence": 3,
+             "chunk_sequence": 1, "input_start_sample": 0, "input_end_sample": 2048},
+            {"event": "input_chunk", "event_sequence": 4,
+             "chunk_sequence": 2, "input_start_sample": 2048, "input_end_sample": 4096},
+            {"event": "xvc_inference_batch", "event_sequence": 5,
+             "input_start_sample": 0, "input_end_sample": 4096,
+             "inference_windows": 1},
+            {"event": "transmitted_route_activated", "event_sequence": 6,
+             "from_mode": None, "to_mode": "vc", "transmitted_sample": 0},
+        ] + [
+            {"event": "transmitted_window", "event_sequence": 7 + index,
+             "input_start_sample": start, "input_end_sample": end,
+             "output_sequence": sequence}
+            for index, (start, end, sequence) in enumerate(windows)
+        ]
+        event_path = session_dir / "events.jsonl"
+        event_path.write_text("".join(json.dumps(row) + "\n" for row in events))
+        artifacts["events"] = file_record(event_path, relative_to=root)
+
+        with wave.open(str(session_dir / "participant.wav"), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(b"\x00\x00" * 4096)
+        artifacts["participant"] = file_record(
+            session_dir / "participant.wav", relative_to=root)
+        return session, timing
+
+    def test_verified_continuity_downgrades_failed_delivery_to_warnings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._failed_delivery_fixture(
+                Path(temp), contiguous=True)
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertEqual(result["status"], "valid")
+        self.assertTrue(result["valid_for_condition_analysis"])
+        self.assertEqual(result["failures"], [])
+        warned = {warning["code"] for warning in result["warnings"]}
+        self.assertIn("proxy_artifacts_present", warned)
+        self.assertIn("stream_stop", warned)
+        self.assertIn("browser_proxy_crosswalk", warned)
+        self.assertEqual(result["delivery_continuity"]["verdict"], "pass")
+        # The prespecified synchronization gate still excludes timing measures.
+        self.assertFalse(result["valid_for_timing_reconstruction"])
+        self.assertFalse(result["valid_for_confirmatory_timing_analysis"])
+
+    def test_unverified_continuity_keeps_failed_delivery_invalid(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._failed_delivery_fixture(
+                Path(temp), contiguous=False)
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertEqual(result["status"], "invalid")
+        self.assertFalse(result["valid_for_condition_analysis"])
+        failed = {failure["code"] for failure in result["failures"]}
+        self.assertIn("proxy_artifacts_present", failed)
+        self.assertEqual(result["delivery_continuity"]["verdict"], "fail")
+
+    def test_intact_delivery_keeps_missing_artifacts_fatal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._fixture(Path(temp))
+            session["artifact_manifest"]["artifacts"].pop("participant_proxy.wav")
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertEqual(result["status"], "invalid")
+        self.assertIn("proxy_artifacts_present",
+                      {failure["code"] for failure in result["failures"]})
 
 
 if __name__ == "__main__":
