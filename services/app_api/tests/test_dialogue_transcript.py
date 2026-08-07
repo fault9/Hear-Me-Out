@@ -256,6 +256,66 @@ class DialogueTranscriptTests(unittest.TestCase):
             self.assertEqual(reply["start_ms"], 75600.0)
             self.assertEqual(reply["timing"]["start_anchor"], "audible_run_onset")
 
+    def test_words_land_on_their_own_interval_and_blips_stay_empty(self):
+        """A sub-speech blip gets no words, so it carries no text. Slicing it
+        and transcribing the slice is what produced "thank you." on 127 of the
+        577 participant intervals under 600 ms."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = Path("sessions/words/participant_raw.wav")
+            self._write_wav(root / relative, 20.0)
+            (root / relative).parent.joinpath("client_timeline.json").write_text(
+                json.dumps({"capture": {"chunks": [
+                    {"chunk_sequence": 1, "capture_start_sample": 0,
+                     "sample_count": 2048, "timeline_start_ms": 0.0}]}}))
+            session = {
+                "session_id": "P1_R01_S02_A01",
+                "voice_condition": "stable_natural",
+                "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
+                "files": {"participant_raw": str(relative)},
+                "transcript": {"model": [
+                    {"text": "Go ahead.", "start": 8.0, "end": 9.0,
+                     "speaker": "personaplex"}]},
+            }
+            timing = {
+                "schema": "hmo.timing-analysis.v4",
+                "status": "estimated_pending_validation",
+                "participant_intervals": [
+                    {"start_ms": 1000.0, "end_ms": 3000.0, "detector": "rms"},
+                    # 300 ms of breath during the model's turn.
+                    {"start_ms": 8200.0, "end_ms": 8500.0, "detector": "rms"},
+                    {"start_ms": 12000.0, "end_ms": 14000.0, "detector": "rms"},
+                ],
+                "assistant_intervals": [
+                    {"start_ms": 8000.0, "end_ms": 9000.0, "detector": "rms"}],
+                "route_switches": [], "overlaps": [], "barge_ins": [],
+                "integrity": {"participant_capture_latency_correction_ms": 0.0},
+                "result_artifact": {"path": "analysis/timing/timing.json"},
+            }
+
+            def words(_path: str) -> dict:
+                return {"status": "complete", "error": None, "words": [
+                    {"word": "Building", "start": 1.2, "end": 1.7},
+                    {"word": "sixteen.", "start": 1.8, "end": 2.4},
+                    {"word": "Blue", "start": 12.3, "end": 12.7},
+                    {"word": "door.", "start": 12.8, "end": 13.2},
+                ]}
+
+            result = prepare_dialogue_transcript(
+                session, root, "analysis-7", timing, None, words)
+
+            spoken = [row for row in result["utterances"]
+                      if row["speaker"] == "participant"]
+            self.assertEqual([row["text"] for row in spoken],
+                             ["Building sixteen.", "", "Blue door."])
+            self.assertEqual(spoken[1]["text_provenance"]["word_count"], 0)
+            self.assertEqual(spoken[0]["text_provenance"]["method"],
+                             "whisper_word_timestamps_whole_file")
+            # Interval boundaries are the validated instrument and stay put.
+            self.assertEqual((spoken[0]["start_ms"], spoken[0]["end_ms"]),
+                             (1000.0, 3000.0))
+            self.assertEqual(spoken[0]["text_provenance"]["speech_start_ms"], 1200.0)
+
     def test_two_turns_never_share_an_onset(self):
         """Text arriving in the silence after a run used to take that run's
         start, which an earlier fragment already held: 338 of 1211 assistant
