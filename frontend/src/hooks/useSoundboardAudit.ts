@@ -31,7 +31,7 @@ import {
   OPUS_ENCODER_CONFIG,
   PP_SAMPLE_RATE,
 } from "@/lib/soundboardConfig"
-import { uploadSoundboardAudit } from "@shared/services/api"
+import { checkpointSoundboardAudit, uploadSoundboardAudit } from "@shared/services/api"
 import { makeZip } from "@/lib/soundboardZip"
 import { assembleSentWav, assembleSentTimelineWav, getCapturedClips, resetCapture } from "@/lib/soundboardCapture"
 import {
@@ -1141,6 +1141,35 @@ export function useSoundboardAudit(opts: {
     setResultsZip(null)
     const records: (AuditRunRecord | AuditSessionRecord)[] = []
     const audio: { name: string; blob: Blob }[] = []
+    // Every conversation's WAVs are shipped as they complete and dropped from
+    // memory: holding a whole run's audio in the tab exhausts it (a 240-replay
+    // run died at replay 7), and a crashed tab cannot bundle anything.
+    const runId = `${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z`
+      + `_${(manifest.manifest_sha256 ?? "nohash").slice(0, 8)}`
+    let checkpointFailed = false
+    const checkpoint = async (
+      entries: { name: string; blob: Blob }[], done: boolean,
+    ) => {
+      try {
+        await checkpointSoundboardAudit(runId, {
+          part: entries.length
+            ? makeZip(await Promise.all(entries.map(async (e) => ({
+                name: e.name, data: new Uint8Array(await e.blob.arrayBuffer()),
+              }))))
+            : undefined,
+          runLog: { completed_at: new Date().toISOString(),
+                    aborted: abortRef.current, complete: done, records },
+        })
+      } catch (e) {
+        // Keep running: the local bundle at the end is still a fallback.
+        checkpointFailed = true
+        setUploadState({ status: "failed", detail: String((e as Error).message ?? e) })
+      }
+    }
+    await checkpoint([], false)
+    try {
+      await checkpointSoundboardAudit(runId, { manifest })
+    } catch { /* reported by the next checkpoint */ }
     // Script mode runs a replay PLAN: either N single-script replays, or the
     // interleaved A,B,A,B… plan from the manifest.
     const plan = manifest.mode !== "script" ? [] : (
@@ -1190,14 +1219,19 @@ export function useSoundboardAudit(opts: {
           delete record._ppWav
           delete record._sentWav
           delete record._playbackTimeline
-          if (ppWav) audio.push({ name: `${prefix}/personaplex.wav`, blob: ppWav })
-          if (sentWav) audio.push({ name: `${prefix}/sent.wav`, blob: sentWav })
+          const shipped: { name: string; blob: Blob }[] = []
+          if (ppWav) shipped.push({ name: `${prefix}/personaplex.wav`, blob: ppWav })
+          if (sentWav) shipped.push({ name: `${prefix}/sent.wav`, blob: sentWav })
           if (timeline) {
-            audio.push({ name: `${prefix}/playback_timeline.json`,
+            shipped.push({ name: `${prefix}/playback_timeline.json`,
               blob: new Blob([JSON.stringify(timeline)]) })
           }
           records.push(record)
           setProgress((p) => ({ ...p, records: records.slice() }))
+          // Ship and release: only fall back to accumulating in the tab if the
+          // server is not taking checkpoints.
+          await checkpoint(shipped, false)
+          if (checkpointFailed) audio.push(...shipped)
           if (abortRef.current) break
           await sleep(config.cooldownMs)
         }
@@ -1308,12 +1342,21 @@ export function useSoundboardAudit(opts: {
       ]
       const zip = makeZip(entries)
       setResultsZip(zip)
-      // Persist to the server data volume (best-effort; the researcher can
-      // retry from the UI or fall back to the local download).
+      // Close the checkpointed run out; only re-upload the whole bundle when
+      // checkpointing failed, since the audio is already on the volume.
       setUploadState({ status: "uploading" })
       try {
-        const stored = await uploadSoundboardAudit(zip, manifest.manifest_sha256 ?? "")
-        setUploadState({ status: "done", detail: stored.path })
+        if (checkpointFailed) {
+          const stored = await uploadSoundboardAudit(zip, manifest.manifest_sha256 ?? "")
+          setUploadState({ status: "done", detail: stored.path })
+        } else {
+          const stored = await checkpointSoundboardAudit(runId, {
+            manifest,
+            runLog: { completed_at: new Date().toISOString(),
+                      aborted: abortRef.current, complete: true, records },
+          })
+          setUploadState({ status: "done", detail: stored.path })
+        }
       } catch (e) {
         setUploadState({ status: "failed", detail: String((e as Error).message ?? e) })
       }

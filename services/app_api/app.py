@@ -678,6 +678,66 @@ def create_app():
         return {"ok": True, "path": str(out_dir.relative_to(data_root)),
                 "zip_bytes": size}
 
+    @app.post("/api/soundboard-audit/checkpoint")
+    async def soundboard_audit_checkpoint(
+        run_id: str = Form(...),
+        manifest_json: str = Form(""),
+        run_log_json: str = Form(""),
+        part: UploadFile | None = File(None),
+    ):
+        """Append one conversation's artifacts to an in-progress audit run.
+
+        A long run cannot hold every response WAV in the browser until the end
+        (the tab dies), so the runner ships each conversation as it completes.
+        Audio parts are appended into the same results.zip the whole-run upload
+        produces; manifest and run log are rewritten loose beside it, which is
+        where the post-processor already prefers to read them. Unlike the
+        whole-run upload the directory is NOT create-exclusive - resuming into
+        it is the point - so run_id must be unique per run."""
+        import io as _io
+        import json as _json
+        import re as _re
+        import time as _time
+        import zipfile
+
+        safe_run = _re.sub(r"[^0-9A-Za-z._-]", "", run_id)[:80]
+        if not safe_run:
+            raise HTTPException(status_code=422, detail="run_id is required")
+        data_root = Path(os.path.expanduser(
+            os.environ.get("STUDY_DATA_ROOT", "/workspace/data")))
+        out_dir = data_root / "audit" / safe_run
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if manifest_json:
+            (out_dir / "manifest.json").write_text(manifest_json)
+        if run_log_json:
+            (out_dir / "run_log.json").write_text(run_log_json)
+
+        written = 0
+        if part is not None:
+            payload = await part.read()
+            try:
+                source = zipfile.ZipFile(_io.BytesIO(payload))
+            except zipfile.BadZipFile:
+                raise HTTPException(status_code=400, detail="part is not a valid zip")
+            zip_path = out_dir / "results.zip"
+            mode = "a" if zip_path.exists() else "w"
+            with zipfile.ZipFile(zip_path, mode, zipfile.ZIP_DEFLATED) as archive:
+                existing = set(archive.namelist())
+                for name in source.namelist():
+                    # Entry names come from a browser; keep them inside the run.
+                    clean = name.lstrip("/").replace("\\", "/")
+                    if ".." in clean.split("/") or not clean or clean in existing:
+                        continue
+                    archive.writestr(clean, source.read(name))
+                    written += 1
+        (out_dir / "upload_meta.json").write_text(_json.dumps({
+            "received_at_unix_s": _time.time(),
+            "run_id": safe_run,
+            "source": "hmo_soundboard_audit_runner_checkpoint",
+        }, indent=2))
+        return {"ok": True, "path": str(out_dir.relative_to(data_root)),
+                "entries_written": written}
+
     @app.post("/api/loudness-normalize")
     async def loudness_normalize(
         audio: UploadFile = File(...),

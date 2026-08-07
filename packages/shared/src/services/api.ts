@@ -120,6 +120,25 @@ export async function xvcFileBake(
 
 // Persist a soundboard-audit results zip on the study data volume
 // (STUDY_DATA_ROOT/audit/...). Returns the server-relative storage path.
+// Ship one conversation as it completes so a long run never holds every
+// response WAV in the tab until the end, and a crash costs one conversation.
+export async function checkpointSoundboardAudit(
+  runId: string,
+  opts: { part?: Blob; manifest?: unknown; runLog?: unknown },
+): Promise<{ ok: boolean; path: string; entries_written: number }> {
+  const fd = new FormData()
+  fd.append("run_id", runId)
+  if (opts.manifest !== undefined) fd.append("manifest_json", JSON.stringify(opts.manifest, null, 2))
+  if (opts.runLog !== undefined) fd.append("run_log_json", JSON.stringify(opts.runLog, null, 2))
+  if (opts.part) fd.append("part", opts.part, "part.zip")
+  const resp = await fetch(`${API_BASE}/api/soundboard-audit/checkpoint`, {
+    method: "POST",
+    body: fd,
+  })
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`)
+  return resp.json()
+}
+
 export async function uploadSoundboardAudit(
   zip: Blob,
   manifestSha256: string,
