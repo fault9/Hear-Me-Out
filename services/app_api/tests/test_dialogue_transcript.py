@@ -295,6 +295,9 @@ class DialogueTranscriptTests(unittest.TestCase):
 
             def words(_path: str) -> dict:
                 return {"status": "complete", "error": None, "words": [
+                    # Starts before the detected onset and runs into it: the
+                    # interval owns it, or content words are lost at edges.
+                    {"word": "One,", "start": 0.85, "end": 1.15},
                     {"word": "Building", "start": 1.2, "end": 1.7},
                     {"word": "sixteen.", "start": 1.8, "end": 2.4},
                     {"word": "Blue", "start": 12.3, "end": 12.7},
@@ -307,14 +310,14 @@ class DialogueTranscriptTests(unittest.TestCase):
             spoken = [row for row in result["utterances"]
                       if row["speaker"] == "participant"]
             self.assertEqual([row["text"] for row in spoken],
-                             ["Building sixteen.", "", "Blue door."])
+                             ["One, Building sixteen.", "", "Blue door."])
             self.assertEqual(spoken[1]["text_provenance"]["word_count"], 0)
             self.assertEqual(spoken[0]["text_provenance"]["method"],
                              "whisper_word_timestamps_whole_file")
             # Interval boundaries are the validated instrument and stay put.
             self.assertEqual((spoken[0]["start_ms"], spoken[0]["end_ms"]),
                              (1000.0, 3000.0))
-            self.assertEqual(spoken[0]["text_provenance"]["speech_start_ms"], 1200.0)
+            self.assertEqual(spoken[0]["text_provenance"]["speech_start_ms"], 850.0)
 
     def test_two_turns_never_share_an_onset(self):
         """Text arriving in the silence after a run used to take that run's

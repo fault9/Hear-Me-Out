@@ -218,16 +218,23 @@ def _words_by_interval(words: list[dict], intervals: list[dict],
     dropped = 0
     for word in words:
         # Word times are file positions; the intervals are on the browser clock.
-        middle = origin_ms + (float(word["start"]) + float(word["end"])) * 500.0
-        index = next(
-            (position for position, interval in enumerate(intervals)
-             if float(interval["start_ms"]) <= middle <= float(interval["end_ms"])),
-            None)
-        if index is None:
+        start = origin_ms + float(word["start"]) * 1000.0
+        end = origin_ms + float(word["end"]) * 1000.0
+        # Most overlap, not midpoint: a word straddling the detected onset
+        # belongs to that interval, and dropping it costs content words - the
+        # reference number lost its "one" when the boundary fell mid-word.
+        overlaps = [
+            (min(end, float(interval["end_ms"])) - max(start, float(interval["start_ms"])),
+             position)
+            for position, interval in enumerate(intervals)]
+        best = max(overlaps, default=None)
+        if best is not None and best[0] > 0:
+            index = best[1]
+        else:
             distances = [
-                (abs(middle - float(interval["start_ms"]))
-                 if middle < float(interval["start_ms"])
-                 else middle - float(interval["end_ms"]), position)
+                (float(interval["start_ms"]) - end
+                 if end < float(interval["start_ms"])
+                 else start - float(interval["end_ms"]), position)
                 for position, interval in enumerate(intervals)]
             nearest = min(distances, default=None)
             if nearest is None or nearest[0] > _ASR_PADDING_MS:
