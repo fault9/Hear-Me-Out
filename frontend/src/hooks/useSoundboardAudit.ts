@@ -113,9 +113,9 @@ export interface AuditConfig {
   responseTimeoutMs: number    // no PP speech after clip end → "no_response"
   responseLingerMs: number     // PP silent this long after response → done
   interTurnGapMs: number       // script: quiet gap after PP replies → next line
-  // Script mode: build one script per condition TAG (exactly two tags) and
-  // alternate replays A,B,A,B… so condition is not confounded with time /
-  // server drift. reps = replays PER condition.
+  // Script mode: build one script per condition TAG and cycle through the
+  // tags A,B,…,A,B,… so condition is not confounded with time / server
+  // drift. reps = replays PER condition.
   interleaveByCondition: boolean
   handshakeTimeoutMs: number
   cooldownMs: number           // between conversations (PP teardown/reset)
@@ -657,16 +657,16 @@ export function useSoundboardAudit(opts: {
       }
       let draft: AuditManifest
       if (config.interleaveByCondition) {
-        // One script per condition TAG, replays alternating A,B,A,B… so the
-        // condition contrast is not confounded with time/server drift.
+        // One script per condition TAG, replays cycling through every tag
+        // each round so no condition is confounded with time/server drift.
         const groups = new Map<string, Slot[]>()
         for (const slot of eligibleSlots) {
           const tag = slot.condition || "(untagged)"
           groups.set(tag, [...(groups.get(tag) ?? []), slot])
         }
-        if (groups.size !== 2) {
-          setError("Interleave needs EXACTLY two condition tags among playable "
-            + `slots (found ${groups.size}: `
+        if (groups.size < 2) {
+          setError("Interleave needs at least two condition tags among "
+            + `playable slots (found ${groups.size}: `
             + `${[...groups.keys()].join(", ") || "none"}). Tag each slot's `
             + "condition in Configure Soundboard (e.g. natural / converted).")
           return null
@@ -675,11 +675,12 @@ export function useSoundboardAudit(opts: {
         for (const [condition, group] of groups) {
           scripts.push({ condition, turns: await buildTurns(group) })
         }
-        const [a, b] = scripts.map((s) => s.condition)
+        const order = scripts.map((s) => s.condition)
         const plan: { rep: number; condition: string; cycle: number }[] = []
         for (let cycle = 1; cycle <= config.reps; cycle++) {
-          plan.push({ rep: plan.length + 1, condition: a, cycle })
-          plan.push({ rep: plan.length + 1, condition: b, cycle })
+          for (const condition of order) {
+            plan.push({ rep: plan.length + 1, condition, cycle })
+          }
         }
         draft = { ...common, interleaved: true, scripts, replay_plan: plan }
       } else {
