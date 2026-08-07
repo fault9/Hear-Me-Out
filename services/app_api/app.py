@@ -18,6 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
+from starlette.formparsers import MultiPartParser
+
+# One audit checkpoint carries a conversation's WAVs; the parser's 1 MB default
+# rejects them before the handler runs, which drops the runner back to holding
+# a whole run in the tab. Parts are read into memory, so this stays bounded.
+MultiPartParser.max_part_size = 128 * 1024 * 1024
 
 APP_MODE = os.environ.get("APP_MODE", "hmo").lower()
 if APP_MODE != "study":
