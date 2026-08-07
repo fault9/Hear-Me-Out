@@ -15,6 +15,20 @@ identifies the final-summary request itself (Section 4). Condition labels,
 target-voice identifiers, questionnaire responses, timing-derived variables,
 and audio are withheld.
 
+## 0. Transcription reliability
+
+Participant text is automatic transcription of the participant's own audio and
+carries two flags. `asr_ok: false` means the transcription did not complete:
+treat the absent text as unavailable evidence, never as silence or as absence
+of the content. `asr_low_confidence: true` marks a very short vocalization
+whose transcription is unreliable - the recognizer emits stock politeness
+phrases on near-silent input, so such text may be words the participant never
+said. Do not cite a low-confidence utterance as evidence for any label, and do
+not read it as a critical-information unit, an acknowledgement, or a repair.
+Assistant text is the model's own emitted transcript rather than a
+transcription of its audio, so it is verbatim but may contain the model's own
+disfluencies and self-repairs; code what it says, not how cleanly it says it.
+
 ## 1. Units of analysis
 
 Each analytical scenario has exactly two prespecified critical-information
@@ -47,7 +61,7 @@ codes are assigned per unit, per interaction.
   artifact.
 - `complete_transmitted`: computed mechanically, never judged. The unit's
   delivery utterances are located in the transmitted-track transcript (same
-  interval ids as the raw transcript), and the content-word recall of the
+  utterance ids as the raw transcript), and the content-word recall of the
   raw delivery text within the transmitted text is compared to a frozen
   threshold (content words: alphabetic tokens of length >= 4 or numbers;
   threshold 0.6). Recall at or above threshold codes 1; complete transmitted
