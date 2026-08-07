@@ -520,8 +520,8 @@ function SlotCard({
               onBlur={saveMeta}
             >
               <option value="">Select source</option>
-              <option value="masculine_presenting" />
-              <option value="feminine_presenting" />
+              <option value="masculine_presenting">Masculine-presenting</option>
+              <option value="feminine_presenting">Feminine-presenting</option>
             </select>
           </div>
           <div className="flex flex-col">
