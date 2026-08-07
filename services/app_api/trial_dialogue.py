@@ -61,7 +61,7 @@ def main() -> None:
     print()
     for row in result["utterances"][:limit]:
         who = "A" if row["speaker"] == "assistant" else "P"
-        print("%s %7.1f-%7.1f %s" % (
+        print("%s %7.1f-%-7.1f %s" % (
             who, row["start_ms"] / 1000, row["end_ms"] / 1000, row["text"]))
 
 
