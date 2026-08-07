@@ -5,13 +5,12 @@ from __future__ import annotations
 import copy
 import json
 import os
-import tempfile
 import time
-import wave
 from pathlib import Path
 from typing import Any, Callable
 
 from .artifacts import atomic_write_json, file_record
+from .turn_taking import group_turns
 
 DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v8"
 # Silence that ends an assistant turn, measured on the same packet-RMS speech
@@ -21,12 +20,6 @@ ASSISTANT_TURN_SILENCE_MS = float(
 _ASR_PADDING_MS = 200.0
 
 Transcriber = Callable[[str], dict]
-
-
-def _default_transcriber(path: str) -> dict:
-    from metrics import get_transcript_result
-
-    return get_transcript_result(path)
 
 
 def _capture_origin_ms(session_dir: Path, timing: dict) -> float:
@@ -46,50 +39,6 @@ def _capture_origin_ms(session_dir: Path, timing: dict) -> float:
     except (OSError, ValueError, TypeError, StopIteration):
         first_offset = 0.0
     return first_offset - correction
-
-
-def _wav_duration_ms(path: Path) -> float:
-    with wave.open(str(path), "rb") as wav:
-        rate = wav.getframerate()
-        return wav.getnframes() * 1000.0 / rate if rate else 0.0
-
-
-def _write_wav_slice(source: Path, destination: Path,
-                     start_ms: float, end_ms: float) -> tuple[float, float]:
-    with wave.open(str(source), "rb") as wav:
-        params = wav.getparams()
-        total_frames = wav.getnframes()
-        start_frame = max(0, min(total_frames, round(start_ms * params.framerate / 1000)))
-        end_frame = max(start_frame, min(
-            total_frames, round(end_ms * params.framerate / 1000)))
-        wav.setpos(start_frame)
-        frames = wav.readframes(end_frame - start_frame)
-    with wave.open(str(destination), "wb") as wav:
-        wav.setparams(params)
-        wav.writeframes(frames)
-    return (
-        start_frame * 1000.0 / params.framerate,
-        end_frame * 1000.0 / params.framerate,
-    )
-
-
-def _clip_window(intervals: list[dict], index: int, origin_ms: float,
-                 duration_ms: float) -> tuple[float, float]:
-    item = intervals[index]
-    start = float(item["start_ms"])
-    end = float(item["end_ms"])
-    padded_start = start - _ASR_PADDING_MS
-    padded_end = end + _ASR_PADDING_MS
-    if index:
-        previous_end = float(intervals[index - 1]["end_ms"])
-        padded_start = max(padded_start, (previous_end + start) / 2)
-    if index + 1 < len(intervals):
-        next_start = float(intervals[index + 1]["start_ms"])
-        padded_end = min(padded_end, (end + next_start) / 2)
-    return (
-        max(0.0, min(duration_ms, padded_start - origin_ms)),
-        max(0.0, min(duration_ms, padded_end - origin_ms)),
-    )
 
 
 def _initial_voice_mode(session: dict, timing: dict) -> str:
@@ -180,7 +129,18 @@ def _onset_for(end_ms: float, runs: list[list[float]]) -> float | None:
     return previous[-1][1] if previous else None
 
 
-def _default_word_transcriber(path: str) -> dict:
+def participant_units(intervals: list[dict]) -> list[dict]:
+    """The participant's speech intervals grouped into the turns they were
+    spoken as, on the same silence rule the turn measures use. One utterance
+    per detected interval split single sentences across four lines whenever
+    the speaker drew breath."""
+    return [{"start_ms": turn["start_ms"], "end_ms": turn["end_ms"],
+             "intervals": [member[0] for member in turn["members"]],
+             "detector": intervals[turn["members"][0][0]].get("detector")}
+            for turn in group_turns(intervals)]
+
+
+def transcribe_words(path: str) -> dict:
     """Whole-file transcription with word timings (the tier the HMO UI uses)."""
     from faster_whisper import WhisperModel
 
@@ -208,38 +168,38 @@ def _default_word_transcriber(path: str) -> dict:
     return {"words": words, "status": "complete", "error": None}
 
 
-def _words_by_interval(words: list[dict], intervals: list[dict],
-                       origin_ms: float) -> tuple[list[list[dict]], int]:
-    """Group whole-file words onto the detected speech intervals.
+def words_by_unit(words: list[dict], units: list[dict],
+                  origin_ms: float) -> tuple[list[list[dict]], int]:
+    """Group whole-file words onto the speech units they were spoken in.
 
-    Slicing each interval and transcribing the slice gave the recognizer a few
+    Slicing each unit and transcribing the slice gave the recognizer a few
     hundred milliseconds of breath or playback bleed with no context, and it
     answered with stock politeness ("thank you." on 127 of the 577 intervals
-    under 600 ms). Transcribing the file once and keeping each interval's own
-    words leaves such intervals empty, which is what they are.
+    under 600 ms). Transcribing the file once and keeping each unit's own words
+    leaves such intervals empty, which is what they are. A word is placed by
+    overlap rather than midpoint: one straddling an onset belongs to that unit,
+    and dropping it costs content words - the reference number lost its "one"
+    when the boundary fell mid-word.
     """
-    grouped: list[list[dict]] = [[] for _ in intervals]
+    grouped: list[list[dict]] = [[] for _ in units]
     dropped = 0
     for word in words:
-        # Word times are file positions; the intervals are on the browser clock.
+        # Word times are file positions; the units are on the browser clock.
         start = origin_ms + float(word["start"]) * 1000.0
         end = origin_ms + float(word["end"]) * 1000.0
-        # Most overlap, not midpoint: a word straddling the detected onset
-        # belongs to that interval, and dropping it costs content words - the
-        # reference number lost its "one" when the boundary fell mid-word.
         overlaps = [
-            (min(end, float(interval["end_ms"])) - max(start, float(interval["start_ms"])),
+            (min(end, float(unit["end_ms"])) - max(start, float(unit["start_ms"])),
              position)
-            for position, interval in enumerate(intervals)]
+            for position, unit in enumerate(units)]
         best = max(overlaps, default=None)
         if best is not None and best[0] > 0:
             index = best[1]
         else:
             distances = [
-                (float(interval["start_ms"]) - end
-                 if end < float(interval["start_ms"])
-                 else start - float(interval["end_ms"]), position)
-                for position, interval in enumerate(intervals)]
+                (float(unit["start_ms"]) - end
+                 if end < float(unit["start_ms"])
+                 else start - float(unit["end_ms"]), position)
+                for position, unit in enumerate(units)]
             nearest = min(distances, default=None)
             if nearest is None or nearest[0] > _ASR_PADDING_MS:
                 dropped += 1
@@ -249,14 +209,14 @@ def _words_by_interval(words: list[dict], intervals: list[dict],
     return grouped, dropped
 
 
-def _participant_utterances_from_words(
-        raw_path: Path, intervals: list[dict], origin_ms: float,
-        route_regions: list[dict], words: list[dict]) -> list[dict]:
-    grouped, dropped = _words_by_interval(words, intervals, origin_ms)
+def _participant_utterances(units: list[dict], origin_ms: float,
+                            route_regions: list[dict],
+                            words: list[dict]) -> list[dict]:
+    grouped, dropped = words_by_unit(words, units, origin_ms)
     utterances = []
-    for index, (interval, own) in enumerate(zip(intervals, grouped)):
-        start_ms = float(interval["start_ms"])
-        end_ms = float(interval["end_ms"])
+    for index, (unit, own) in enumerate(zip(units, grouped)):
+        start_ms = float(unit["start_ms"])
+        end_ms = float(unit["end_ms"])
         voice_mode, route_segments = _routes_for_interval(
             start_ms, end_ms, route_regions)
         utterances.append({
@@ -270,7 +230,8 @@ def _participant_utterances_from_words(
             "timing": {
                 "timeline": "browser_audio_clock",
                 "source": "timing.participant_intervals",
-                "detector": interval.get("detector"),
+                "detector": unit.get("detector"),
+                "intervals": unit.get("intervals"),
             },
             "text_provenance": {
                 "source": "participant_raw.wav",
@@ -278,58 +239,12 @@ def _participant_utterances_from_words(
                 "asr_status": "complete",
                 "asr_error": None,
                 "word_count": len(own),
-                "words_outside_any_interval": dropped,
+                "words_outside_any_unit": dropped,
                 "speech_start_ms": (round(origin_ms + own[0]["start"] * 1000.0, 3)
                                     if own else None),
                 "speech_end_ms": (round(origin_ms + own[-1]["end"] * 1000.0, 3)
                                   if own else None),
                 "browser_clock_origin_ms": round(origin_ms, 3),
-            },
-        })
-    return utterances
-
-
-def _participant_utterances(raw_path: Path, intervals: list[dict],
-                            origin_ms: float, route_regions: list[dict],
-                            transcriber: Transcriber, temporary: Path) -> list[dict]:
-    duration_ms = _wav_duration_ms(raw_path)
-    utterances = []
-    for index, interval in enumerate(intervals):
-        start_ms = float(interval["start_ms"])
-        end_ms = float(interval["end_ms"])
-        clip_start, clip_end = _clip_window(intervals, index, origin_ms, duration_ms)
-        asr = {"text": "", "segments": [], "status": "failed",
-               "error": "empty interval after browser-to-WAV clock mapping"}
-        actual_start, actual_end = clip_start, clip_end
-        if clip_end > clip_start:
-            clip_path = temporary / f"participant_{index + 1:03d}.wav"
-            actual_start, actual_end = _write_wav_slice(
-                raw_path, clip_path, clip_start, clip_end)
-            asr = transcriber(str(clip_path))
-        voice_mode, route_segments = _routes_for_interval(
-            start_ms, end_ms, route_regions)
-        utterances.append({
-            "id": f"participant_{index + 1:03d}",
-            "speaker": "participant",
-            "start_ms": round(start_ms, 3),
-            "end_ms": round(end_ms, 3),
-            "text": str(asr.get("text") or "").strip(),
-            "voice_mode": voice_mode,
-            "route_segments": route_segments,
-            "timing": {
-                "timeline": "browser_audio_clock",
-                "source": "timing.participant_intervals",
-                "detector": interval.get("detector"),
-            },
-            "text_provenance": {
-                "source": "participant_raw.wav",
-                "method": "whisper-small_interval_asr",
-                "asr_status": asr.get("status"),
-                "asr_error": asr.get("error"),
-                "wav_start_ms": round(actual_start, 3),
-                "wav_end_ms": round(actual_end, 3),
-                "browser_clock_origin_ms": round(origin_ms, 3),
-                "context_padding_ms": _ASR_PADDING_MS,
             },
         })
     return utterances
@@ -420,8 +335,7 @@ def _merge_assistant_runs(utterances: list[dict],
 
 def prepare_dialogue_transcript(session: dict, data_root: Path,
                                 analysis_id: str, timing: dict,
-                                transcriber: Transcriber | None = None,
-                                word_transcriber: Transcriber | None = None) -> dict:
+                                transcriber: Transcriber | None = None) -> dict:
     """Create a versioned, time-aligned transcript on the browser audio clock."""
     files = session.get("files") or {}
     if not files.get("participant_raw"):
@@ -443,24 +357,9 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
     )
     origin_ms = _capture_origin_ms(session_dir, timing)
     regions = _route_regions(session, timing, end_ms)
-    # One pass over the whole capture, words kept per interval; the per-interval
-    # slicing stays as the fallback for environments without word timings.
-    words = None
-    try:
-        result = (word_transcriber or _default_word_transcriber)(str(raw_path))
-        if result.get("status") == "complete":
-            words = result.get("words") or []
-    except Exception:  # noqa: BLE001 - fall back rather than lose the session
-        words = None
-    if words is not None:
-        participant = _participant_utterances_from_words(
-            raw_path, participant_intervals, origin_ms, regions, words)
-    else:
-        with tempfile.TemporaryDirectory(prefix="hmo-dialogue-") as temporary:
-            participant = _participant_utterances(
-                raw_path, participant_intervals, origin_ms, regions,
-                transcriber or _default_transcriber, Path(temporary),
-            )
+    units = participant_units(participant_intervals)
+    words = (transcriber or transcribe_words)(str(raw_path)).get("words") or []
+    participant = _participant_utterances(units, origin_ms, regions, words)
     assistant, unassigned = _assistant_utterances(
         model_fragments, assistant_intervals)
     utterances = _merge_assistant_runs(sorted(

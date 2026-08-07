@@ -929,17 +929,24 @@ class TransmittedTranscriptModuleTests(FixtureCase):
 
         def transcriber(path):
             calls.append(path)
-            return {"text": f"slice {len(calls)}", "status": "complete"}
+            # One word inside each participant interval.
+            return {"status": "complete", "error": None, "words": [
+                {"word": f"w{index}", "start": start / 1000 + 0.1,
+                 "end": start / 1000 + 0.4}
+                for index, (uid, speaker, start, end, _) in enumerate(UTTERANCES)
+                if speaker == "participant"]}
 
         result = prepare_transmitted_transcript(
             session, self.data_root, "TT1", timing, transcriber)
-        self.assertEqual(result["schema"], "hmo.transmitted-transcript.v1")
+        self.assertEqual(result["schema"], "hmo.transmitted-transcript.v2")
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["alignment"], "assumed_chunk_aligned")
         ids = [row["id"] for row in result["utterances"]]
         self.assertEqual(ids, [uid for uid, speaker, *_ in UTTERANCES
                                if speaker == "participant"])
-        self.assertEqual(len(calls), len(ids))
+        # One pass over the transmitted track, not one slice per interval.
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(all(row["text"] for row in result["utterances"]))
         # Register and reload through the manifest helper.
         manifest = session["artifact_manifest"]
         manifest["analysis"]["transmitted_transcript_latest"] = \

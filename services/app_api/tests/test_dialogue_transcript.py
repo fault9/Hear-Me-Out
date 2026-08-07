@@ -70,28 +70,36 @@ class DialogueTranscriptTests(unittest.TestCase):
 
             def transcribe(path: str) -> dict:
                 calls.append(path)
-                return {"text": f"Participant utterance {len(calls)}.",
-                        "segments": [], "status": "complete", "error": None}
+                return {"status": "complete", "error": None, "words": [
+                    {"word": "Building", "start": 1.2, "end": 1.5},
+                    {"word": "sixteen.", "start": 1.6, "end": 1.85},
+                    {"word": "Blue", "start": 3.1, "end": 3.3},
+                    {"word": "door.", "start": 3.35, "end": 3.55},
+                ]}
 
             result = prepare_dialogue_transcript(
                 session, root, "analysis-1", timing, transcribe)
 
             self.assertEqual(result["schema"], DIALOGUE_TRANSCRIPT_SCHEMA)
             self.assertEqual(result["status"], "complete")
-            self.assertEqual(len(calls), 2)
+            # One pass over the capture, not one per interval.
+            self.assertEqual(len(calls), 1)
             self.assertEqual([row["speaker"] for row in result["utterances"]],
-                             ["participant", "assistant", "participant"])
+                             ["participant", "assistant"])
             # Both fragments are one spoken turn: nothing separates them.
             self.assertEqual(result["utterances"][1]["text"],
                              "Lead in. Assistant reply.")
             self.assertEqual(
                 result["utterances"][1]["text_provenance"]["fragment_count"], 2)
+            # The participant's two intervals are 1.1 s apart, so they are one
+            # turn carrying both intervals' words.
             first = result["utterances"][0]
-            self.assertEqual((first["start_ms"], first["end_ms"]), (1100.0, 1900.0))
+            self.assertEqual((first["start_ms"], first["end_ms"]), (1100.0, 3600.0))
+            self.assertEqual(first["timing"]["intervals"], [0, 1])
+            self.assertEqual(first["text"], "Building sixteen. Blue door.")
             self.assertEqual(first["voice_mode"], "mixed")
             self.assertEqual([row["mode"] for row in first["route_segments"]],
                              ["natural", "vc"])
-            self.assertEqual(first["text_provenance"]["wav_start_ms"], 800.0)
             artifact = root / result["result_artifact"]["path"]
             self.assertTrue(artifact.exists())
             persisted = json.loads(artifact.read_text())
@@ -305,7 +313,7 @@ class DialogueTranscriptTests(unittest.TestCase):
                 ]}
 
             result = prepare_dialogue_transcript(
-                session, root, "analysis-7", timing, None, words)
+                session, root, "analysis-7", timing, words)
 
             spoken = [row for row in result["utterances"]
                       if row["speaker"] == "participant"]

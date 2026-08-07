@@ -20,17 +20,16 @@ can treat their transmitted-presence codes with caution.
 from __future__ import annotations
 
 import json
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 from .artifacts import atomic_write_json, file_record
 from .dialogue_transcript import (Transcriber, _capture_origin_ms,
-                                  _clip_window, _default_transcriber,
-                                  _wav_duration_ms, _write_wav_slice)
+                                  participant_units, transcribe_words,
+                                  words_by_unit)
 
-TRANSMITTED_TRANSCRIPT_SCHEMA = "hmo.transmitted-transcript.v1"
+TRANSMITTED_TRANSCRIPT_SCHEMA = "hmo.transmitted-transcript.v2"
 
 
 def prepare_transmitted_transcript(session: dict, data_root: Path,
@@ -54,46 +53,34 @@ def prepare_transmitted_transcript(session: dict, data_root: Path,
     alignment = ("degraded" if missing_at_proxy not in (0, None) else "assumed_chunk_aligned")
 
     origin_ms = _capture_origin_ms(session_dir, timing)
-    duration_ms = _wav_duration_ms(transmitted_path)
-    transcribe = transcriber or _default_transcriber
+    units = participant_units(intervals)
+    words = (transcriber or transcribe_words)(str(transmitted_path)).get("words") or []
+    grouped, dropped = words_by_unit(words, units, origin_ms)
     utterances = []
-    failed = 0
-    with tempfile.TemporaryDirectory(prefix="hmo-transmitted-") as temporary:
-        for index, interval in enumerate(intervals):
-            clip_start, clip_end = _clip_window(intervals, index, origin_ms, duration_ms)
-            asr: dict[str, Any] = {"text": "", "status": "failed",
-                                   "error": "empty interval after clock mapping"}
-            actual_start, actual_end = clip_start, clip_end
-            if clip_end > clip_start:
-                clip_path = Path(temporary) / f"participant_{index + 1:03d}.wav"
-                actual_start, actual_end = _write_wav_slice(
-                    transmitted_path, clip_path, clip_start, clip_end)
-                asr = transcribe(str(clip_path))
-            if asr.get("status") != "complete":
-                failed += 1
-            utterances.append({
-                "id": f"participant_{index + 1:03d}",
-                "speaker": "participant",
-                "start_ms": round(float(interval["start_ms"]), 3),
-                "end_ms": round(float(interval["end_ms"]), 3),
-                "text": str(asr.get("text") or "").strip(),
-                "text_provenance": {
-                    "source": "participant.wav (transmitted track)",
-                    "method": "whisper-small_interval_asr",
-                    "asr_status": asr.get("status"),
-                    "asr_error": asr.get("error"),
-                    "wav_start_ms": round(actual_start, 3),
-                    "wav_end_ms": round(actual_end, 3),
-                    "browser_clock_origin_ms": round(origin_ms, 3),
-                },
-            })
+    for index, (unit, own) in enumerate(zip(units, grouped)):
+        utterances.append({
+            "id": f"participant_{index + 1:03d}",
+            "speaker": "participant",
+            "start_ms": round(float(unit["start_ms"]), 3),
+            "end_ms": round(float(unit["end_ms"]), 3),
+            "text": " ".join(row["word"] for row in own).strip(),
+            "text_provenance": {
+                "source": "participant.wav (transmitted track)",
+                "method": "whisper_word_timestamps_whole_file",
+                "asr_status": "complete",
+                "asr_error": None,
+                "word_count": len(own),
+                "words_outside_any_unit": dropped,
+                "browser_clock_origin_ms": round(origin_ms, 3),
+            },
+        })
 
     result: dict[str, Any] = {
         "schema": TRANSMITTED_TRANSCRIPT_SCHEMA,
         "analysis_id": analysis_id,
         "session_id": session.get("session_id"),
         "created_at_unix_s": time.time(),
-        "status": "complete" if not failed else "partial",
+        "status": "complete",
         "alignment": alignment,
         "alignment_basis": {
             "assumption": "transmitted track chunk-aligned with raw capture",
@@ -108,7 +95,7 @@ def prepare_transmitted_transcript(session: dict, data_root: Path,
         "utterances": utterances,
         "summary": {
             "participant_utterances": len(utterances),
-            "asr_failures": failed,
+            "words_outside_any_unit": dropped,
         },
         "sources": {
             "participant_transmitted": file_record(transmitted_path, relative_to=data_root),
