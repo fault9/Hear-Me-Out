@@ -145,14 +145,26 @@ def participant_units(intervals: list[dict]) -> list[dict]:
             for turn in group_turns(intervals)]
 
 
+_WORD_MODEL = None
+
+
+def _word_model():
+    """One model per process. Constructing it per call pinned GPU memory that
+    was not released between sessions and exhausted the device mid-batch."""
+    global _WORD_MODEL
+    if _WORD_MODEL is None:
+        from faster_whisper import WhisperModel
+
+        device = os.environ.get("WHISPER_DEVICE", "cuda")
+        compute = "int8_float16" if device == "cuda" else "int8"
+        _WORD_MODEL = WhisperModel(os.environ.get("WHISPER_MODEL", "small"),
+                                   device=device, compute_type=compute)
+    return _WORD_MODEL
+
+
 def transcribe_words(path: str) -> dict:
     """Whole-file transcription with word timings (the tier the HMO UI uses)."""
-    from faster_whisper import WhisperModel
-
-    device = os.environ.get("WHISPER_DEVICE", "cuda")
-    compute = "int8_float16" if device == "cuda" else "int8"
-    model = WhisperModel(os.environ.get("WHISPER_MODEL", "small"),
-                         device=device, compute_type=compute)
+    model = _word_model()
     # No VAD: it decodes silence-stripped audio and maps word times back, and
     # that remapping drifts across long pauses - a word after a five-second
     # silence came back timed inside the previous speech interval. The RMS
