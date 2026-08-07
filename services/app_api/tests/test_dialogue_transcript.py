@@ -256,6 +256,61 @@ class DialogueTranscriptTests(unittest.TestCase):
             self.assertEqual(reply["start_ms"], 75600.0)
             self.assertEqual(reply["timing"]["start_anchor"], "audible_run_onset")
 
+    def test_two_turns_never_share_an_onset(self):
+        """Text arriving in the silence after a run used to take that run's
+        start, which an earlier fragment already held: 338 of 1211 assistant
+        turns shared or went backwards, ordering arbitrarily against the
+        participant."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = Path("sessions/onset/participant_raw.wav")
+            self._write_wav(root / relative, 45.0)
+            (root / relative).parent.joinpath("client_timeline.json").write_text(
+                json.dumps({"capture": {"chunks": [
+                    {"chunk_sequence": 1, "capture_start_sample": 0,
+                     "sample_count": 2048, "timeline_start_ms": 0.0}]}}))
+            session = {
+                "session_id": "P1_R01_S02_A01",
+                "voice_condition": "stable_natural",
+                "schedule": [{"mode": "natural", "start_s": 0, "end_s": None}],
+                "files": {"participant_raw": str(relative)},
+                # The second fragment's text arrives after the model has
+                # already fallen silent.
+                "transcript": {"model": [
+                    {"text": "Your order was delivered to building 18.",
+                     "start": 19.6, "end": 27.3, "speaker": "personaplex"},
+                    {"text": "I see.", "start": 25.0, "end": 30.4,
+                     "speaker": "personaplex"},
+                ]},
+            }
+            timing = {
+                "schema": "hmo.timing-analysis.v4",
+                "status": "estimated_pending_validation",
+                "participant_intervals": [
+                    {"start_ms": 40000.0, "end_ms": 41000.0, "detector": "rms"}],
+                "assistant_intervals": [
+                    {"start_ms": 19600.0, "end_ms": 28100.0, "detector": "rms"}],
+                "route_switches": [], "overlaps": [], "barge_ins": [],
+                "integrity": {"participant_capture_latency_correction_ms": 0.0},
+                "result_artifact": {"path": "analysis/timing/timing.json"},
+            }
+
+            def transcribe(_path: str) -> dict:
+                return {"text": "Participant utterance.", "segments": [],
+                        "status": "complete", "error": None}
+
+            result = prepare_dialogue_transcript(
+                session, root, "analysis-6", timing, transcribe)
+
+            assistants = [row for row in result["utterances"]
+                          if row["speaker"] == "assistant"]
+            self.assertEqual(len(assistants), 2)
+            self.assertEqual(assistants[0]["start_ms"], 19600.0)
+            # Anchored to where the model was last audible, not to the run's
+            # start, and never before the previous turn ended.
+            self.assertEqual(assistants[1]["start_ms"], 28100.0)
+            self.assertGreater(assistants[1]["start_ms"], assistants[0]["end_ms"] - 1)
+
     def test_the_assistant_falling_silent_ends_its_turn(self):
         """A stall ("one moment please" ... 40s ... a new turn) is two turns
         even though the participant never speaks."""

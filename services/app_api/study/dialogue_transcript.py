@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from .artifacts import atomic_write_json, file_record
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v6"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v7"
 # Silence that ends an assistant turn, measured on the same packet-RMS speech
 # detection as the timing analysis. See _merge_assistant_runs.
 ASSISTANT_TURN_SILENCE_MS = float(
@@ -167,12 +167,17 @@ def _onset_for(end_ms: float, runs: list[list[float]]) -> float | None:
     back-computed from word count and lands the turn seconds early, which
     ordered a participant's answer after the reply it prompted. The audible
     run carrying that arrival gives the onset the participant heard.
+
+    Text arriving in the silence after a run cannot take that run's start: an
+    earlier fragment already holds it, and two turns sharing an onset order
+    arbitrarily against the participant. Such arrivals anchor to where the
+    assistant was last audible instead.
     """
     for start, end in runs:
         if start <= end_ms <= end:
             return start
     previous = [row for row in runs if row[1] <= end_ms]
-    return previous[-1][0] if previous else None
+    return previous[-1][1] if previous else None
 
 
 def _participant_utterances(raw_path: Path, intervals: list[dict],
@@ -241,9 +246,11 @@ def _assistant_utterances(fragments: list[dict],
         start, end = times
         onset = _onset_for(end, runs)
         anchor = "audible_run_onset" if onset is not None else "back_computed_from_word_count"
+        # The floor is the previous fragment's end: the model speaks its
+        # fragments in sequence, so two of them can never share an onset.
         start = max(onset if onset is not None else start, floor)
         end = max(end, start)
-        floor = start
+        floor = end
         utterances.append({
             "id": f"assistant_{len(utterances) + 1:03d}",
             "speaker": "assistant",
