@@ -188,10 +188,14 @@ def _default_word_transcriber(path: str) -> dict:
     compute = "int8_float16" if device == "cuda" else "int8"
     model = WhisperModel(os.environ.get("WHISPER_MODEL", "small"),
                          device=device, compute_type=compute)
+    # No VAD: it decodes silence-stripped audio and maps word times back, and
+    # that remapping drifts across long pauses - a word after a five-second
+    # silence came back timed inside the previous speech interval. The RMS
+    # intervals already say where speech is, and anything invented in a silence
+    # region falls outside them all and is dropped rather than becoming text.
     segments, _ = model.transcribe(
         path, beam_size=5, language="en", word_timestamps=True,
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 120})
+        vad_filter=False, condition_on_previous_text=False)
     words = []
     for segment in segments:
         for word in getattr(segment, "words", None) or []:
