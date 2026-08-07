@@ -18,6 +18,11 @@ DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v8"
 ASSISTANT_TURN_SILENCE_MS = float(
     os.environ.get("ASSISTANT_TURN_SILENCE_MS", "1500"))
 _ASR_PADDING_MS = 200.0
+# No spoken word lasts this long. Without VAD the recognizer occasionally
+# stretches one across a silence, and an overlap rule takes such a word into
+# any unit it brushes - one reached 9.5 s and pulled its text into a turn it
+# was never spoken in. Placement uses at most this much of a word.
+_MAX_WORD_MS = 2000.0
 
 Transcriber = Callable[[str], dict]
 
@@ -186,7 +191,7 @@ def words_by_unit(words: list[dict], units: list[dict],
     for word in words:
         # Word times are file positions; the units are on the browser clock.
         start = origin_ms + float(word["start"]) * 1000.0
-        end = origin_ms + float(word["end"]) * 1000.0
+        end = min(origin_ms + float(word["end"]) * 1000.0, start + _MAX_WORD_MS)
         overlaps = [
             (min(end, float(unit["end_ms"])) - max(start, float(unit["start_ms"])),
              position)
