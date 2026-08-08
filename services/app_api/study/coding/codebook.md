@@ -1,6 +1,6 @@
 # Scenario Coding Codebook
 
-Version: 1.0.0 (pre-freeze draft — frozen by `python -m study.coding freeze`,
+Version: 1.1.0 (pre-freeze draft — frozen by `python -m study.coding freeze`,
 which records this file's SHA-256 in the freeze manifest. After freezing, any
 edit invalidates the manifest and the runner refuses to code non-pilot data.)
 
@@ -103,19 +103,27 @@ volunteers the fact) does NOT count as delivery of the unit.
 
 ## 5. Repair moves
 
-A repair move is one continuous participant contribution oriented to
-resolving one identifiable trouble in delivery, understanding, recording, or
-action. Categories (mutually exclusive per move):
+A repair move is a participant utterance oriented to resolving one
+identifiable trouble in delivery, understanding, recording, or action. Each
+utterance contributes at most one move; where an utterance addresses two
+troubles, code the one it principally addresses.
 
-- `repetition` — re-saying substantially the same content after trouble;
-- `reformulation` — re-saying with changed wording/structure;
-- `clarification` — answering or issuing a clarification about prior content;
+A move counts whether the participant raises the trouble or produces the move
+in answer to the assistant: "no, mine is the April invoice" in reply to "your
+file lists the March invoice, correct?" is a repair move.
+
+Categories, in priority order — where a move fits more than one, assign the
+first that applies:
+
+- `restart_after_cutoff` — restarting a contribution interrupted mid-delivery;
+- `floor_recovery` — re-taking the floor to resume an interrupted delivery;
 - `explicit_correction` — overtly correcting the assistant's version
   ("no, it was building 16");
 - `repeated_confirmation` — re-confirming already-established content after
   trouble;
-- `restart_after_cutoff` — restarting a contribution interrupted mid-delivery;
-- `floor_recovery` — re-taking the floor to resume an interrupted delivery.
+- `clarification` — answering or issuing a clarification about prior content;
+- `reformulation` — re-saying with changed wording/structure;
+- `repetition` — re-saying substantially the same content after trouble.
 
 Exclusions: ordinary elaboration, the first delivery of a unit, and the first
 protocol-required final-readback request. Escalation and withdrawal are

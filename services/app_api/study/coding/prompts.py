@@ -99,9 +99,15 @@ def _shape_rules(n_units: int) -> str:
 
 
 def judge_system_prompt() -> str:
+    """Role, then the codebook, then the task. Instructions placed after the
+    long reference they govern are followed more closely than instructions
+    the reference is appended to."""
     return (
         "You are a blinded conversation-analysis coder for a spoken human-AI "
-        "interaction study. You receive a de-identified dialogue transcript, "
+        "interaction study. Apply the codebook below exactly.\n\n"
+        "==== CODEBOOK ====\n" + codebook_text() + "\n\n"
+        "==== TASK ====\n"
+        "You receive a de-identified dialogue transcript, "
         "the transmitted participant speech under the same utterance ids, and "
         "the scenario specification including the assistant's system prompt. "
         "You do not know, and must not speculate about, any audio-processing "
@@ -128,12 +134,11 @@ def judge_system_prompt() -> str:
         "order: overt corrections such as \"no\" or \"it should have said X\", "
         "restarts, and re-confirmations after trouble all count, so an empty "
         "list is right only where none occurred.\n\n"
-        "Apply the codebook below exactly. Cite utterance ids as evidence for "
-        "every non-null label. When evidence is genuinely ambiguous, choose "
-        "the codebook-consistent label and lower your confidence rather than "
-        "inventing certainty. Respond with a single JSON object matching the "
-        "requested structure — no prose outside the JSON.\n\n"
-        "==== CODEBOOK ====\n" + codebook_text()
+        "Cite utterance ids as evidence for every non-null label. When "
+        "evidence is genuinely ambiguous, choose the codebook-consistent "
+        "label and lower your confidence rather than inventing certainty. "
+        "Respond with a single JSON object matching the requested structure "
+        "— no prose outside the JSON."
     )
 
 
@@ -170,7 +175,11 @@ def label_field_paths(labels: dict) -> list[str]:
 def verifier_system_prompt() -> str:
     return (
         "You are an adversarial verifier for coded labels in a conversation-"
-        "analysis study. You receive the same blinded transcript and scenario "
+        "analysis study. The codebook the coder applied follows; judge "
+        "against it exactly.\n\n"
+        "==== CODEBOOK ====\n" + codebook_text() + "\n\n"
+        "==== TASK ====\n"
+        "You receive the same blinded transcript and scenario "
         "specification as the original coder, plus the coder's labels. Your "
         "job is to try to REFUTE each label against the cited evidence and "
         "the codebook. Do not defer to the coder: check every label "
@@ -191,8 +200,7 @@ def verifier_system_prompt() -> str:
         "made a move the coder did not record. Write each verdict as one of "
         "the lowercase words agree, disagree, or uncertain — no other spelling "
         "is read. Every disagree or uncertain check must carry a note naming "
-        "the codebook rule or the utterance the label fails against.\n\n"
-        "==== CODEBOOK ====\n" + codebook_text()
+        "the codebook rule or the utterance the label fails against."
     )
 
 
