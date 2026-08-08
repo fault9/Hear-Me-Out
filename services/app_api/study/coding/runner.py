@@ -25,6 +25,10 @@ from .schema import SCHEMA_VERSION, validate_labels
 
 DEFAULT_MODEL = os.environ.get("CODING_JUDGE_MODEL", "claude-sonnet-5")
 DEFAULT_MAX_TOKENS = int(os.environ.get("CODING_MAX_TOKENS", "4096"))
+# An OpenAI-compatible endpoint (CODING_JUDGE_BASE_URL) selects that transport
+# instead of Anthropic's. Which provider coded the data is a data-governance
+# fact, so the base URL is recorded in the frozen decoding config.
+DEFAULT_BASE_URL = os.environ.get("CODING_JUDGE_BASE_URL", "")
 MAX_ATTEMPTS = 3
 
 
@@ -61,6 +65,48 @@ class LLMClient:
         )
         return "".join(block.text for block in response.content
                        if getattr(block, "type", "") == "text")
+
+
+class OpenAICompatibleClient(LLMClient):
+    """Same contract against an OpenAI-compatible endpoint, so the judge can
+    run on an EU-hosted provider where the data governance requires it."""
+
+    def __init__(self, model: str = DEFAULT_MODEL,
+                 max_tokens: int = DEFAULT_MAX_TOKENS,
+                 base_url: str = DEFAULT_BASE_URL):
+        super().__init__(model=model, max_tokens=max_tokens)
+        self.base_url = base_url
+
+    def decoding(self) -> dict:
+        return {**super().decoding(), "base_url": self.base_url}
+
+    def complete(self, system: str, user: str) -> str:
+        if self._client is None:
+            try:
+                import openai
+            except ImportError as exc:  # pragma: no cover - environment-specific
+                raise RuntimeError(
+                    "The 'openai' package is required for an OpenAI-compatible "
+                    "endpoint. Install it (uv add openai) and set "
+                    "CODING_JUDGE_API_KEY.") from exc
+            self._client = openai.OpenAI(
+                base_url=self.base_url,
+                api_key=os.environ.get("CODING_JUDGE_API_KEY") or None)
+        response = self._client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+        )
+        return response.choices[0].message.content or ""
+
+
+def build_client(model: str = DEFAULT_MODEL,
+                 max_tokens: int = DEFAULT_MAX_TOKENS) -> LLMClient:
+    if DEFAULT_BASE_URL:
+        return OpenAICompatibleClient(model=model, max_tokens=max_tokens)
+    return LLMClient(model=model, max_tokens=max_tokens)
 
 
 def _parse_json_object(text: str) -> dict:

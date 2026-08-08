@@ -61,12 +61,12 @@ def main() -> None:
         _print(packets.write_packets(
             sessions, _data_root(), args.study_id, scenarios))
     elif args.command == "freeze":
-        client = runner.LLMClient(model=args.model)
+        client = runner.build_client(model=args.model)
         _print(freeze.freeze(root, client.decoding(), note=args.note))
     elif args.command == "status":
         _print(freeze.manifest_status(root))
     elif args.command == "judge":
-        client = runner.LLMClient(model=args.model)
+        client = runner.build_client(model=args.model)
         _print(runner.run_judging(
             root, client, pilot=args.pilot,
             only_packet_ids=set(args.packet) or None,
