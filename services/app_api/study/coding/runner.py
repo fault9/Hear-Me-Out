@@ -21,7 +21,7 @@ from pathlib import Path
 from . import prompts
 from .freeze import manifest_status, materials_fingerprint
 from .packets import read_index
-from .schema import SCHEMA_VERSION, validate_labels
+from .schema import SCHEMA_VERSION, validate_checks, validate_labels
 
 DEFAULT_MODEL = os.environ.get("CODING_JUDGE_MODEL", "claude-sonnet-5")
 DEFAULT_MAX_TOKENS = int(os.environ.get("CODING_MAX_TOKENS", "4096"))
@@ -29,7 +29,14 @@ DEFAULT_MAX_TOKENS = int(os.environ.get("CODING_MAX_TOKENS", "4096"))
 # instead of Anthropic's. Which provider coded the data is a data-governance
 # fact, so the base URL is recorded in the frozen decoding config.
 DEFAULT_BASE_URL = os.environ.get("CODING_JUDGE_BASE_URL", "")
+# JSON mode asks the endpoint to constrain decoding to a JSON object. Not
+# every OpenAI-compatible provider implements it, so it stays explicit
+# configuration (settled by `probe` before freezing) rather than something the
+# client discovers mid-run: a decoding setting that changed partway through
+# would leave packets coded under settings the freeze manifest does not name.
+DEFAULT_JSON_MODE = os.environ.get("CODING_JUDGE_JSON_MODE", "1") != "0"
 MAX_ATTEMPTS = 3
+RETRY_EXCERPT_CHARS = 2000
 
 
 class LLMClient:
@@ -73,12 +80,15 @@ class OpenAICompatibleClient(LLMClient):
 
     def __init__(self, model: str = DEFAULT_MODEL,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
-                 base_url: str = DEFAULT_BASE_URL):
+                 base_url: str = DEFAULT_BASE_URL,
+                 json_mode: bool = DEFAULT_JSON_MODE):
         super().__init__(model=model, max_tokens=max_tokens)
         self.base_url = base_url
+        self.json_mode = json_mode
 
     def decoding(self) -> dict:
-        return {**super().decoding(), "base_url": self.base_url}
+        return {**super().decoding(), "base_url": self.base_url,
+                "json_mode": self.json_mode}
 
     def complete(self, system: str, user: str) -> str:
         if self._client is None:
@@ -98,6 +108,8 @@ class OpenAICompatibleClient(LLMClient):
             temperature=self.temperature,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
+            **({"response_format": {"type": "json_object"}}
+               if self.json_mode else {}),
         )
         return response.choices[0].message.content or ""
 
@@ -107,6 +119,31 @@ def build_client(model: str = DEFAULT_MODEL,
     if DEFAULT_BASE_URL:
         return OpenAICompatibleClient(model=model, max_tokens=max_tokens)
     return LLMClient(model=model, max_tokens=max_tokens)
+
+
+def probe_endpoint(client: LLMClient) -> dict:
+    """Pre-flight check: confirm the endpoint answers, and — where JSON mode
+    is configurable — report whether it accepts the constrained request. Run
+    before freezing so the decoding config is settled rather than discovered
+    partway through a coding run."""
+    system = "Reply with a single JSON object and no other text."
+    user = 'Return exactly {"ok": true}.'
+
+    def attempt() -> dict:
+        try:
+            return {"ok": True, "reply": _parse_json_object(client.complete(system, user))}
+        except Exception as exc:  # provider errors vary; report, never raise
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    if not hasattr(client, "json_mode"):
+        return {"decoding": client.decoding(), "attempts": {"default": attempt()}}
+    configured = client.json_mode
+    attempts = {}
+    for mode in (True, False):
+        client.json_mode = mode
+        attempts[f"json_mode={str(mode).lower()}"] = attempt()
+    client.json_mode = configured
+    return {"decoding": client.decoding(), "attempts": attempts}
 
 
 def _parse_json_object(text: str) -> dict:
@@ -119,6 +156,16 @@ def _parse_json_object(text: str) -> dict:
     if start < 0 or end <= start:
         raise ValueError("no JSON object in model output")
     return json.loads(text[start:end + 1])
+
+
+def _retry_prompt(user: str, raw: str, errors: list[str]) -> str:
+    """Re-ask with the rejected output quoted back: naming the errors alone
+    leaves the model guessing which part of its own output they refer to."""
+    return (user + "\n\nYour previous output was rejected:\n- "
+            + "\n- ".join(errors[:20])
+            + "\n\nThat output began:\n"
+            + raw.strip()[:RETRY_EXCERPT_CHARS]
+            + "\n\nReturn a corrected JSON object, and nothing else.")
 
 
 def _provenance(client: LLMClient, root: Path, attempts: int, role: str) -> dict:
@@ -139,21 +186,19 @@ def judge_packet(packet: dict, client: LLMClient, root: Path) -> dict:
     errors: list[str] = []
     labels: dict | None = None
     attempts = 0
+    prompt = user
     for attempts in range(1, MAX_ATTEMPTS + 1):
-        prompt = user if attempts == 1 else (
-            user + "\n\nYour previous output was invalid:\n- "
-            + "\n- ".join(errors[:20])
-            + "\nReturn a corrected JSON object.")
         raw = client.complete(system, prompt)
         try:
             candidate = _parse_json_object(raw)
         except ValueError as exc:
             errors = [str(exc)]
-            continue
-        errors = validate_labels(candidate, packet)
-        labels = candidate
-        if not errors:
-            break
+        else:
+            errors = validate_labels(candidate, packet)
+            labels = candidate
+            if not errors:
+                break
+        prompt = _retry_prompt(user, raw, errors)
     return {
         "packet_id": packet["packet_id"],
         "labels": labels,
@@ -168,17 +213,20 @@ def verify_packet(packet: dict, labels: dict, client: LLMClient, root: Path) -> 
     checks: list[dict] = []
     errors: list[str] = []
     attempts = 0
+    prompt = user
     for attempts in range(1, MAX_ATTEMPTS + 1):
-        raw = client.complete(system, user if attempts == 1 else (
-            user + "\n\nYour previous output was invalid JSON; return only "
-                   "the requested JSON object."))
+        raw = client.complete(system, prompt)
         try:
             parsed = _parse_json_object(raw)
-            checks = list(parsed.get("checks") or [])
-            errors = []
-            break
         except ValueError as exc:
             errors = [str(exc)]
+        else:
+            errors = validate_checks(parsed)
+            checks = [row for row in (parsed.get("checks") or [])
+                      if isinstance(row, dict)]
+            if not errors:
+                break
+        prompt = _retry_prompt(user, raw, errors)
     return {
         "packet_id": packet["packet_id"],
         "checks": checks,

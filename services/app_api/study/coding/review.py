@@ -79,6 +79,10 @@ def compute_flags(root: Path) -> dict:
             if judge is not None and "schema_invalid" not in reasons:
                 reasons.append("verifier_missing")
         else:
+            if verifier.get("schema_errors"):
+                # An unreadable verifier response yields no disagreements,
+                # which would otherwise pass for agreement.
+                reasons.append("verifier_schema_invalid")
             if verifier.get("disagreements"):
                 reasons.append("verifier_disagreement")
             if verifier.get("uncertain"):

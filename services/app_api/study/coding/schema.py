@@ -25,6 +25,7 @@ FINAL_ACCOUNT_VALUES = (
     "accurate", "partially_accurate", "inaccurate", "no_final_account",
 )
 GROUNDING_STAGES = ("acknowledgement", "update_claim", "incorporation", "retention")
+VERIFIER_VERDICTS = ("agree", "disagree", "uncertain")
 CONFIDENCE_FLAG_THRESHOLD = 0.8
 
 
@@ -164,6 +165,31 @@ def validate_labels(labels: dict, packet: dict) -> list[str]:
         if not _is_confidence(flag.get("confidence")):
             errors.append(f"{where}.confidence: must be a number in [0,1]")
 
+    return errors
+
+
+def validate_checks(parsed: Any) -> list[str]:
+    """Structural validation of a verifier response. Disagreement drives human
+    review, so an unreadable verdict has to surface as an error: silently
+    dropped checks are indistinguishable from agreement."""
+    if not isinstance(parsed, dict):
+        return ["verifier output: not a JSON object"]
+    checks = parsed.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return ["checks: must be a non-empty list of check objects"]
+    errors: list[str] = []
+    for i, row in enumerate(checks):
+        where = f"checks[{i}]"
+        if not isinstance(row, dict):
+            errors.append(f"{where}: not an object")
+            continue
+        if not isinstance(row.get("field"), str) or not row.get("field", "").strip():
+            errors.append(f"{where}.field: must be a non-empty label path")
+        verdict = row.get("verdict")
+        if verdict not in VERIFIER_VERDICTS:
+            errors.append(f"{where}.verdict: must be one of {VERIFIER_VERDICTS}")
+        elif verdict != "agree" and not str(row.get("note") or "").strip():
+            errors.append(f"{where}.note: required for a {verdict} verdict")
     return errors
 
 

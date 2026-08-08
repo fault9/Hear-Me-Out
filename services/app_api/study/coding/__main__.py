@@ -33,6 +33,8 @@ def main() -> None:
     p_freeze.add_argument("--note", default="")
     p_freeze.add_argument("--model", default=runner.DEFAULT_MODEL)
     sub.add_parser("status")
+    p_probe = sub.add_parser("probe")
+    p_probe.add_argument("--model", default=runner.DEFAULT_MODEL)
     p_judge = sub.add_parser("judge")
     p_judge.add_argument("--pilot", action="store_true")
     p_judge.add_argument("--model", default=runner.DEFAULT_MODEL)
@@ -65,6 +67,8 @@ def main() -> None:
         _print(freeze.freeze(root, client.decoding(), note=args.note))
     elif args.command == "status":
         _print(freeze.manifest_status(root))
+    elif args.command == "probe":
+        _print(runner.probe_endpoint(runner.build_client(model=args.model)))
     elif args.command == "judge":
         client = runner.build_client(model=args.model)
         _print(runner.run_judging(

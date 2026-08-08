@@ -1,8 +1,11 @@
 """Judge and verifier prompt construction.
 
-Rendering is deterministic (sorted keys, no timestamps): the freeze manifest
-records SHA-256 hashes of the system prompts and of a fixed-packet rendering,
-so any post-freeze drift is detectable.
+Rendering is deterministic: packet payloads are dumped with sorted keys, and
+the label skeleton keeps a fixed field order — units and repairs first, so the
+coder works through the evidence before the outcome and final-account labels
+that depend on it. The freeze manifest records SHA-256 hashes of the system
+prompts and of a fixed-packet rendering, so any post-freeze drift is
+detectable.
 """
 
 from __future__ import annotations
@@ -11,6 +14,12 @@ import json
 from pathlib import Path
 
 CODEBOOK_PATH = Path(__file__).with_name("codebook.md")
+
+# Keys of a unit's evidence and confidence maps. Spelled out in the skeleton
+# rather than left as a placeholder because the deterministic consistency
+# checks look evidence up under exactly these names.
+UNIT_LABELS = ("attempted", "complete_raw", "acknowledgement", "update_claim",
+               "incorporation", "retention")
 
 
 def codebook_text() -> str:
@@ -22,18 +31,19 @@ def _labels_skeleton(n_units: int) -> dict:
         "unit_index": 0,
         "attempted": "0|1",
         "complete_raw": "0|1",
-        "delivery_utterance_ids": ["participant_00X, minimal set completing the unit"],
+        "delivery_utterance_ids": ["participant utterance ids: the minimal set completing the unit"],
         "acknowledgement": "0|1|null",
         "update_claim": "0|1|null",
         "incorporation": "0|1|null",
         "retention": "0|1|null",
-        "evidence_utterance_ids": {"<label>": ["utterance ids grounding each non-null label"]},
-        "confidence": {"<label>": "number in [0,1] for each labeled field"},
+        "evidence_utterance_ids": {label: ["utterance ids grounding this label"]
+                                   for label in UNIT_LABELS},
+        "confidence": {label: "number in [0,1]" for label in UNIT_LABELS},
     }
     return {
         "units": [dict(unit, unit_index=i + 1) for i in range(n_units)],
         "repairs": [{
-            "utterance_id": "participant_00X",
+            "utterance_id": "participant utterance id",
             "category": "repetition|reformulation|clarification|explicit_correction|"
                         "repeated_confirmation|restart_after_cutoff|floor_recovery",
             "trouble": "one line: the trouble this move addresses",
@@ -45,22 +55,48 @@ def _labels_skeleton(n_units: int) -> dict:
         },
         "outcome": {
             "level": "integer level from the scenario's outcome levels",
-            "evidence_utterance_ids": ["..."],
+            "evidence_utterance_ids": ["utterance ids"],
             "rationale": "2-4 sentences applying the level criteria and codebook rules",
             "confidence": "number in [0,1]",
         },
         "final_account_accuracy": {
             "value": "accurate|partially_accurate|inaccurate|no_final_account",
-            "evidence_utterance_ids": ["..."],
+            "evidence_utterance_ids": ["utterance ids"],
             "confidence": "number in [0,1]",
         },
         "access_flags": [{
             "type": "truncation|abandonment|failed_floor_acquisition|premature_task_closure",
-            "utterance_id": "...",
+            "utterance_id": "utterance id",
             "confidence": "number in [0,1]",
         }],
-        "notes": "optional coder notes",
+        "notes": "optional coder notes, or an empty string",
     }
+
+
+def _shape_rules(n_units: int) -> str:
+    """Contract the skeleton cannot express on its own: which lists may be
+    empty, how the evidence and confidence keys are spelled, and that the
+    quoted descriptions are types rather than values."""
+    return (
+        "Shape rules:\n"
+        f"- `units` holds exactly {n_units} objects, with unit_index "
+        f"1..{n_units}.\n"
+        "- Every quoted value in the structure above is a description of the "
+        "type expected there. Replace each one with a value of that type; "
+        "never copy a description into your output.\n"
+        "- The single object shown inside `repairs` and inside `access_flags` "
+        "is an element template, not an example of expected output. Return an "
+        "empty list when nothing in this interaction qualifies; do not add an "
+        "entry to avoid an empty list.\n"
+        "- `delivery_utterance_ids` is an empty list when complete_raw is not "
+        "1.\n"
+        "- The keys of a unit's `evidence_utterance_ids` and `confidence` are "
+        "label names spelled exactly as shown. Include a key only for a label "
+        "you set to a non-null value.\n"
+        "- Emit the top-level fields in the order shown: settle the units and "
+        "repairs first, then let the outcome and final-account labels follow "
+        "from them.\n"
+    )
 
 
 def judge_system_prompt() -> str:
@@ -92,6 +128,7 @@ def judge_system_prompt() -> str:
 
 def judge_user_prompt(packet: dict) -> str:
     n_units = len(packet.get("scenario", {}).get("unit_definitions") or [])
+    note = str(packet.get("notes_for_coder") or "").strip()
     return (
         "Code the following interaction.\n\n"
         "==== SCENARIO SPECIFICATION ====\n"
@@ -100,10 +137,10 @@ def judge_user_prompt(packet: dict) -> str:
         + json.dumps(packet["utterances"], indent=2, sort_keys=True)
         + "\n\n==== TRANSMITTED PARTICIPANT SPEECH (same utterance ids) ====\n"
         + json.dumps(packet.get("transmitted_utterances") or [], indent=2, sort_keys=True)
-        + "\n\nNote: " + str(packet.get("notes_for_coder") or "")
-        + "\n\nReturn ONLY a JSON object with this structure (values shown as "
-          "type descriptions):\n"
-        + json.dumps(_labels_skeleton(n_units), indent=2, sort_keys=True)
+        + (f"\n\nNote: {note}" if note else "")
+        + "\n\nReturn ONLY a JSON object with this structure:\n"
+        + json.dumps(_labels_skeleton(n_units), indent=2)
+        + "\n\n" + _shape_rules(n_units)
     )
 
 
@@ -126,7 +163,10 @@ def verifier_system_prompt() -> str:
         "\"verdict\": \"agree|disagree|uncertain\", \"note\": \"one line\"}], "
         "\"summary\": \"one or two sentences\"}. Include one check per unit "
         "label, one for each repair move, one for outcome.level, and one for "
-        "final_account_accuracy.value.\n\n"
+        "final_account_accuracy.value. Write each verdict as exactly one of "
+        "the lowercase words agree, disagree, or uncertain — no other spelling "
+        "is read. Every disagree or uncertain check must carry a note naming "
+        "the codebook rule or the utterance the label fails against.\n\n"
         "==== CODEBOOK ====\n" + codebook_text()
     )
 

@@ -23,7 +23,8 @@ from study.coding.packets import (BlindingError, assert_blinded, build_packet,
                                   read_index, repair_is_post_boundary,
                                   write_packets)  # noqa: E402
 from study.coding.schema import (consistency_issues, derive_scenario_labels,
-                                 low_confidence_fields, validate_labels)  # noqa: E402
+                                 low_confidence_fields, validate_checks,
+                                 validate_labels)  # noqa: E402
 from study.dataset_export import build_dataset  # noqa: E402
 from study.turn_verification import finalize as finalize_turn_verification  # noqa: E402
 
@@ -112,9 +113,15 @@ def make_judge_labels(outcome_level=3, unit2_incorporation=1,
 class FakeClient:
     """Deterministic stand-in for the Anthropic adapter."""
 
-    def __init__(self, judge_labels: dict, fail_first: bool = False):
+    def __init__(self, judge_labels: dict, fail_first: bool = False,
+                 verifier_payload: dict | None = None):
         self.judge_labels = judge_labels
         self.fail_first = fail_first
+        self.verifier_payload = verifier_payload or {
+            "checks": [{"field": "outcome.level", "verdict": "agree",
+                        "note": "criteria applied correctly"}],
+            "summary": "labels hold up",
+        }
         self.calls = 0
 
     def decoding(self):
@@ -123,11 +130,7 @@ class FakeClient:
     def complete(self, system: str, user: str) -> str:
         self.calls += 1
         if "adversarial verifier" in system:
-            return json.dumps({
-                "checks": [{"field": "outcome.level", "verdict": "agree",
-                            "note": "criteria applied correctly"}],
-                "summary": "labels hold up",
-            })
+            return json.dumps(self.verifier_payload)
         if self.fail_first and self.calls == 1:
             return "this is not JSON at all"
         return json.dumps(self.judge_labels)
@@ -438,6 +441,18 @@ class SchemaTests(FixtureCase):
         self.assertEqual(derived["demonstrated_grounding"], 0)
         self.assertEqual(derived["false_update_confirmation"], 1)
 
+    def test_verifier_verdicts_must_be_readable(self):
+        self.assertEqual(validate_checks(
+            {"checks": [{"field": "outcome.level", "verdict": "disagree",
+                         "note": "level 4 needs the bounded action"}]}), [])
+        self.assertTrue(validate_checks({"checks": []}))
+        self.assertTrue(validate_checks(
+            {"checks": [{"field": "outcome.level", "verdict": "Disagree",
+                         "note": "n"}]}))
+        self.assertTrue(validate_checks(
+            {"checks": [{"field": "outcome.level", "verdict": "uncertain",
+                         "note": ""}]}))
+
     def test_low_confidence_detection(self):
         fields = low_confidence_fields(make_judge_labels(low_confidence=True))
         self.assertIn("units[1].acknowledgement", fields)
@@ -469,6 +484,24 @@ class RunnerTests(FixtureCase):
         verdict = json.loads(
             (root / "labels" / "verifier" / f"{pid}.json").read_text())
         self.assertEqual(verdict["disagreements"], [])
+
+    def test_unreadable_verifier_verdict_is_flagged_not_silent(self):
+        """A verdict spelled outside the enum yields no disagreements, which
+        would otherwise be indistinguishable from the verifier agreeing."""
+        self._write_all_packets()
+        root = self._root()
+        freeze.freeze(root, {"model": "fake-model", "temperature": 0.0,
+                             "max_tokens": 1})
+        client = FakeClient(make_judge_labels(), verifier_payload={
+            "checks": [{"field": "outcome.level", "verdict": "Disagree",
+                        "note": "level 4 needs the bounded action"}],
+            "summary": "one label does not hold"})
+        pid = runner.run_judging(root, client, pilot=False)["judged"][0]
+        verdict = json.loads(
+            (root / "labels" / "verifier" / f"{pid}.json").read_text())
+        self.assertTrue(verdict["schema_errors"])
+        self.assertEqual(verdict["disagreements"], [])
+        self.assertIn("verifier_schema_invalid", review.compute_flags(root)[pid])
 
 
 class ReviewAndExportTests(FixtureCase):
