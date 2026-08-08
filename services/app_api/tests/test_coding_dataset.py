@@ -456,6 +456,21 @@ class SchemaTests(FixtureCase):
         self.assertEqual(derived["demonstrated_grounding"], 0)
         self.assertEqual(derived["false_update_confirmation"], 1)
 
+    def test_top_level_outcome_requires_retention(self):
+        packet = {"scenario": {"outcome_levels": [{"score": i} for i in (1, 2, 3, 4)]}}
+        unit = {"unit_index": 1, "attempted": 1, "complete_raw": 1,
+                "delivery_utterance_ids": ["participant_001"],
+                "acknowledgement": 1, "update_claim": 1, "incorporation": 1,
+                "evidence_utterance_ids": {stage: ["participant_001"] for stage in
+                                           ("acknowledgement", "update_claim",
+                                            "incorporation", "retention")}}
+        failed = {"units": [dict(unit, retention=0)], "outcome": {"level": 4}}
+        self.assertTrue(any("outcome.level=4" in issue
+                            for issue in consistency_issues(failed, packet)))
+        held = {"units": [dict(unit, retention=1)], "outcome": {"level": 4}}
+        self.assertFalse(any("outcome.level" in issue
+                             for issue in consistency_issues(held, packet)))
+
     def test_verifier_verdicts_must_be_readable(self):
         self.assertEqual(validate_checks(
             {"checks": [{"field": "outcome.level", "verdict": "disagree",

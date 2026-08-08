@@ -110,7 +110,8 @@ troubles, code the one it principally addresses.
 
 A move counts whether the participant raises the trouble or produces the move
 in answer to the assistant: "no, mine is the April invoice" in reply to "your
-file lists the March invoice, correct?" is a repair move.
+file lists the March invoice, correct?" is a repair move. A plain agreement
+or confirmation is not, unless it re-confirms content after trouble.
 
 Categories, in priority order — where a move fits more than one, assign the
 first that applies:

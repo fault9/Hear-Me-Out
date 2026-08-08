@@ -196,7 +196,7 @@ def validate_checks(parsed: Any, required_fields: list[str] | None = None) -> li
     return errors
 
 
-def consistency_issues(labels: dict, _packet: dict) -> list[str]:
+def consistency_issues(labels: dict, packet: dict) -> list[str]:
     """Deterministic codebook rules that a structurally valid label set can
     still violate. Any issue flags the packet for human review."""
     issues: list[str] = []
@@ -222,6 +222,19 @@ def consistency_issues(labels: dict, _packet: dict) -> list[str]:
                               "was completely delivered")
             if value == 1 and not (unit.get("evidence_utterance_ids") or {}).get(stage):
                 issues.append(f"{where}.{stage}: positive label without evidence")
+    # The top outcome level requires the units present in the final state of
+    # the record, which is what retention codes: the same rule, so decide it
+    # here rather than leaving the coder and the verifier to argue it.
+    scores = [row.get("score")
+              for row in ((packet.get("scenario") or {}).get("outcome_levels") or [])
+              if isinstance(row, dict) and isinstance(row.get("score"), int)]
+    top = max(scores) if scores else None
+    if top is not None and (labels.get("outcome") or {}).get("level") == top:
+        issues += [f"outcome.level={top} requires the critical units present in "
+                   f"the final account, but units[{unit.get('unit_index')}]"
+                   ".retention is 0"
+                   for unit in labels.get("units") or []
+                   if unit.get("retention") == 0]
     probe = labels.get("final_probe") or {}
     account = labels.get("final_account_accuracy") or {}
     if (account.get("value") not in (None, "no_final_account")
