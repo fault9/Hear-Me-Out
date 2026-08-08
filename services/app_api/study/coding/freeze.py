@@ -26,6 +26,19 @@ _FINGERPRINT_PACKET = {
                                 "text": "t", "asr_ok": True}],
     "notes_for_coder": "",
 }
+# Enough of a label set to render the verifier template, whose field list is
+# derived from the labels rather than fixed.
+_FINGERPRINT_LABELS = {
+    "units": [{"unit_index": 1, "attempted": 1, "complete_raw": 1,
+               "acknowledgement": 1, "update_claim": 0, "incorporation": 1,
+               "retention": 0},
+              {"unit_index": 2, "attempted": 1, "complete_raw": 0,
+               "acknowledgement": None, "update_claim": None,
+               "incorporation": None, "retention": None}],
+    "repairs": [{"utterance_id": "participant_001", "category": "repetition"}],
+    "outcome": {"level": 1},
+    "final_account_accuracy": {"value": "accurate"},
+}
 
 
 def _sha(text: str) -> str:
@@ -40,6 +53,8 @@ def materials_fingerprint() -> dict:
         "judge_system_sha256": _sha(prompts.judge_system_prompt()),
         "judge_template_sha256": _sha(prompts.judge_user_prompt(_FINGERPRINT_PACKET)),
         "verifier_system_sha256": _sha(prompts.verifier_system_prompt()),
+        "verifier_template_sha256": _sha(prompts.verifier_user_prompt(
+            _FINGERPRINT_PACKET, _FINGERPRINT_LABELS)),
         "schema_version": SCHEMA_VERSION,
         "confidence_flag_threshold": CONFIDENCE_FLAG_THRESHOLD,
         "reliability_thresholds": RELIABILITY_THRESHOLDS,
