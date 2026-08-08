@@ -521,6 +521,33 @@ class RunnerTests(FixtureCase):
             (root / "labels" / "verifier" / f"{pid}.json").read_text())
         self.assertEqual(verdict["disagreements"], [])
 
+    def test_resume_retries_failures_and_fills_a_missing_verifier(self):
+        self._write_all_packets()
+        root = self._root()
+        freeze.freeze(root, {"model": "fake-model", "temperature": 0.0,
+                             "max_tokens": 1})
+
+        class Broken(FakeClient):
+            def complete(self, system: str, user: str) -> str:
+                return "not JSON"
+
+        self.assertTrue(runner.run_judging(
+            root, Broken(make_judge_labels()), pilot=False)["schema_failed"])
+
+        # A stored failure is retried rather than counted as coded.
+        result = runner.run_judging(root, FakeClient(make_judge_labels()),
+                                    pilot=False)
+        self.assertEqual(len(result["judged"]), 1)
+        self.assertEqual(result["skipped_existing"], [])
+
+        # A missing verifier record is filled without a second judge pass.
+        pid = result["judged"][0]
+        (root / "labels" / "verifier" / f"{pid}.json").unlink()
+        client = FakeClient(make_judge_labels())
+        self.assertEqual(
+            len(runner.run_judging(root, client, pilot=False)["judged"]), 1)
+        self.assertEqual(client.calls, 1)
+
     def test_unreadable_verifier_verdict_is_flagged_not_silent(self):
         """A verdict spelled outside the enum yields no disagreements, which
         would otherwise be indistinguishable from the verifier agreeing."""

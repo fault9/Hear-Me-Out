@@ -298,6 +298,19 @@ def verify_packet(packet: dict, labels: dict, client: LLMClient, root: Path) -> 
     }
 
 
+def _completed_labels(path: Path) -> dict | None:
+    """Labels from a stored judge record, or None when the packet still needs
+    coding. A failed attempt is not a coded packet: treating the file's mere
+    existence as done leaves it failed for the life of the dataset."""
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if record.get("schema_errors"):
+        return None
+    return record.get("labels")
+
+
 def run_judging(root: Path, client: LLMClient, pilot: bool = False,
                 only_packet_ids: set[str] | None = None,
                 skip_existing: bool = True) -> dict:
@@ -318,20 +331,25 @@ def run_judging(root: Path, client: LLMClient, pilot: bool = False,
         if only_packet_ids and pid not in only_packet_ids:
             continue
         judge_path = judge_dir / f"{pid}.json"
-        if skip_existing and judge_path.exists():
+        verifier_path = verifier_dir / f"{pid}.json"
+        labels = _completed_labels(judge_path) if skip_existing else None
+        if labels is not None and verifier_path.exists():
             skipped.append(pid)
             continue
         packet = json.loads((root / "packets" / f"{pid}.json").read_text())
-        result = judge_packet(packet, client, root)
-        result["pilot"] = pilot
-        judge_path.write_text(json.dumps(result, indent=2, sort_keys=True))
-        if result["labels"] is not None and not result["schema_errors"]:
-            verdict = verify_packet(packet, result["labels"], client, root)
-            verdict["pilot"] = pilot
-            (verifier_dir / f"{pid}.json").write_text(
-                json.dumps(verdict, indent=2, sort_keys=True))
-            done.append(pid)
-        else:
+        if labels is None:
+            result = judge_packet(packet, client, root)
+            result["pilot"] = pilot
+            judge_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+            labels = None if result["schema_errors"] else result["labels"]
+        if labels is None:
             failed.append(pid)
+            continue
+        # Reached with labels the judge produced this pass or a previous one,
+        # so an interrupted run resumes at the verifier instead of re-coding.
+        verdict = verify_packet(packet, labels, client, root)
+        verdict["pilot"] = pilot
+        verifier_path.write_text(json.dumps(verdict, indent=2, sort_keys=True))
+        done.append(pid)
     return {"judged": done, "skipped_existing": skipped,
             "schema_failed": failed}
