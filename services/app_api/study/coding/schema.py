@@ -170,8 +170,7 @@ def validate_labels(labels: dict, packet: dict) -> list[str]:
 
 def validate_checks(parsed: Any) -> list[str]:
     """Structural validation of a verifier response. Disagreement drives human
-    review, so an unreadable verdict has to surface as an error: silently
-    dropped checks are indistinguishable from agreement."""
+    review, so a dropped check is indistinguishable from agreement."""
     if not isinstance(parsed, dict):
         return ["verifier output: not a JSON object"]
     checks = parsed.get("checks")

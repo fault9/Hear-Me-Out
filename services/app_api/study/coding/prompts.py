@@ -1,11 +1,9 @@
 """Judge and verifier prompt construction.
 
-Rendering is deterministic: packet payloads are dumped with sorted keys, and
-the label skeleton keeps a fixed field order — units and repairs first, so the
-coder works through the evidence before the outcome and final-account labels
-that depend on it. The freeze manifest records SHA-256 hashes of the system
-prompts and of a fixed-packet rendering, so any post-freeze drift is
-detectable.
+Rendering is deterministic (packet payloads sorted, no timestamps) so the
+freeze manifest's hashes of the system prompts and of a fixed-packet rendering
+detect any post-freeze drift. The label skeleton keeps a fixed field order
+instead: units and repairs precede the outcome that follows from them.
 """
 
 from __future__ import annotations
@@ -15,9 +13,8 @@ from pathlib import Path
 
 CODEBOOK_PATH = Path(__file__).with_name("codebook.md")
 
-# Keys of a unit's evidence and confidence maps. Spelled out in the skeleton
-# rather than left as a placeholder because the deterministic consistency
-# checks look evidence up under exactly these names.
+# Keys of a unit's evidence and confidence maps, spelled out in the skeleton
+# because the consistency checks look evidence up under exactly these names.
 UNIT_LABELS = ("attempted", "complete_raw", "acknowledgement", "update_claim",
                "incorporation", "retention")
 
@@ -74,9 +71,7 @@ def _labels_skeleton(n_units: int) -> dict:
 
 
 def _shape_rules(n_units: int) -> str:
-    """Contract the skeleton cannot express on its own: which lists may be
-    empty, how the evidence and confidence keys are spelled, and that the
-    quoted descriptions are types rather than values."""
+    """The contract the skeleton cannot express on its own."""
     return (
         "Shape rules:\n"
         f"- `units` holds exactly {n_units} objects, with unit_index "
@@ -84,6 +79,8 @@ def _shape_rules(n_units: int) -> str:
         "- Every quoted value in the structure above is a description of the "
         "type expected there. Replace each one with a value of that type; "
         "never copy a description into your output.\n"
+        "- Numbers are JSON numbers, never quoted: write 0.92, not \"0.92\". "
+        "This applies to every confidence and to the outcome level.\n"
         "- The single object shown inside `repairs` and inside `access_flags` "
         "is an element template, not an example of expected output. Return an "
         "empty list when nothing in this interaction qualifies; do not add an "

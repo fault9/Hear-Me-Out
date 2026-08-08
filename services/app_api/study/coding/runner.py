@@ -26,22 +26,21 @@ from .packets import read_index
 from .schema import SCHEMA_VERSION, validate_checks, validate_labels
 
 DEFAULT_MODEL = os.environ.get("CODING_JUDGE_MODEL", "claude-sonnet-5")
-DEFAULT_MAX_TOKENS = int(os.environ.get("CODING_MAX_TOKENS", "4096"))
+# Generous because a reasoning model spends an unseen share of this budget on
+# reasoning it never returns; a cap sized for the label object alone truncates.
+DEFAULT_MAX_TOKENS = int(os.environ.get("CODING_MAX_TOKENS", "16384"))
 # An OpenAI-compatible endpoint (CODING_JUDGE_BASE_URL) selects that transport
 # instead of Anthropic's. Which provider coded the data is a data-governance
 # fact, so the base URL is recorded in the frozen decoding config.
 DEFAULT_BASE_URL = os.environ.get("CODING_JUDGE_BASE_URL", "")
-# JSON mode asks the endpoint to constrain decoding to a JSON object. Not
-# every OpenAI-compatible provider implements it, so it stays explicit
-# configuration (settled by `probe` before freezing) rather than something the
-# client discovers mid-run: a decoding setting that changed partway through
-# would leave packets coded under settings the freeze manifest does not name.
+# Not every OpenAI-compatible provider constrains decoding to JSON, so this is
+# explicit configuration settled by `probe` before freezing: a setting that
+# changed mid-run would leave packets coded outside the frozen manifest.
 DEFAULT_JSON_MODE = os.environ.get("CODING_JUDGE_JSON_MODE", "1") != "0"
 MAX_ATTEMPTS = 3
 RETRY_EXCERPT_CHARS = 2000
-# Transport retries for the stdlib endpoint client. A full pass is hundreds of
-# long requests, so rate limits and gateway blips are expected rather than
-# exceptional; a vendor SDK would absorb them, and this has to do it itself.
+# A full pass is hundreds of long requests, so rate limits and gateway blips
+# are ordinary rather than exceptional.
 REQUEST_TIMEOUT_S = 180.0
 RETRY_STATUSES = (408, 409, 429, 500, 502, 503, 504)
 MAX_HTTP_ATTEMPTS = 5
@@ -92,9 +91,9 @@ def _retry_after_seconds(headers) -> float | None:
 
 
 def request_with_retry(send, payload: dict) -> dict:
-    """Send `payload`, retrying transient transport failures with exponential
-    backoff. Non-retryable responses are raised with the endpoint's own body
-    text, which is the only place a rejected parameter is explained."""
+    """Retry transient transport failures with exponential backoff. Anything
+    else is raised with the endpoint's own body text, which is the only place
+    a rejected parameter is explained."""
     attempt = 0
     delay = RETRY_BASE_DELAY_S
     while True:
@@ -118,12 +117,9 @@ def request_with_retry(send, payload: dict) -> dict:
 
 class OpenAICompatibleClient(LLMClient):
     """Same contract against an OpenAI-compatible endpoint, so the judge can
-    run on an EU-hosted provider where the data governance requires it.
-
-    The request is one POST, so it goes over the standard library rather than
-    a vendor SDK: the pipeline should run on any machine that can reach the
-    endpoint without packages being provisioned there first.
-    """
+    run on an EU-hosted provider where the data governance requires it. The
+    request is one POST, so it goes over the standard library rather than a
+    vendor SDK the host machine would have to provision."""
 
     def __init__(self, model: str = DEFAULT_MODEL,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -164,11 +160,19 @@ class OpenAICompatibleClient(LLMClient):
             payload["response_format"] = {"type": "json_object"}
         body = request_with_retry(self._post, payload)
         try:
-            return body["choices"][0]["message"].get("content") or ""
+            choice = body["choices"][0]
+            content = choice["message"].get("content") or ""
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(
                 f"unexpected response shape from the coding endpoint: "
                 f"{json.dumps(body)[:500]}") from exc
+        if choice.get("finish_reason") == "length":
+            # Retrying cannot help, and the truncated remains would otherwise
+            # surface as an unexplained parse error three attempts later.
+            raise RuntimeError(
+                f"the endpoint stopped at max_tokens={self.max_tokens} after "
+                f"{len(content)} characters; raise CODING_MAX_TOKENS.")
+        return content
 
 
 def build_client(model: str = DEFAULT_MODEL,
@@ -179,10 +183,8 @@ def build_client(model: str = DEFAULT_MODEL,
 
 
 def probe_endpoint(client: LLMClient) -> dict:
-    """Pre-flight check: confirm the endpoint answers, and — where JSON mode
-    is configurable — report whether it accepts the constrained request. Run
-    before freezing so the decoding config is settled rather than discovered
-    partway through a coding run."""
+    """Pre-flight check: confirm the endpoint answers and report whether it
+    accepts JSON mode, so the decoding config is settled before freezing."""
     system = "Reply with a single JSON object and no other text."
     user = 'Return exactly {"ok": true}.'
 
@@ -204,15 +206,16 @@ def probe_endpoint(client: LLMClient) -> dict:
 
 
 def _parse_json_object(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
+    """Read the first JSON object out of the response. Slicing to the last
+    brace instead glues trailing content onto a complete object, and reports a
+    truncated one as a delimiter error in the middle of valid output."""
+    start = text.find("{")
+    if start < 0:
         raise ValueError("no JSON object in model output")
-    return json.loads(text[start:end + 1])
+    obj, _ = json.JSONDecoder().raw_decode(text, start)
+    if not isinstance(obj, dict):
+        raise ValueError("model output is not a JSON object")
+    return obj
 
 
 def _retry_prompt(user: str, raw: str, errors: list[str]) -> str:
