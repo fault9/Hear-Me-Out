@@ -168,7 +168,7 @@ def validate_labels(labels: dict, packet: dict) -> list[str]:
     return errors
 
 
-def validate_checks(parsed: Any) -> list[str]:
+def validate_checks(parsed: Any, required_fields: list[str] | None = None) -> list[str]:
     """Structural validation of a verifier response. Disagreement drives human
     review, so a dropped check is indistinguishable from agreement."""
     if not isinstance(parsed, dict):
@@ -177,6 +177,10 @@ def validate_checks(parsed: Any) -> list[str]:
     if not isinstance(checks, list) or not checks:
         return ["checks: must be a non-empty list of check objects"]
     errors: list[str] = []
+    if required_fields:
+        seen = {row.get("field") for row in checks if isinstance(row, dict)}
+        errors += [f"checks: no verdict for {field!r}"
+                   for field in required_fields if field not in seen]
     for i, row in enumerate(checks):
         where = f"checks[{i}]"
         if not isinstance(row, dict):

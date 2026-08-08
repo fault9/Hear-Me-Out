@@ -275,6 +275,7 @@ def judge_packet(packet: dict, client: LLMClient, root: Path) -> dict:
 def verify_packet(packet: dict, labels: dict, client: LLMClient, root: Path) -> dict:
     system = prompts.verifier_system_prompt()
     user = prompts.verifier_user_prompt(packet, labels)
+    required = prompts.label_field_paths(labels)
     checks: list[dict] = []
     errors: list[str] = []
     attempts = 0
@@ -286,7 +287,7 @@ def verify_packet(packet: dict, labels: dict, client: LLMClient, root: Path) -> 
         except ValueError as exc:
             errors = [str(exc)]
         else:
-            errors = validate_checks(parsed)
+            errors = validate_checks(parsed, required)
             checks = [row for row in (parsed.get("checks") or [])
                       if isinstance(row, dict)]
             if not errors:

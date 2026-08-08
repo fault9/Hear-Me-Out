@@ -124,12 +124,19 @@ class FakeClient:
                  verifier_payload: dict | None = None):
         self.judge_labels = judge_labels
         self.fail_first = fail_first
-        self.verifier_payload = verifier_payload or {
-            "checks": [{"field": "outcome.level", "verdict": "agree",
-                        "note": "criteria applied correctly"}],
+        self.verifier_payload = verifier_payload
+        self.calls = 0
+
+    @staticmethod
+    def _covering_checks(user: str) -> dict:
+        """One agreeing check per field the prompt asks about, so the fake
+        satisfies the same coverage rule a real verifier must."""
+        listed = user.split("verbatim) ====\n")[-1].splitlines()
+        return {
+            "checks": [{"field": f, "verdict": "agree", "note": "criteria met"}
+                       for f in listed if f.strip()],
             "summary": "labels hold up",
         }
-        self.calls = 0
 
     def decoding(self):
         return {"model": "fake-model", "temperature": 0.0, "max_tokens": 1}
@@ -137,7 +144,8 @@ class FakeClient:
     def complete(self, system: str, user: str) -> str:
         self.calls += 1
         if "adversarial verifier" in system:
-            return json.dumps(self.verifier_payload)
+            return json.dumps(self.verifier_payload
+                              or self._covering_checks(user))
         if self.fail_first and self.calls == 1:
             return "this is not JSON at all"
         return json.dumps(self.judge_labels)

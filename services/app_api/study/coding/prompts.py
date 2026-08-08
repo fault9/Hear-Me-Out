@@ -116,6 +116,18 @@ def judge_system_prompt() -> str:
         "response gaps, or any other timing outcome from the transcript. "
         "Those are derived separately from synchronized audio and system "
         "logs, and the transcript carries no timing information.\n\n"
+        "Four codebook rules are easy to pass over; check each one against "
+        "your labels before emitting them. A unit counts as delivered only "
+        "where the participant states its content, never where the assistant "
+        "volunteered it and the participant confirmed. Incorporation requires "
+        "the assistant to operationally use the content; acknowledging or "
+        "repeating it is not incorporation. The top outcome level requires "
+        "the bounded action and the critical units correctly present in the "
+        "final state of the record, and wrong-content replacement caps the "
+        "level below it. Repairs are read from every participant utterance in "
+        "order: overt corrections such as \"no\" or \"it should have said X\", "
+        "restarts, and re-confirmations after trouble all count, so an empty "
+        "list is right only where none occurred.\n\n"
         "Apply the codebook below exactly. Cite utterance ids as evidence for "
         "every non-null label. When evidence is genuinely ambiguous, choose "
         "the codebook-consistent label and lower your confidence rather than "
@@ -143,6 +155,18 @@ def judge_user_prompt(packet: dict) -> str:
     )
 
 
+def label_field_paths(labels: dict) -> list[str]:
+    """Every field the verifier owes a verdict on. Left to choose for itself
+    it checks a handful, and an unexamined label reads downstream exactly like
+    an unchallenged one."""
+    paths = [f"units[{unit.get('unit_index')}].{label}"
+             for unit in labels.get("units") or []
+             for label in UNIT_LABELS if unit.get(label) is not None]
+    paths += [f"repairs[{i}].category"
+              for i, _ in enumerate(labels.get("repairs") or [])]
+    return paths + ["repairs", "outcome.level", "final_account_accuracy.value"]
+
+
 def verifier_system_prompt() -> str:
     return (
         "You are an adversarial verifier for coded labels in a conversation-"
@@ -160,9 +184,11 @@ def verifier_system_prompt() -> str:
         "Respond with a single JSON object: {\"checks\": [{\"field\": "
         "\"<label path, e.g. units[1].incorporation or outcome.level>\", "
         "\"verdict\": \"agree|disagree|uncertain\", \"note\": \"one line\"}], "
-        "\"summary\": \"one or two sentences\"}. Include one check per unit "
-        "label, one for each repair move, one for outcome.level, and one for "
-        "final_account_accuracy.value. Write each verdict as exactly one of "
+        "\"summary\": \"one or two sentences\"}. The user message lists the "
+        "fields to check: return exactly one check for each, copying the "
+        "field string verbatim. The bare field `repairs` asks whether the set "
+        "of repair moves is complete, so disagree there when the participant "
+        "made a move the coder did not record. Write each verdict as one of "
         "the lowercase words agree, disagree, or uncertain — no other spelling "
         "is read. Every disagree or uncertain check must carry a note naming "
         "the codebook rule or the utterance the label fails against.\n\n"
@@ -178,4 +204,6 @@ def verifier_user_prompt(packet: dict, labels: dict) -> str:
         + json.dumps(packet["utterances"], indent=2, sort_keys=True)
         + "\n\n==== CODER LABELS TO VERIFY ====\n"
         + json.dumps(labels, indent=2, sort_keys=True)
+        + "\n\n==== FIELDS TO CHECK (one check each, verbatim) ====\n"
+        + "\n".join(label_field_paths(labels))
     )
