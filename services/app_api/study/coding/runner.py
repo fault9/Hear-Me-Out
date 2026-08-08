@@ -184,9 +184,14 @@ def build_client(model: str = DEFAULT_MODEL,
 
 def probe_endpoint(client: LLMClient) -> dict:
     """Pre-flight check: confirm the endpoint answers and report whether it
-    accepts JSON mode, so the decoding config is settled before freezing."""
+    accepts JSON mode, so the decoding config is settled before freezing. The
+    request is shaped like a label object because a trivial one stays
+    satisfiable even where constrained decoding is broken."""
     system = "Reply with a single JSON object and no other text."
-    user = 'Return exactly {"ok": true}.'
+    user = ('Return one JSON object holding "items", a list of two objects '
+            'each with "index" (1 then 2), "score" (a number in [0,1]), '
+            '"flag" (0 or 1) and "note" (null in the first, a short sentence '
+            'in the second); and "summary", one sentence.')
 
     def attempt() -> dict:
         try:
@@ -320,6 +325,12 @@ def run_judging(root: Path, client: LLMClient, pilot: bool = False,
             "Coding materials are not frozen (or drifted since freezing): "
             f"{status}. Run `python -m study.coding freeze` first, or pass "
             "--pilot for pilot-only runs.")
+    # The manifest names the decoding settings as well as the materials, and
+    # an unexported environment variable silently changes them.
+    if not pilot and status.get("decoding") != client.decoding():
+        raise RuntimeError(
+            f"decoding differs from the freeze manifest: frozen="
+            f"{status.get('decoding')} current={client.decoding()}")
     judge_dir = root / "labels" / "judge"
     verifier_dir = root / "labels" / "verifier"
     judge_dir.mkdir(parents=True, exist_ok=True)

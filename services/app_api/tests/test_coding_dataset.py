@@ -34,6 +34,10 @@ from study.turn_verification import finalize as finalize_turn_verification  # no
 FINAL_PROMPT = ("Please tell me what information is now recorded, whether a "
                 "review was opened, and what happens next.")
 
+# Must match FakeClient.decoding(): judging refuses to run under settings the
+# freeze manifest does not name.
+FAKE_DECODING = {"model": "fake-model", "temperature": 0.0, "max_tokens": 1}
+
 UTTERANCES = [
     ("participant_001", "participant", 5000, 8000,
      "I'm calling about a declined warranty request."),
@@ -506,8 +510,7 @@ class RunnerTests(FixtureCase):
     def test_judge_retry_then_success_and_freeze_valid(self):
         self._write_all_packets()
         root = self._root()
-        freeze.freeze(root, {"model": "fake-model", "temperature": 0.0,
-                             "max_tokens": 1})
+        freeze.freeze(root, FAKE_DECODING)
         self.assertTrue(freeze.manifest_status(root)["valid"])
         client = FakeClient(make_judge_labels(), fail_first=True)
         result = runner.run_judging(root, client, pilot=False)
@@ -524,8 +527,7 @@ class RunnerTests(FixtureCase):
     def test_resume_retries_failures_and_fills_a_missing_verifier(self):
         self._write_all_packets()
         root = self._root()
-        freeze.freeze(root, {"model": "fake-model", "temperature": 0.0,
-                             "max_tokens": 1})
+        freeze.freeze(root, FAKE_DECODING)
 
         class Broken(FakeClient):
             def complete(self, system: str, user: str) -> str:
@@ -553,8 +555,7 @@ class RunnerTests(FixtureCase):
         would otherwise be indistinguishable from the verifier agreeing."""
         self._write_all_packets()
         root = self._root()
-        freeze.freeze(root, {"model": "fake-model", "temperature": 0.0,
-                             "max_tokens": 1})
+        freeze.freeze(root, FAKE_DECODING)
         client = FakeClient(make_judge_labels(), verifier_payload={
             "checks": [{"field": "outcome.level", "verdict": "Disagree",
                         "note": "level 4 needs the bounded action"}],
@@ -571,8 +572,7 @@ class ReviewAndExportTests(FixtureCase):
     def _run_pipeline(self, human_outcome_level=4):
         self._write_all_packets()
         root = self._root()
-        freeze.freeze(root, {"model": "fake-model", "temperature": 0.0,
-                             "max_tokens": 1})
+        freeze.freeze(root, FAKE_DECODING)
         client = FakeClient(make_judge_labels(low_confidence=True))
         runner.run_judging(root, client, pilot=False)
         flags = review.compute_flags(root)
@@ -617,7 +617,7 @@ class ReviewAndExportTests(FixtureCase):
     def test_sampling_is_deterministic(self):
         self._write_all_packets()
         root = self._root()
-        freeze.freeze(root, {"model": "f", "temperature": 0.0, "max_tokens": 1})
+        freeze.freeze(root, FAKE_DECODING)
         runner.run_judging(root, FakeClient(make_judge_labels()), pilot=False)
         first = review.stratified_sample(root, seed=42)
         second = review.stratified_sample(root, seed=42)
@@ -636,8 +636,7 @@ class ReviewAndExportTests(FixtureCase):
     def test_failed_reliability_queues_every_remaining_valid_packet(self):
         self._write_all_packets()
         root = self._root()
-        freeze.freeze(root, {"model": "fake", "temperature": 0.0,
-                             "max_tokens": 1})
+        freeze.freeze(root, FAKE_DECODING)
         runner.run_judging(root, FakeClient(make_judge_labels()), pilot=False)
         report = agreement.agreement_report(root)
 
@@ -916,7 +915,7 @@ class TransmittedGatingTests(FixtureCase):
     def _judge_and_finalize(self):
         self._write_all_packets()
         root = self._root()
-        freeze.freeze(root, {"model": "f", "temperature": 0.0, "max_tokens": 1})
+        freeze.freeze(root, FAKE_DECODING)
         runner.run_judging(root, FakeClient(make_judge_labels()), pilot=False)
         review.finalize(root)
         pid = read_index(root)[0]["packet_id"]
