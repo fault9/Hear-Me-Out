@@ -5,12 +5,15 @@ is faked)."""
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -456,6 +459,39 @@ class SchemaTests(FixtureCase):
     def test_low_confidence_detection(self):
         fields = low_confidence_fields(make_judge_labels(low_confidence=True))
         self.assertIn("units[1].acknowledgement", fields)
+
+
+class TransportRetryTests(unittest.TestCase):
+    """The endpoint client talks to the provider over the standard library, so
+    it absorbs rate limits and gateway blips itself."""
+
+    @staticmethod
+    def _http_error(code: int, body: bytes = b"", headers: dict | None = None):
+        return urllib.error.HTTPError(
+            "https://endpoint/v1/chat/completions", code, "err",
+            headers or {}, io.BytesIO(body))
+
+    def test_rate_limit_is_retried_then_succeeds(self):
+        attempts = []
+
+        def send(payload):
+            attempts.append(payload)
+            if len(attempts) < 3:
+                raise self._http_error(429, headers={"Retry-After": "0"})
+            return {"ok": True}
+
+        with mock.patch.object(runner.time, "sleep") as sleep:
+            self.assertEqual(runner.request_with_retry(send, {"m": 1}), {"ok": True})
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_rejected_parameter_surfaces_the_endpoint_body(self):
+        def send(payload):
+            raise self._http_error(400, b'{"error":"response_format unsupported"}')
+
+        with self.assertRaises(RuntimeError) as caught:
+            runner.request_with_retry(send, {})
+        self.assertIn("response_format unsupported", str(caught.exception))
 
 
 class RunnerTests(FixtureCase):

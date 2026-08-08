@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from . import prompts
@@ -37,6 +39,14 @@ DEFAULT_BASE_URL = os.environ.get("CODING_JUDGE_BASE_URL", "")
 DEFAULT_JSON_MODE = os.environ.get("CODING_JUDGE_JSON_MODE", "1") != "0"
 MAX_ATTEMPTS = 3
 RETRY_EXCERPT_CHARS = 2000
+# Transport retries for the stdlib endpoint client. A full pass is hundreds of
+# long requests, so rate limits and gateway blips are expected rather than
+# exceptional; a vendor SDK would absorb them, and this has to do it itself.
+REQUEST_TIMEOUT_S = 180.0
+RETRY_STATUSES = (408, 409, 429, 500, 502, 503, 504)
+MAX_HTTP_ATTEMPTS = 5
+RETRY_BASE_DELAY_S = 2.0
+RETRY_MAX_DELAY_S = 60.0
 
 
 class LLMClient:
@@ -74,44 +84,91 @@ class LLMClient:
                        if getattr(block, "type", "") == "text")
 
 
+def _retry_after_seconds(headers) -> float | None:
+    try:
+        return min(max(0.0, float(headers.get("Retry-After"))), RETRY_MAX_DELAY_S)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def request_with_retry(send, payload: dict) -> dict:
+    """Send `payload`, retrying transient transport failures with exponential
+    backoff. Non-retryable responses are raised with the endpoint's own body
+    text, which is the only place a rejected parameter is explained."""
+    attempt = 0
+    delay = RETRY_BASE_DELAY_S
+    while True:
+        attempt += 1
+        last = attempt >= MAX_HTTP_ATTEMPTS
+        try:
+            return send(payload)
+        except urllib.error.HTTPError as exc:  # a subclass of OSError below
+            if last or exc.code not in RETRY_STATUSES:
+                detail = exc.read().decode(errors="replace")[:500] if exc.fp else ""
+                raise RuntimeError(
+                    f"coding endpoint returned HTTP {exc.code}: {detail}") from exc
+            wait = _retry_after_seconds(exc.headers) or delay
+        except OSError:  # connection reset, DNS failure, read timeout
+            if last:
+                raise
+            wait = delay
+        time.sleep(wait)
+        delay = min(delay * 2, RETRY_MAX_DELAY_S)
+
+
 class OpenAICompatibleClient(LLMClient):
     """Same contract against an OpenAI-compatible endpoint, so the judge can
-    run on an EU-hosted provider where the data governance requires it."""
+    run on an EU-hosted provider where the data governance requires it.
+
+    The request is one POST, so it goes over the standard library rather than
+    a vendor SDK: the pipeline should run on any machine that can reach the
+    endpoint without packages being provisioned there first.
+    """
 
     def __init__(self, model: str = DEFAULT_MODEL,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
                  base_url: str = DEFAULT_BASE_URL,
                  json_mode: bool = DEFAULT_JSON_MODE):
         super().__init__(model=model, max_tokens=max_tokens)
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
         self.json_mode = json_mode
 
     def decoding(self) -> dict:
         return {**super().decoding(), "base_url": self.base_url,
                 "json_mode": self.json_mode}
 
+    def _post(self, payload: dict) -> dict:
+        key = os.environ.get("CODING_JUDGE_API_KEY", "")
+        if not key:
+            raise RuntimeError(
+                "CODING_JUDGE_API_KEY is not set; the coding endpoint needs a "
+                "bearer token.")
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {key}"},
+            method="POST")
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
+            return json.loads(response.read().decode())
+
     def complete(self, system: str, user: str) -> str:
-        if self._client is None:
-            try:
-                import openai
-            except ImportError as exc:  # pragma: no cover - environment-specific
-                raise RuntimeError(
-                    "The 'openai' package is required for an OpenAI-compatible "
-                    "endpoint. Install it (uv add openai) and set "
-                    "CODING_JUDGE_API_KEY.") from exc
-            self._client = openai.OpenAI(
-                base_url=self.base_url,
-                api_key=os.environ.get("CODING_JUDGE_API_KEY") or None)
-        response = self._client.chat.completions.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-            **({"response_format": {"type": "json_object"}}
-               if self.json_mode else {}),
-        )
-        return response.choices[0].message.content or ""
+        payload = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+        }
+        if self.json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        body = request_with_retry(self._post, payload)
+        try:
+            return body["choices"][0]["message"].get("content") or ""
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                f"unexpected response shape from the coding endpoint: "
+                f"{json.dumps(body)[:500]}") from exc
 
 
 def build_client(model: str = DEFAULT_MODEL,
