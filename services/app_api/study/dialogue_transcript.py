@@ -14,7 +14,7 @@ from typing import Any, Callable
 from .artifacts import atomic_write_json, file_record
 from .turn_taking import group_turns
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v10"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v11"
 # Transient starvation in the browser drops quiet capture buffers, so the
 # participant recording holds fewer seconds than it spans and every later
 # participant event is placed earlier than it happened. The assistant track is
