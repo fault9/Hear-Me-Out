@@ -4,8 +4,8 @@ import unittest
 import wave
 from pathlib import Path
 
-from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA, _rescaled,
-                                       capture_scale,
+from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA,
+                                       capture_scale, capture_time_map,
                                        prepare_dialogue_transcript)
 
 
@@ -29,10 +29,16 @@ class DialogueTranscriptTests(unittest.TestCase):
         self.assertEqual(capture_scale(path, [{"end_ms": 10100.0}]), 1.0)
         self.assertEqual(capture_scale(path, []), 1.0)
 
-    def test_rescale_holds_the_capture_origin_fixed(self):
-        rows = _rescaled([{"start_ms": 1000.0, "end_ms": 2000.0}], 2.0,
-                         ("start_ms", "end_ms"), 1000.0)
-        self.assertEqual((rows[0]["start_ms"], rows[0]["end_ms"]), (1000.0, 3000.0))
+    def test_recovered_time_lands_in_the_silences_not_the_speech(self):
+        """What went missing is quiet, so an utterance keeps the duration it
+        was recorded with and only the gaps absorb the shortfall."""
+        intervals = [{"start_ms": 5000.0, "end_ms": 10000.0},
+                     {"start_ms": 20000.0, "end_ms": 25000.0}]
+        mapped = capture_time_map(intervals, 1.5, 0.0, 40000.0)
+        self.assertAlmostEqual(mapped(10000.0) - mapped(5000.0), 5000.0, places=6)
+        self.assertAlmostEqual(mapped(25000.0) - mapped(20000.0), 5000.0, places=6)
+        self.assertAlmostEqual(mapped(40000.0), 60000.0, places=6)
+        self.assertEqual(capture_time_map(intervals, 1.0, 0.0, 40000.0)(7777.0), 7777.0)
 
     def test_uses_timing_boundaries_and_preserves_route_switches(self):
         with tempfile.TemporaryDirectory() as temporary:

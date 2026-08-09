@@ -358,6 +358,16 @@ def _merge_assistant_runs(utterances: list[dict],
     return merged
 
 
+def captured_duration_ms(raw_path: Path) -> float:
+    import wave
+
+    try:
+        with wave.open(str(raw_path)) as handle:
+            return handle.getnframes() / handle.getframerate() * 1000.0
+    except (OSError, wave.Error):
+        return 0.0
+
+
 def capture_scale(raw_path: Path, assistant_intervals: list[dict]) -> float:
     """Wall-clock seconds per recorded second of participant audio.
 
@@ -366,13 +376,7 @@ def capture_scale(raw_path: Path, assistant_intervals: list[dict]) -> float:
     to be intact. Returns 1.0 whenever the recording covers the session, so a
     healthy transcript is byte-identical to one built without this.
     """
-    import wave
-
-    try:
-        with wave.open(str(raw_path)) as handle:
-            captured_ms = handle.getnframes() / handle.getframerate() * 1000.0
-    except (OSError, wave.Error):
-        return 1.0
+    captured_ms = captured_duration_ms(raw_path)
     span_ms = max((float(row["end_ms"]) for row in assistant_intervals), default=0.0)
     if captured_ms <= 0 or span_ms <= 0:
         return 1.0
@@ -380,13 +384,43 @@ def capture_scale(raw_path: Path, assistant_intervals: list[dict]) -> float:
     return scale if scale - 1.0 > CAPTURE_SHORTFALL_TOLERANCE else 1.0
 
 
-def _rescaled(rows: list[dict], scale: float, keys: tuple[str, ...],
-              origin: float = 0.0) -> list[dict]:
-    """Stretch times about the capture origin, which is a wall-clock anchor
-    and must not be scaled along with the offsets measured from it."""
+def capture_time_map(intervals: list[dict], scale: float, origin: float,
+                     captured_ms: float) -> Callable[[float], float]:
+    """Map recorded time to wall-clock time for a session that lost buffers.
+
+    What went missing is silence, so speech keeps the duration it was recorded
+    with and the shortfall is shared out across the quiet stretches in
+    proportion to the quiet each already holds. Stretching everything by one
+    factor instead inflates each utterance by the same ratio, which places
+    early turns late whenever the participant fell quiet more later on.
+    """
     if scale == 1.0:
-        return rows
-    return [{**row, **{key: origin + (float(row[key]) - origin) * scale
+        return lambda ms: ms
+    speech = sorted(((float(row["start_ms"]), float(row["end_ms"]))
+                     for row in intervals), key=lambda pair: pair[0])
+    end = max(captured_ms, speech[-1][1] if speech else 0.0)
+    gaps, cursor = [], origin
+    for start, stop in speech:
+        gaps.append((cursor, max(start, cursor)))
+        cursor = max(stop, cursor)
+    gaps.append((cursor, max(end, cursor)))
+    quiet = sum(stop - start for start, stop in gaps)
+    missing = (end - origin) * (scale - 1.0)
+    if quiet <= 0:
+        return lambda ms: origin + (ms - origin) * scale
+    stretch = 1.0 + missing / quiet
+
+    def mapped(ms: float) -> float:
+        shift = sum(min(max(ms - start, 0.0), stop - start) * (stretch - 1.0)
+                    for start, stop in gaps)
+        return ms + shift
+
+    return mapped
+
+
+def _remapped(rows: list[dict], mapped: Callable[[float], float],
+              keys: tuple[str, ...]) -> list[dict]:
+    return [{**row, **{key: mapped(float(row[key]))
                        for key in keys if row.get(key) is not None}}
             for row in rows]
 
@@ -411,17 +445,22 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
     model_fragments = transcript.get("model") or []
     origin_ms = _capture_origin_ms(session_dir, timing)
     scale = capture_scale(raw_path, assistant_intervals)
-    participant_intervals = _rescaled(
-        participant_intervals, scale, ("start_ms", "end_ms"), origin_ms)
+    mapped = capture_time_map(participant_intervals, scale, origin_ms,
+                              captured_duration_ms(raw_path))
+    participant_intervals = _remapped(
+        participant_intervals, mapped, ("start_ms", "end_ms"))
     end_ms = max(
         [float(row["end_ms"]) for row in participant_intervals + assistant_intervals],
         default=0.0,
     )
     regions = _route_regions(session, timing, end_ms)
     units = participant_units(participant_intervals)
-    words = _rescaled(
-        (transcriber or transcribe_words)(str(raw_path)).get("words") or [],
-        scale, ("start", "end"))
+    # Word times are file-relative seconds; the map works on the browser clock.
+    words = [{**word, **{key: (mapped(origin_ms + float(word[key]) * 1000.0)
+                               - origin_ms) / 1000.0
+                         for key in ("start", "end") if word.get(key) is not None}}
+             for word in (transcriber or transcribe_words)(
+                 str(raw_path)).get("words") or []]
     participant = _participant_utterances(units, origin_ms, regions, words)
     assistant, unassigned = _assistant_utterances(
         model_fragments, assistant_intervals)
