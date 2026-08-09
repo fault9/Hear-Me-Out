@@ -22,6 +22,24 @@ from .schema import (ACCESS_FLAG_TYPES, FINAL_ACCOUNT_VALUES,
                      validate_labels)
 
 UNIT_LABELS = ("attempted", "complete_raw") + GROUNDING_STAGES
+# Hover text on the label, so the codebook rule is one pointer away rather
+# than one scroll away. Abbreviated from sections 3 and 4.
+LABEL_HELP = {
+    "attempted": "Any identifiable attempt to convey the unit, however partial.",
+    "complete_raw": "The unit's full content appears in the participant's raw "
+                    "speech, in one utterance or across several. Paraphrase "
+                    "counts; specific content must be there.",
+    "acknowledgement": "The assistant verbally registers the unit: repetition, "
+                       "confirmation, explicit acceptance.",
+    "update_claim": "The assistant explicitly claims to have recorded, updated, "
+                    "corrected or accepted the unit or its record.",
+    "incorporation": "Later reasoning or decisions operationally use the unit "
+                     "correctly. Contradicted content is not incorporation.",
+    "retention": "The unit is correctly present in the final-probe response. "
+                 "Null when there is no probe and no spontaneous account.",
+    "delivery ids": "The minimal ordered participant utterances that jointly "
+                    "complete the unit. Empty when complete_raw is 0.",
+}
 # attempted is the one unit label the schema will not accept as null.
 BINARY_ONLY = ("attempted",)
 
@@ -66,6 +84,15 @@ def _pane(child, width: str):
 
     return widgets.Box([child], layout=widgets.Layout(
         width=width, height="840px", overflow="auto", display="block"))
+
+
+def _field_label(name: str):
+    """A unit label carrying its codebook rule as hover text."""
+    import ipywidgets as widgets
+
+    return widgets.HTML(
+        f"<code title='{LABEL_HELP.get(name, '')}' style='width:120px;"
+        f"display:inline-block;cursor:help'>{name}</code>")
 
 
 def _levels_html(rows: list[dict]) -> str:
@@ -196,13 +223,10 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
                 all_ids, (unit.get("evidence_utterance_ids") or {}).get(name))
             fields[name] = {"value": toggle, "confidence": conf,
                             "evidence": evidence}
-            rows.append(widgets.HBox([
-                widgets.HTML(f"<code style='width:120px;display:inline-block'>"
-                             f"{name}</code>"), toggle, conf, evidence]))
+            rows.append(widgets.HBox(
+                [_field_label(name), toggle, conf, evidence]))
         delivery = _tags(participant_ids, unit.get("delivery_utterance_ids"))
-        rows.insert(0, widgets.HBox([
-            widgets.HTML("<code style='width:120px;display:inline-block'>"
-                         "delivery ids</code>"), delivery]))
+        rows.insert(0, widgets.HBox([_field_label("delivery ids"), delivery]))
         fields["delivery"] = delivery
         fields["unit_index"] = unit.get("unit_index")
         return fields, widgets.VBox(rows)
@@ -277,11 +301,19 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
 
         unit_boxes.clear()
         boxes = []
+        # A unit is one of the scenario's critical facts, and its number means
+        # nothing without it: numbered alone, the coder reads the brief again
+        # for every row.
+        definitions = (packet.get("scenario") or {}).get("unit_definitions") or []
         for unit in labels.get("units") or []:
             fields, box = _unit_box(unit, packet)
             unit_boxes.append(fields)
-            boxes.append(widgets.VBox(
-                [widgets.HTML(f"<b>Unit {fields['unit_index']}</b>"), box]))
+            index = fields["unit_index"]
+            defined = (definitions[index - 1]
+                       if isinstance(index, int) and 1 <= index <= len(definitions)
+                       else "")
+            boxes.append(widgets.VBox([
+                widgets.HTML(f"<b>Unit {index}</b> &mdash; {defined}"), box]))
         units_area.children = tuple(boxes)
 
         repair_rows.clear()
