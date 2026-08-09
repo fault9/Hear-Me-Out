@@ -218,15 +218,18 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
             options.append(("null", None))
         if value not in [v for _, v in options]:
             value = options[0][1]
+        # Wide enough for three buttons whatever this label offers: too narrow
+        # and they wrap one per line, so the row reads as a column. Fixed
+        # rather than fitted, to keep the columns after it in line.
         return widgets.ToggleButtons(
-            options=options, value=value, style={"button_width": "48px"},
-            layout=widgets.Layout(width="170px"))
+            options=options, value=value, style={"button_width": "52px"},
+            layout=widgets.Layout(width="184px"))
 
-    def _tags(allowed: list[str], value) -> "widgets.TagsInput":
+    def _tags(allowed: list[str], value, width: str = "520px"):
         return widgets.TagsInput(
             value=[v for v in (value or []) if v in allowed],
             allowed_tags=allowed, allow_duplicates=False,
-            layout=widgets.Layout(width="520px"))
+            layout=widgets.Layout(width=width))
 
     def _unit_box(unit: dict, packet: dict):
         rows, fields = [], {}
@@ -237,14 +240,20 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
                 min=0, max=1, step=0.01,
                 value=float((unit.get("confidence") or {}).get(name) or 0.9),
                 layout=widgets.Layout(width="80px"))
+            # Narrower than the row it shares: label, toggles and confidence
+            # already take half the column, and an overflowing row breaks.
             evidence = _tags(
-                all_ids, (unit.get("evidence_utterance_ids") or {}).get(name))
+                all_ids, (unit.get("evidence_utterance_ids") or {}).get(name),
+                width="330px")
             fields[name] = {"value": toggle, "confidence": conf,
                             "evidence": evidence}
             rows.append(widgets.HBox(
-                [_field_label(name), toggle, conf, evidence]))
+                [_field_label(name), toggle, conf, evidence],
+                layout=widgets.Layout(align_items="center")))
         delivery = _tags(participant_ids, unit.get("delivery_utterance_ids"))
-        rows.insert(0, widgets.HBox([_field_label("delivery ids"), delivery]))
+        rows.insert(0, widgets.HBox(
+            [_field_label("delivery ids"), delivery],
+            layout=widgets.Layout(align_items="center")))
         fields["delivery"] = delivery
         fields["unit_index"] = unit.get("unit_index")
         return fields, widgets.VBox(rows)
