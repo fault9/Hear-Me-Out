@@ -10,6 +10,11 @@ from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA,
 
 
 class DialogueTranscriptTests(unittest.TestCase):
+    @staticmethod
+    def _no_slices(_path: str, windows) -> list[list[dict]]:
+        """Whatever these tests leave empty, they are not testing the reread."""
+        return [[] for _ in windows]
+
     def _write_wav(self, path: Path, duration_s: float = 5.0) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(path), "wb") as wav:
@@ -182,7 +187,7 @@ class DialogueTranscriptTests(unittest.TestCase):
                         "status": "complete", "error": None}
 
             result = prepare_dialogue_transcript(
-                session, root, "analysis-2", timing, transcribe)
+                session, root, "analysis-2", timing, transcribe, self._no_slices)
 
             # Nothing separates the two fragments, so they are one turn, and
             # every word the model emitted survives exactly once.
@@ -236,7 +241,7 @@ class DialogueTranscriptTests(unittest.TestCase):
                         "status": "complete", "error": None}
 
             result = prepare_dialogue_transcript(
-                session, root, "analysis-3", timing, transcribe)
+                session, root, "analysis-3", timing, transcribe, self._no_slices)
 
             self.assertEqual([row["speaker"] for row in result["utterances"]],
                              ["assistant", "participant", "assistant"])
@@ -405,7 +410,7 @@ class DialogueTranscriptTests(unittest.TestCase):
                         "status": "complete", "error": None}
 
             result = prepare_dialogue_transcript(
-                session, root, "analysis-6", timing, transcribe)
+                session, root, "analysis-6", timing, transcribe, self._no_slices)
 
             assistants = [row for row in result["utterances"]
                           if row["speaker"] == "assistant"]
@@ -459,13 +464,73 @@ class DialogueTranscriptTests(unittest.TestCase):
                         "status": "complete", "error": None}
 
             result = prepare_dialogue_transcript(
-                session, root, "analysis-4", timing, transcribe)
+                session, root, "analysis-4", timing, transcribe, self._no_slices)
 
             assistants = [row for row in result["utterances"]
                           if row["speaker"] == "assistant"]
             self.assertEqual([row["text"] for row in assistants],
                              ["One moment please.",
                               "Yes, I found your assignment."])
+
+    def test_a_long_empty_unit_is_read_again_and_a_short_one_is_not(self):
+        """The whole-file pass returns nothing for a reference number spoken
+        flatly after a pause. Re-reading the unit recovers it; doing the same
+        to a sub-second unit only invents stock politeness."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = Path("sessions/test/participant_raw.wav")
+            raw_path = root / relative
+            self._write_wav(raw_path, duration_s=10.0)
+            (raw_path.parent / "client_timeline.json").write_text(json.dumps({
+                "capture": {"sample_rate_hz": 16000, "chunks": [{
+                    "chunk_sequence": 1, "capture_start_sample": 0,
+                    "sample_count": 2048, "timeline_start_ms": 0.0}]}}))
+            session = {
+                "session_id": "P1_R01_S02_A01",
+                "voice_condition": "natural",
+                "files": {"participant_raw": str(relative)},
+                "transcript": {"model": [
+                    {"text": "Thank you.", "start": 4.0, "end": 4.5,
+                     "speaker": "personaplex"}]},
+            }
+            timing = {
+                "schema": "hmo.timing-analysis.v4",
+                "status": "estimated_pending_validation",
+                "participant_intervals": [
+                    {"start_ms": 2000.0, "end_ms": 3200.0, "detector": "rms"},
+                    {"start_ms": 6000.0, "end_ms": 6400.0, "detector": "rms"},
+                ],
+                "assistant_intervals": [
+                    {"start_ms": 4000.0, "end_ms": 4500.0, "detector": "rms"}],
+                "route_switches": [], "overlaps": [], "barge_ins": [],
+                "integrity": {"participant_capture_latency_correction_ms": 0.0},
+                "result_artifact": {"path": "analysis/timing/timing.json"},
+            }
+            asked = []
+
+            def transcribe(_path: str) -> dict:
+                return {"status": "complete", "error": None, "words": []}
+
+            def slice_words(_path: str, windows) -> list[list[dict]]:
+                asked.extend(windows)
+                return [[{"word": "One", "start": 2.1, "end": 2.4},
+                         {"word": "two.", "start": 2.5, "end": 2.9}]]
+
+            result = prepare_dialogue_transcript(
+                session, root, "analysis-7", timing, transcribe, slice_words)
+
+            participants = [row for row in result["utterances"]
+                            if row["speaker"] == "participant"]
+            self.assertEqual(asked, [(2.0, 3.2)])
+            self.assertEqual(participants[0]["text"], "One two.")
+            self.assertEqual(participants[0]["text_provenance"]["method"],
+                             "whisper_word_timestamps_unit_slice")
+            self.assertEqual(participants[0]["text_provenance"]["word_count"], 2)
+            self.assertEqual(
+                participants[0]["text_provenance"]["speech_start_ms"], 2100.0)
+            self.assertEqual(participants[1]["text"], "")
+            self.assertEqual(participants[1]["text_provenance"]["method"],
+                             "whisper_word_timestamps_whole_file")
 
 
 if __name__ == "__main__":

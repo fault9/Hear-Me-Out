@@ -6,6 +6,7 @@ import bisect
 import copy
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -13,7 +14,7 @@ from typing import Any, Callable
 from .artifacts import atomic_write_json, file_record
 from .turn_taking import group_turns
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v9"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v10"
 # Transient starvation in the browser drops quiet capture buffers, so the
 # participant recording holds fewer seconds than it spans and every later
 # participant event is placed earlier than it happened. The assistant track is
@@ -31,8 +32,13 @@ _ASR_PADDING_MS = 200.0
 # any unit it brushes - one reached 9.5 s and pulled its text into a turn it
 # was never spoken in. Placement uses at most this much of a word.
 _MAX_WORD_MS = 2000.0
+# A unit the whole-file pass left empty is transcribed again on its own, but
+# only past this length: below it a slice is breath or playback bleed, which
+# the recognizer answers with stock politeness. See words_by_unit.
+_SLICE_FALLBACK_MS = 1000.0
 
 Transcriber = Callable[[str], dict]
+Slicer = Callable[[str, list[tuple[float, float]]], list[list[dict]]]
 
 
 def _capture_origin_ms(session_dir: Path, timing: dict) -> float:
@@ -193,6 +199,45 @@ def transcribe_words(path: str) -> dict:
     return {"words": words, "status": "complete", "error": None}
 
 
+def transcribe_slices(path: str,
+                      windows: list[tuple[float, float]]) -> list[list[dict]]:
+    """Transcribe the speech units the whole-file pass returned no words for.
+
+    Decoding the capture in one go drops a short, flatly spoken turn: a
+    reference number read out after a pause came back as nothing at all, on 59
+    of 1226 participant turns. The same model recovers it from the unit alone.
+    Word times are returned on the file clock, as the whole-file words are.
+    """
+    import soundfile as sf
+
+    model = _word_model()
+    grouped: list[list[dict]] = []
+    for start_s, end_s in windows:
+        words = []
+        with tempfile.NamedTemporaryFile(suffix=".wav") as slice_file:
+            with sf.SoundFile(path) as source:
+                source.seek(int(start_s * source.samplerate))
+                sf.write(slice_file.name,
+                         source.read(int(max(0.0, end_s - start_s)
+                                         * source.samplerate)),
+                         source.samplerate)
+            segments, _ = model.transcribe(
+                slice_file.name, beam_size=5, language="en",
+                word_timestamps=True, vad_filter=False,
+                condition_on_previous_text=False)
+            for segment in segments:
+                for word in getattr(segment, "words", None) or []:
+                    text = str(getattr(word, "word", "")).strip()
+                    start = getattr(word, "start", None)
+                    end = getattr(word, "end", None)
+                    if text and start is not None and end is not None:
+                        words.append({"word": text,
+                                      "start": float(start) + start_s,
+                                      "end": float(end) + start_s})
+        grouped.append(words)
+    return grouped
+
+
 def words_by_unit(words: list[dict], units: list[dict],
                   origin_ms: float) -> tuple[list[list[dict]], int]:
     """Group whole-file words onto the speech units they were spoken in.
@@ -272,6 +317,40 @@ def _participant_utterances(units: list[dict], origin_ms: float,
                                   if own else None),
                 "browser_clock_origin_ms": round(origin_ms, 3),
             },
+        })
+    return utterances
+
+
+def _fill_empty_units(utterances: list[dict], captured: list[dict],
+                      origin_ms: float, path: str, slicer: Slicer) -> list[dict]:
+    """Give the units the whole-file pass left empty a second reading.
+
+    A unit's own intervals give its window in the recording, which is where the
+    audio has to be cut: the capture map may have moved the utterance on the
+    browser clock but never in the file.
+    """
+    targets = []
+    for row in utterances:
+        if row["text"] or row["end_ms"] - row["start_ms"] < _SLICE_FALLBACK_MS:
+            continue
+        members = [captured[index]
+                   for index in row["timing"].get("intervals") or []
+                   if index < len(captured)]
+        if members:
+            targets.append((row, (
+                (min(float(m["start_ms"]) for m in members) - origin_ms) / 1000.0,
+                (max(float(m["end_ms"]) for m in members) - origin_ms) / 1000.0)))
+    if not targets:
+        return utterances
+    for (row, _), words in zip(targets, slicer(path, [w for _, w in targets])):
+        if not words:
+            continue
+        row["text"] = " ".join(word["word"] for word in words).strip()
+        row["text_provenance"].update({
+            "method": "whisper_word_timestamps_unit_slice",
+            "word_count": len(words),
+            "speech_start_ms": round(origin_ms + words[0]["start"] * 1000.0, 3),
+            "speech_end_ms": round(origin_ms + words[-1]["end"] * 1000.0, 3),
         })
     return utterances
 
@@ -433,7 +512,8 @@ def _remapped(rows: list[dict], mapped: Callable[[float], float],
 
 def prepare_dialogue_transcript(session: dict, data_root: Path,
                                 analysis_id: str, timing: dict,
-                                transcriber: Transcriber | None = None) -> dict:
+                                transcriber: Transcriber | None = None,
+                                slicer: Slicer | None = None) -> dict:
     """Create a versioned, time-aligned transcript on the browser audio clock."""
     files = session.get("files") or {}
     if not files.get("participant_raw"):
@@ -442,9 +522,9 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
     if not raw_path.exists():
         raise FileNotFoundError(raw_path)
     session_dir = raw_path.parent
-    participant_intervals = timing.get("participant_intervals") or []
+    captured_intervals = timing.get("participant_intervals") or []
     assistant_intervals = timing.get("assistant_intervals") or []
-    if not participant_intervals or not assistant_intervals:
+    if not captured_intervals or not assistant_intervals:
         raise ValueError("timing analysis has no participant or assistant speech intervals")
 
     transcript = session.get("transcript") or {}
@@ -453,7 +533,7 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
     scale = capture_scale(raw_path, assistant_intervals)
     mapped = capture_time_map(session_dir, scale, origin_ms)
     participant_intervals = _remapped(
-        participant_intervals, mapped, ("start_ms", "end_ms"))
+        captured_intervals, mapped, ("start_ms", "end_ms"))
     end_ms = max(
         [float(row["end_ms"]) for row in participant_intervals + assistant_intervals],
         default=0.0,
@@ -466,7 +546,10 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
                          for key in ("start", "end") if word.get(key) is not None}}
              for word in (transcriber or transcribe_words)(
                  str(raw_path)).get("words") or []]
-    participant = _participant_utterances(units, origin_ms, regions, words)
+    participant = _fill_empty_units(
+        _participant_utterances(units, origin_ms, regions, words),
+        captured_intervals, origin_ms, str(raw_path),
+        slicer or transcribe_slices)
     assistant, unassigned = _assistant_utterances(
         model_fragments, assistant_intervals)
     utterances = _merge_assistant_runs(sorted(
