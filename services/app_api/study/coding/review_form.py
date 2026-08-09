@@ -22,6 +22,8 @@ from .schema import (ACCESS_FLAG_TYPES, FINAL_ACCOUNT_VALUES,
                      validate_labels)
 
 UNIT_LABELS = ("attempted", "complete_raw") + GROUNDING_STAGES
+# Stands in for None inside a toggle group. See _tri.
+_NULL = "\x00null"
 # Hover text on the label, so the codebook rule is one pointer away rather
 # than one scroll away. Abbreviated from sections 3 and 4.
 LABEL_HELP = {
@@ -213,9 +215,14 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
                              layout=widgets.Layout(width="620px", height="50px"))
 
     def _tri(name: str, value):
+        # Null is carried as a string, not as None: ToggleButtons reads None as
+        # nothing selected, so an option valued None can never light up and a
+        # deliberate null looks exactly like an untouched row.
         options = [("0", 0), ("1", 1)]
         if name not in BINARY_ONLY:
-            options.append(("null", None))
+            options.append(("null", _NULL))
+        if value is None and name not in BINARY_ONLY:
+            value = _NULL
         if value not in [v for _, v in options]:
             value = options[0][1]
         # Wide enough for three buttons whatever this label offers: too narrow
@@ -391,6 +398,7 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
             evidence, confidence = {}, {}
             for name in UNIT_LABELS:
                 value = fields[name]["value"].value
+                value = None if value == _NULL else value
                 unit[name] = value
                 if value is not None:
                     evidence[name] = list(fields[name]["evidence"].value)
