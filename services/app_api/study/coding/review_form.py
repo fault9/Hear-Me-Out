@@ -65,12 +65,14 @@ def _scenario_html(scenario: dict) -> str:
     levels = "".join(
         f"<li><b>{row.get('score')}</b> — {row.get('criteria') or ''}</li>"
         for row in scenario.get("outcome_levels") or [] if isinstance(row, dict))
-    return (f"<h4>{scenario.get('title') or ''}</h4>"
+    return (f"<div style='max-height:250px;overflow:auto;padding:6px;"
+            f"border:1px solid #ccc;margin-bottom:6px'>"
+            f"<h4 style='margin-top:0'>{scenario.get('title') or ''}</h4>"
             f"<b>Critical units</b><ol>{units}</ol>"
             f"<b>Bounded action</b>: {scenario.get('bounded_action') or ''}<br>"
             f"<b>Required final account</b>: "
             f"{scenario.get('required_final_account') or ''}"
-            f"<b>Outcome levels</b><ul>{levels}</ul>")
+            f"<b>Outcome levels</b><ul>{levels}</ul></div>")
 
 
 def _transcript_html(packet: dict) -> str:
@@ -83,7 +85,7 @@ def _transcript_html(packet: dict) -> str:
         rows.append(f"<div style='margin-bottom:4px'><code>{row.get('id')}</code> "
                     f"<span style='font-weight:{weight}'>{row.get('text')}</span>"
                     f"{flag}</div>")
-    return ("<div style='max-height:420px;overflow:auto;padding:6px;"
+    return ("<div style='max-height:560px;overflow:auto;padding:6px;"
             "border:1px solid #ccc'>" + "".join(rows) + "</div>")
 
 
@@ -275,7 +277,8 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
             "spontaneous_final_account_utterance_id")
 
         outcome = labels.get("outcome") or {}
-        rows = [row for row in (packet.get("scenario") or {}).get("outcome_levels") or []
+        rows = [row for row
+                in (packet.get("scenario") or {}).get("outcome_levels") or []
                 if isinstance(row, dict)]
         scores = [row.get("score") for row in rows]
         # The levels are the scenario's, not a fixed scale, and choosing one
@@ -371,9 +374,9 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
         flags_area.__setattr__("children", tuple(r["box"] for r in flag_rows))))
     save.on_click(_save)
 
-    display(widgets.VBox([
-        widgets.HBox([picker, coder_box]),
-        scenario, transcript,
+    # The transcript is what every field is read off, so it scrolls in its own
+    # column rather than above the form, where the first unit pushed it away.
+    fields = widgets.VBox([
         _head("Units", "One row per critical unit. Evidence cites the "
                        "utterance ids that ground each label."),
         units_area,
@@ -402,5 +405,12 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
                               "decides these outside the form."),
         flags_area, add_flag,
         notes, save, status,
+    ], layout=widgets.Layout(width="56%", height="840px", overflow="auto",
+                             padding="0 14px 0 0"))
+    brief = widgets.VBox([scenario, transcript], layout=widgets.Layout(
+        width="44%", height="840px", overflow="auto"))
+    display(widgets.VBox([
+        widgets.HBox([picker, coder_box]),
+        widgets.HBox([fields, brief]),
     ]))
     _load()
