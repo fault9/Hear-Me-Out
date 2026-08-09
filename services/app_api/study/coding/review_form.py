@@ -44,6 +44,22 @@ def _ids(packet: dict, speaker: str | None = None) -> list[str]:
             if speaker is None or row.get("speaker") == speaker]
 
 
+def _head(title: str, hint: str):
+    """A section heading with the codebook rule that decides it. The codebook
+    is the definition; this is only enough to stop the coder leaving it."""
+    import ipywidgets as widgets
+
+    return widgets.HTML(
+        f"<h4 style='margin-bottom:2px'>{title}</h4>"
+        f"<div style='color:#666;font-size:90%;margin-bottom:6px'>{hint}</div>")
+
+
+def _clipped(text, limit: int = 96) -> str:
+    """Enough of a criterion to choose by; the brief above carries the rest."""
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def _scenario_html(scenario: dict) -> str:
     units = "".join(f"<li>{u}</li>" for u in scenario.get("unit_definitions") or [])
     levels = "".join(
@@ -259,10 +275,13 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
             "spontaneous_final_account_utterance_id")
 
         outcome = labels.get("outcome") or {}
-        scores = [row.get("score") for row
-                  in (packet.get("scenario") or {}).get("outcome_levels") or []
-                  if isinstance(row, dict)]
-        level.options = [(str(s), s) for s in scores]
+        rows = [row for row in (packet.get("scenario") or {}).get("outcome_levels") or []
+                if isinstance(row, dict)]
+        scores = [row.get("score") for row in rows]
+        # The levels are the scenario's, not a fixed scale, and choosing one
+        # off a bare 1-4 means scrolling back to the brief for every packet.
+        level.options = [(f"{row.get('score')} — {_clipped(row.get('criteria'))}",
+                          row.get("score")) for row in rows]
         level.value = outcome.get("level") if outcome.get("level") in scores else None
         level_evidence.allowed_tags = _ids(packet)
         level_evidence.value = [v for v in outcome.get("evidence_utterance_ids") or []
@@ -355,18 +374,33 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
     display(widgets.VBox([
         widgets.HBox([picker, coder_box]),
         scenario, transcript,
-        widgets.HTML("<h4>Units</h4>"), units_area,
-        widgets.HTML("<h4>Repairs</h4>"), repairs_area, add_repair,
+        _head("Units", "One row per critical unit. Evidence cites the "
+                       "utterance ids that ground each label."),
+        units_area,
+        _head("Repairs", "One move per utterance, in the codebook's priority "
+                         "order. First deliveries and plain agreement are not "
+                         "repairs."),
+        repairs_area, add_repair,
         # Three codebook sections, not one: the probe anchors retention (4),
         # the level is the ordinal outcome (6), and accuracy is scored on the
         # probe response (7). Under one heading a coder cites the readback as
         # evidence for the level.
-        widgets.HTML("<h4>Final probe</h4>"), probe, spontaneous,
-        widgets.HTML("<h4>Task outcome</h4>"),
+        _head("Final probe", "The first assistant response to the first "
+                             "request for a summary, or an earlier turn that "
+                             "gives the whole account unprompted. Neither "
+                             "means retention stays null."),
+        probe, spontaneous,
+        _head("Task outcome", "The scenario's own levels. The rationale "
+                              "argues the level against the one above it."),
         level, level_evidence, rationale, level_conf,
-        widgets.HTML("<h4>Final-account accuracy</h4>"),
+        _head("Final-account accuracy", "Whether the probe response states "
+                                        "what actually happened. Scored apart "
+                                        "from the level, never folded into it."),
         account, account_evidence, account_conf,
-        widgets.HTML("<h4>Access flags</h4>"), flags_area, add_flag,
+        _head("Access flags", "Candidate nominations only: what looks cut "
+                              "off, abandoned, or closed early. Timing "
+                              "decides these outside the form."),
+        flags_area, add_flag,
         notes, save, status,
     ]))
     _load()
