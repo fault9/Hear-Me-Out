@@ -357,8 +357,14 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
         scenario, transcript,
         widgets.HTML("<h4>Units</h4>"), units_area,
         widgets.HTML("<h4>Repairs</h4>"), repairs_area, add_repair,
-        widgets.HTML("<h4>Final account</h4>"),
-        probe, spontaneous, level, level_evidence, rationale, level_conf,
+        # Three codebook sections, not one: the probe anchors retention (4),
+        # the level is the ordinal outcome (6), and accuracy is scored on the
+        # probe response (7). Under one heading a coder cites the readback as
+        # evidence for the level.
+        widgets.HTML("<h4>Final probe</h4>"), probe, spontaneous,
+        widgets.HTML("<h4>Task outcome</h4>"),
+        level, level_evidence, rationale, level_conf,
+        widgets.HTML("<h4>Final-account accuracy</h4>"),
         account, account_evidence, account_conf,
         widgets.HTML("<h4>Access flags</h4>"), flags_area, add_flag,
         notes, save, status,
