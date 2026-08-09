@@ -456,6 +456,25 @@ class SchemaTests(FixtureCase):
         self.assertEqual(derived["demonstrated_grounding"], 0)
         self.assertEqual(derived["false_update_confirmation"], 1)
 
+    def test_retention_may_be_null_without_a_final_account(self):
+        """Codebook section 4 leaves retention unset when the participant never
+        asked for a readback, so requiring 0 or 1 there flags correct coding."""
+        packet = {"scenario": {"outcome_levels": [{"score": i} for i in (1, 2, 3, 4)]}}
+        unit = {"unit_index": 1, "attempted": 1, "complete_raw": 1,
+                "delivery_utterance_ids": ["participant_001"],
+                "acknowledgement": 1, "update_claim": 1, "incorporation": 1,
+                "retention": None,
+                "evidence_utterance_ids": {stage: ["participant_001"] for stage in
+                                           ("acknowledgement", "update_claim",
+                                            "incorporation")}}
+        without = {"units": [unit], "final_probe": {}}
+        self.assertFalse([i for i in consistency_issues(without, packet)
+                          if "retention" in i])
+        withprobe = {"units": [unit],
+                     "final_probe": {"utterance_id": "participant_009"}}
+        self.assertTrue([i for i in consistency_issues(withprobe, packet)
+                         if "retention" in i])
+
     def test_top_level_outcome_requires_retention(self):
         packet = {"scenario": {"outcome_levels": [{"score": i} for i in (1, 2, 3, 4)]}}
         unit = {"unit_index": 1, "attempted": 1, "complete_raw": 1,

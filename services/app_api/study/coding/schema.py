@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-SCHEMA_VERSION = "hmo.coding-labels.v1"
+SCHEMA_VERSION = "hmo.coding-labels.v2"
 
 REPAIR_CATEGORIES = (
     "repetition", "reformulation", "clarification", "explicit_correction",
@@ -200,6 +200,12 @@ def consistency_issues(labels: dict, packet: dict) -> list[str]:
     """Deterministic codebook rules that a structurally valid label set can
     still violate. Any issue flags the packet for human review."""
     issues: list[str] = []
+    # Retention carries a second legitimate null beyond the section 2 rule:
+    # section 4 leaves it unset when the participant never requested a final
+    # summary and no spontaneous final account was given.
+    probe = labels.get("final_probe") or {}
+    no_final_account = not (probe.get("utterance_id")
+                            or probe.get("spontaneous_final_account_utterance_id"))
     for unit in labels.get("units") or []:
         i = unit.get("unit_index")
         where = f"units[{i}]"
@@ -217,7 +223,8 @@ def consistency_issues(labels: dict, packet: dict) -> list[str]:
             if complete != 1 and value is not None:
                 issues.append(f"{where}.{stage}: must be null when the unit was "
                               "not completely delivered")
-            if complete == 1 and value is None:
+            if (complete == 1 and value is None
+                    and not (stage == "retention" and no_final_account)):
                 issues.append(f"{where}.{stage}: must be 0 or 1 when the unit "
                               "was completely delivered")
             if value == 1 and not (unit.get("evidence_utterance_ids") or {}).get(stage):
@@ -235,11 +242,9 @@ def consistency_issues(labels: dict, packet: dict) -> list[str]:
                    ".retention is 0"
                    for unit in labels.get("units") or []
                    if unit.get("retention") == 0]
-    probe = labels.get("final_probe") or {}
     account = labels.get("final_account_accuracy") or {}
     if (account.get("value") not in (None, "no_final_account")
-            and not probe.get("utterance_id")
-            and not probe.get("spontaneous_final_account_utterance_id")):
+            and no_final_account):
         issues.append("final_account_accuracy set but no final probe or "
                       "spontaneous final account was identified")
     return issues
