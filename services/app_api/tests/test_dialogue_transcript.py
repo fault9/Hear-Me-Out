@@ -472,6 +472,65 @@ class DialogueTranscriptTests(unittest.TestCase):
                              ["One moment please.",
                               "Yes, I found your assignment."])
 
+    def test_an_audible_run_delays_a_fragment_but_never_advances_it(self):
+        """A backchannel spoken inside a long run took the run's start and
+        landed ahead of the participant turn it answered. Audio cannot play
+        before it is generated, so the run may only push a fragment later."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = Path("sessions/run/participant_raw.wav")
+            raw_path = root / relative
+            self._write_wav(raw_path, duration_s=15.0)
+            (raw_path.parent / "client_timeline.json").write_text(json.dumps({
+                "capture": {"sample_rate_hz": 16000, "chunks": [{
+                    "chunk_sequence": 1, "capture_start_sample": 0,
+                    "sample_count": 2048, "timeline_start_ms": 0.0}]}}))
+            session = {
+                "session_id": "P1_R01_S04_A01",
+                "voice_condition": "natural",
+                "files": {"participant_raw": str(relative)},
+                "transcript": {"model": [
+                    {"text": "Hello there.", "start": 3.9, "end": 4.5,
+                     "speaker": "personaplex"},
+                    {"text": "Okay, I understand.", "start": 11.2, "end": 12.4,
+                     "speaker": "personaplex"},
+                ]},
+            }
+            timing = {
+                "schema": "hmo.timing-analysis.v4",
+                "status": "estimated_pending_validation",
+                "participant_intervals": [
+                    {"start_ms": 6000.0, "end_ms": 9000.0, "detector": "rms"}],
+                # One unbroken run: the assistant backchannels over the
+                # participant, so its text arrives far from where it started.
+                "assistant_intervals": [
+                    {"start_ms": 4000.0, "end_ms": 13000.0, "detector": "rms"}],
+                "route_switches": [], "overlaps": [], "barge_ins": [],
+                "integrity": {"participant_capture_latency_correction_ms": 0.0},
+                "result_artifact": {"path": "analysis/timing/timing.json"},
+            }
+
+            def transcribe(_path: str) -> dict:
+                return {"status": "complete", "error": None, "words": [
+                    {"word": "My", "start": 6.1, "end": 6.4},
+                    {"word": "claim", "start": 6.5, "end": 8.5}]}
+
+            result = prepare_dialogue_transcript(
+                session, root, "analysis-8", timing, transcribe)
+
+            rows = result["utterances"]
+            self.assertEqual([row["speaker"] for row in rows],
+                             ["assistant", "participant", "assistant"])
+            # The run starts after the model generated the greeting, so it wins.
+            self.assertEqual(rows[0]["start_ms"], 4000.0)
+            self.assertEqual(rows[0]["timing"]["start_anchor"],
+                             "audible_run_onset")
+            # It starts 7 s before the backchannel, so the fragment's own time
+            # does, and the reply stays behind the turn it answers.
+            self.assertEqual(rows[2]["start_ms"], 11200.0)
+            self.assertEqual(rows[2]["timing"]["start_anchor"],
+                             "back_computed_from_word_count")
+
     def test_a_long_empty_unit_is_read_again_and_a_short_one_is_not(self):
         """The whole-file pass returns nothing for a reference number spoken
         flatly after a pause. Re-reading the unit recovers it; doing the same

@@ -360,8 +360,7 @@ def _assistant_utterances(fragments: list[dict],
     # The model emits one fragment per utterance, so the fragments already are
     # the assistant's turns in the order they were spoken. Mapping them onto the
     # detected speech intervals merged and emptied turns whenever the model
-    # paused mid-utterance; the intervals are used only to place each turn's
-    # onset, which the back-computed start put seconds early.
+    # paused mid-utterance; the intervals only refine each turn's onset.
     runs = _speech_runs(intervals)
     utterances = []
     unassigned = []
@@ -373,11 +372,18 @@ def _assistant_utterances(fragments: list[dict],
             unassigned.append(copy.deepcopy(fragment))
             continue
         start, end = times
-        onset = _onset_for(end, runs)
-        anchor = "audible_run_onset" if onset is not None else "back_computed_from_word_count"
-        # The floor is the previous fragment's end: the model speaks its
+        # Whichever bound is latest. Audio cannot play before it is generated,
+        # so the audible run may delay a fragment but never advance it: taken
+        # outright, the run's start put a three-word backchannel spoken inside
+        # a long run 7 s early, ahead of the participant turn it answered. The
+        # floor is the previous fragment's end, and the model speaks its
         # fragments in sequence, so two of them can never share an onset.
-        start = max(onset if onset is not None else start, floor)
+        bounds = {"back_computed_from_word_count": start,
+                  "previous_fragment_end": floor}
+        if (onset := _onset_for(end, runs)) is not None:
+            bounds["audible_run_onset"] = onset
+        anchor = max(bounds, key=lambda name: bounds[name])
+        start = bounds[anchor]
         end = max(end, start)
         floor = end
         utterances.append({
