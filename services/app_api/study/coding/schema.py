@@ -50,6 +50,28 @@ def _check_id_list(value: Any, known_ids: set[str], where: str, errors: list[str
             errors.append(f"{where}: unknown utterance id {v!r}")
 
 
+def blank_labels(n_units: int) -> dict:
+    """An empty label object shaped the way `validate_labels` expects, so a
+    human coder fills values instead of hand-building nested JSON. A typing
+    error in a reliability sample is indistinguishable from disagreement."""
+    unit = {"unit_index": 0, "attempted": None, "complete_raw": None,
+            "delivery_utterance_ids": [],
+            **{stage: None for stage in GROUNDING_STAGES},
+            "evidence_utterance_ids": {}, "confidence": {}}
+    return {
+        "units": [dict(unit, unit_index=i + 1) for i in range(n_units)],
+        "repairs": [],
+        "final_probe": {"utterance_id": None,
+                        "spontaneous_final_account_utterance_id": None},
+        "outcome": {"level": None, "evidence_utterance_ids": [],
+                    "rationale": "", "confidence": None},
+        "final_account_accuracy": {"value": None, "evidence_utterance_ids": [],
+                                   "confidence": None},
+        "access_flags": [],
+        "notes": "",
+    }
+
+
 def validate_labels(labels: dict, packet: dict) -> list[str]:
     """Structural validation of a judge/human label object against its packet."""
     errors: list[str] = []

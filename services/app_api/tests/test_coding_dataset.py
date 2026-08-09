@@ -631,6 +631,35 @@ class ReviewAndExportTests(FixtureCase):
         finalized = review.finalize(root)
         return root, pid, flags, sample, imported, finalized
 
+    def test_adjudicated_labels_are_excluded_from_agreement(self):
+        """Adjudication starts from the judge's own output, so counting it
+        would measure a label set's agreement with its source."""
+        root, pid, *_ = self._run_pipeline()
+        path = root / "labels" / "human" / f"{pid}.json"
+        record = json.loads(path.read_text())
+        self.assertEqual(record["provenance"]["mode"], "independent")
+        self.assertIn(pid, agreement.agreement_report(root)["packet_ids"])
+        record["provenance"]["mode"] = "adjudicated"
+        path.write_text(json.dumps(record))
+        self.assertNotIn(pid, agreement.agreement_report(root)["packet_ids"])
+
+    def test_unsigned_sheet_is_pending_not_invalid(self):
+        """Sheets ship pre-filled, so an untouched one must not import as a
+        malformed human coding."""
+        self._write_all_packets()
+        root = self._root()
+        freeze.freeze(root, FAKE_DECODING)
+        runner.run_judging(root, FakeClient(make_judge_labels()), pilot=False)
+        review.compute_flags(root)
+        review.stratified_sample(root, seed=7)
+        review.export_review(root)
+        pid = read_index(root)[0]["packet_id"]
+        sheet = json.loads(
+            (root / "review" / "sheets" / f"{pid}.json").read_text())
+        self.assertIsNotNone(sheet["labels"])
+        self.assertIn(sheet["mode"], ("independent", "adjudicated"))
+        self.assertIn(pid, review.import_human(root)["pending"])
+
     def test_flags_sample_import_finalize(self):
         root, pid, flags, sample, imported, finalized = self._run_pipeline()
         self.assertIn("low_confidence", flags.get(pid, []))

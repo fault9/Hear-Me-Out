@@ -45,6 +45,8 @@ def main() -> None:
     p_review = sub.add_parser("review")
     p_review.add_argument("--seed", type=int, required=True)
     p_review.add_argument("--fraction", type=float, default=review.SAMPLE_FRACTION)
+    p_sheet = sub.add_parser("sheet")
+    p_sheet.add_argument("--packet", required=True)
     sub.add_parser("import-human")
     sub.add_parser("finalize")
     sub.add_parser("agreement")
@@ -80,6 +82,8 @@ def main() -> None:
         sample = review.stratified_sample(root, seed=args.seed, fraction=args.fraction)
         exported = review.export_review(root)
         _print({"flags": flags, "sample": sample, "export": exported})
+    elif args.command == "sheet":
+        print(review.render_sheet(root, args.packet))
     elif args.command == "import-human":
         _print(review.import_human(root))
     elif args.command == "finalize":

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from .packets import (classify_delivery_timing, read_index,
                       repair_is_post_boundary, transmitted_completeness)
-from .schema import (GROUNDING_STAGES, consistency_issues,
+from .schema import (GROUNDING_STAGES, blank_labels, consistency_issues,
                      derive_scenario_labels, low_confidence_fields,
                      validate_labels)
 
@@ -148,19 +148,59 @@ def export_review(root: Path) -> dict:
         if sheet_path.exists():
             continue  # never overwrite a sheet a human may be editing
         packet = _packet(root, pid)
+        # Sampled packets measure reliability and must be coded without
+        # sight of the judge; the rest are adjudication, where consulting it
+        # is the point. Only the former may enter the agreement report.
+        independent = "stratified_sample" in queue[pid]
+        seeded = None if independent else _read_json(
+            root / "labels" / "judge" / f"{pid}.json")
         sheet = {
             "packet_id": pid,
+            "mode": "independent" if independent else "adjudicated",
             "instructions": (
-                "Blinded human coding sheet. Read coding/codebook.md, then "
-                "fill `labels` with the same structure the judge uses (see "
-                "any labels/judge/*.json for shape). Set `coder` to your "
-                "initials. Do not consult condition information."),
+                "Blinded coding sheet. Read coding/codebook.md, fill `labels`, "
+                "and set `coder` to your initials. "
+                + ("This packet is in the reliability sample: code it without "
+                   "opening labels/judge, or the agreement estimate is void."
+                   if independent else
+                   "`labels` is seeded with the coder's output for "
+                   "adjudication; correct the flagged fields.")),
             "coder": "",
             "packet": packet,
-            "labels": None,
+            "labels": (blank_labels(len(
+                (packet.get("scenario") or {}).get("unit_definitions") or []))
+                if independent or not (seeded or {}).get("labels")
+                else seeded["labels"]),
         }
         sheet_path.write_text(json.dumps(sheet, indent=2, sort_keys=True))
     return {"queued": len(queue), "sheets_dir": str(sheets)}
+
+
+def render_sheet(root: Path, packet_id: str) -> str:
+    """A sheet as readable text: the coder should be reading a transcript
+    rather than parsing JSON."""
+    sheet = _read_json(root / "review" / "sheets" / f"{packet_id}.json") or {}
+    packet = sheet.get("packet") or {}
+    scenario = packet.get("scenario") or {}
+    lines = [f"{packet_id}  [{sheet.get('mode')}]  "
+             f"coder: {sheet.get('coder') or '(unset)'}",
+             "", f"SCENARIO  {scenario.get('title') or ''}"]
+    lines += [f"  unit {i}: {unit}" for i, unit
+              in enumerate(scenario.get("unit_definitions") or [], start=1)]
+    lines.append(f"  bounded action: {scenario.get('bounded_action') or ''}")
+    lines.append(f"  required final account: "
+                 f"{scenario.get('required_final_account') or ''}")
+    lines += [f"  level {row.get('score')}: {row.get('criteria') or ''}"
+              for row in scenario.get("outcome_levels") or []
+              if isinstance(row, dict)]
+    lines += ["", "TRANSCRIPT"]
+    for row in packet.get("utterances") or []:
+        flag = ("  [asr incomplete]" if row.get("asr_ok") is False
+                else "  [low confidence]" if row.get("asr_low_confidence")
+                else "")
+        lines.append(f"  {str(row.get('id')):<18}{str(row.get('speaker')):<11}"
+                     f"{row.get('text')}{flag}")
+    return "\n".join(lines)
 
 
 def expand_for_reliability(root: Path) -> dict:
@@ -205,7 +245,9 @@ def import_human(root: Path) -> dict:
         sheet = _read_json(sheet_path) or {}
         pid = sheet.get("packet_id") or sheet_path.stem
         labels = sheet.get("labels")
-        if labels is None:
+        # Sheets ship pre-filled, so the coder's initials are what marks one
+        # as done rather than the presence of a labels object.
+        if labels is None or not sheet.get("coder"):
             pending.append(pid)
             continue
         packet = _packet(root, pid)
@@ -217,6 +259,7 @@ def import_human(root: Path) -> dict:
             "packet_id": pid,
             "labels": labels,
             "provenance": {"role": "human", "coder": sheet.get("coder") or "",
+                           "mode": sheet.get("mode") or "independent",
                            "sheet": sheet_path.name},
         }, indent=2, sort_keys=True))
         imported.append(pid)

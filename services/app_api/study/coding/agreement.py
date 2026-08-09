@@ -98,6 +98,11 @@ def _load_labels(root: Path, role: str, packet_id: str) -> dict | None:
         record = json.loads((root / "labels" / role / f"{packet_id}.json").read_text())
     except (OSError, ValueError):
         return None
+    # Adjudicated human labels start from the judge's own output, so counting
+    # them would measure agreement of a label set with its own source.
+    if role == "human" and (record.get("provenance") or {}).get(
+            "mode", "independent") != "independent":
+        return None
     return record.get("labels")
 
 
