@@ -69,6 +69,9 @@ dependencies = [
 
 [project.optional-dependencies]
 aesthetics = ["audiobox-aesthetics"]
+# study.coding.review_form only; the notebook coding form is not part of the
+# service and imports it lazily.
+coding = ["ipywidgets>=8"]
 
 # PyTorch CUDA 12.1 wheels (shared with meanvc/personaplex via uv's global cache).
 [[tool.uv.index]]

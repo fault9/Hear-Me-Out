@@ -631,6 +631,13 @@ class ReviewAndExportTests(FixtureCase):
         finalized = review.finalize(root)
         return root, pid, flags, sample, imported, finalized
 
+    def test_review_form_imports_without_its_widget_library(self):
+        """The coding form is a notebook tool; the pipeline has to run where
+        ipywidgets is not installed."""
+        from study.coding import review_form
+        self.assertTrue(callable(review_form.coder))
+        self.assertNotIn("ipywidgets", dir(review_form))
+
     def test_post_transition_repair_reliability_is_reported(self):
         """The co-primary is the post-transition count, so it carries its own
         ICC rather than inheriting the total's."""
