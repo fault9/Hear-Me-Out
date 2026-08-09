@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .packets import read_index
+from .packets import read_index, repair_is_post_boundary
 
 BINARY_UNIT_FIELDS = ("attempted", "complete_raw", "acknowledgement",
                       "update_claim", "incorporation", "retention")
@@ -93,6 +93,18 @@ def icc_2_1(pairs: list[tuple]) -> float | None:
     return (msr - mse) / denominator
 
 
+def _read_meta(root: Path, packet_id: str) -> dict | None:
+    try:
+        return json.loads((root / "meta" / f"{packet_id}.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _post_repairs(labels: dict, meta: dict) -> int:
+    return sum(1 for move in labels.get("repairs") or []
+               if repair_is_post_boundary(move.get("utterance_id"), meta))
+
+
 def _load_labels(root: Path, role: str, packet_id: str) -> dict | None:
     try:
         record = json.loads((root / "labels" / role / f"{packet_id}.json").read_text())
@@ -147,16 +159,19 @@ def assess_reliability(report: dict) -> dict:
         "reasons": outcome_reasons,
     }
 
-    repair = dict(report.get("repair_total") or {})
-    repair_reasons = []
-    if not repair.get("n"):
-        repair_reasons.append("no_double_coded_observations")
-    elif (repair.get("icc_2_1") is None
-          or repair["icc_2_1"] < RELIABILITY_THRESHOLDS["minimum_icc_2_1"]):
-        repair_reasons.append("icc_below_threshold")
-    fields["repair_total"] = {
-        **repair, "reliable": not repair_reasons, "reasons": repair_reasons,
-    }
+    # The co-primary is the post-transition count, so it is gated on the same
+    # threshold as the total rather than inheriting the total's verdict.
+    for name in ("repair_total", "repair_post_transition"):
+        repair = dict(report.get(name) or {})
+        repair_reasons = []
+        if not repair.get("n"):
+            repair_reasons.append("no_double_coded_observations")
+        elif (repair.get("icc_2_1") is None
+              or repair["icc_2_1"] < RELIABILITY_THRESHOLDS["minimum_icc_2_1"]):
+            repair_reasons.append("icc_below_threshold")
+        fields[name] = {
+            **repair, "reliable": not repair_reasons, "reasons": repair_reasons,
+        }
     failed = sorted(field for field, value in fields.items()
                     if not value["reliable"])
     return {
@@ -174,6 +189,7 @@ def agreement_report(root: Path) -> dict:
     outcome_pairs: list[tuple] = []
     account_pairs: list[tuple] = []
     repair_count_pairs: list[tuple] = []
+    post_repair_pairs: list[tuple] = []
     any_repair_pairs: list[tuple] = []
     compared = []
     for row in read_index(root):
@@ -183,6 +199,7 @@ def agreement_report(root: Path) -> dict:
         if judge is None or human is None:
             continue
         compared.append(pid)
+        meta = _read_meta(root, pid)
         for j_unit, h_unit in zip(judge.get("units") or [], human.get("units") or []):
             for field in BINARY_UNIT_FIELDS:
                 a, b = j_unit.get(field), h_unit.get(field)
@@ -200,6 +217,12 @@ def agreement_report(root: Path) -> dict:
         h_repairs = len(human.get("repairs") or [])
         repair_count_pairs.append((j_repairs, h_repairs))
         any_repair_pairs.append((int(j_repairs > 0), int(h_repairs > 0)))
+        # Two coders can record the same number of moves and anchor them to
+        # different utterances, so the total's reliability does not carry to
+        # the co-primary. Score the measure actually modelled.
+        if meta is not None:
+            post_repair_pairs.append((_post_repairs(judge, meta),
+                                      _post_repairs(human, meta)))
 
     report = {
         "packets_compared": len(compared),
@@ -223,6 +246,10 @@ def agreement_report(root: Path) -> dict:
         "repair_total": {
             "n": len(repair_count_pairs),
             "icc_2_1": icc_2_1(repair_count_pairs),
+        },
+        "repair_post_transition": {
+            "n": len(post_repair_pairs),
+            "icc_2_1": icc_2_1(post_repair_pairs),
         },
         "any_repair": {
             "n": len(any_repair_pairs),

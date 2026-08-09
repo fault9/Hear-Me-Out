@@ -631,6 +631,15 @@ class ReviewAndExportTests(FixtureCase):
         finalized = review.finalize(root)
         return root, pid, flags, sample, imported, finalized
 
+    def test_post_transition_repair_reliability_is_reported(self):
+        """The co-primary is the post-transition count, so it carries its own
+        ICC rather than inheriting the total's."""
+        root, *_ = self._run_pipeline()
+        report = agreement.agreement_report(root)
+        self.assertEqual(report["repair_post_transition"]["n"],
+                         report["repair_total"]["n"])
+        self.assertIn("repair_post_transition", report["reliability"]["fields"])
+
     def test_adjudicated_labels_are_excluded_from_agreement(self):
         """Adjudication starts from the judge's own output, so counting it
         would measure a label set's agreement with its source."""
