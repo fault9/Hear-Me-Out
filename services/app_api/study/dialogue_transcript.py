@@ -12,7 +12,14 @@ from typing import Any, Callable
 from .artifacts import atomic_write_json, file_record
 from .turn_taking import group_turns
 
-DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v8"
+DIALOGUE_TRANSCRIPT_SCHEMA = "hmo.dialogue-transcript.v9"
+# Transient starvation in the browser drops quiet capture buffers, so the
+# participant recording holds fewer seconds than it spans and every later
+# participant event is placed earlier than it happened. The assistant track is
+# timed from playback packets and is unaffected, so the ratio between the two
+# recovers the participant clock. Applied only past this shortfall: healthy
+# sessions sit within 1% and must not be rescaled by estimator noise.
+CAPTURE_SHORTFALL_TOLERANCE = 0.02
 # Silence that ends an assistant turn, measured on the same packet-RMS speech
 # detection as the timing analysis. See _merge_assistant_runs.
 ASSISTANT_TURN_SILENCE_MS = float(
@@ -212,6 +219,7 @@ def words_by_unit(words: list[dict], units: list[dict],
         if best is not None and best[0] > 0:
             index = best[1]
         else:
+
             distances = [
                 (float(unit["start_ms"]) - end
                  if end < float(unit["start_ms"])
@@ -350,6 +358,39 @@ def _merge_assistant_runs(utterances: list[dict],
     return merged
 
 
+def capture_scale(raw_path: Path, assistant_intervals: list[dict]) -> float:
+    """Wall-clock seconds per recorded second of participant audio.
+
+    The denominator is what the file holds and the numerator is how long the
+    assistant was still talking, which is the only clock in the session known
+    to be intact. Returns 1.0 whenever the recording covers the session, so a
+    healthy transcript is byte-identical to one built without this.
+    """
+    import wave
+
+    try:
+        with wave.open(str(raw_path)) as handle:
+            captured_ms = handle.getnframes() / handle.getframerate() * 1000.0
+    except (OSError, wave.Error):
+        return 1.0
+    span_ms = max((float(row["end_ms"]) for row in assistant_intervals), default=0.0)
+    if captured_ms <= 0 or span_ms <= 0:
+        return 1.0
+    scale = span_ms / captured_ms
+    return scale if scale - 1.0 > CAPTURE_SHORTFALL_TOLERANCE else 1.0
+
+
+def _rescaled(rows: list[dict], scale: float, keys: tuple[str, ...],
+              origin: float = 0.0) -> list[dict]:
+    """Stretch times about the capture origin, which is a wall-clock anchor
+    and must not be scaled along with the offsets measured from it."""
+    if scale == 1.0:
+        return rows
+    return [{**row, **{key: origin + (float(row[key]) - origin) * scale
+                       for key in keys if row.get(key) is not None}}
+            for row in rows]
+
+
 def prepare_dialogue_transcript(session: dict, data_root: Path,
                                 analysis_id: str, timing: dict,
                                 transcriber: Transcriber | None = None) -> dict:
@@ -368,14 +409,19 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
 
     transcript = session.get("transcript") or {}
     model_fragments = transcript.get("model") or []
+    origin_ms = _capture_origin_ms(session_dir, timing)
+    scale = capture_scale(raw_path, assistant_intervals)
+    participant_intervals = _rescaled(
+        participant_intervals, scale, ("start_ms", "end_ms"), origin_ms)
     end_ms = max(
         [float(row["end_ms"]) for row in participant_intervals + assistant_intervals],
         default=0.0,
     )
-    origin_ms = _capture_origin_ms(session_dir, timing)
     regions = _route_regions(session, timing, end_ms)
     units = participant_units(participant_intervals)
-    words = (transcriber or transcribe_words)(str(raw_path)).get("words") or []
+    words = _rescaled(
+        (transcriber or transcribe_words)(str(raw_path)).get("words") or [],
+        scale, ("start", "end"))
     participant = _participant_utterances(units, origin_ms, regions, words)
     assistant, unassigned = _assistant_utterances(
         model_fragments, assistant_intervals)
@@ -400,6 +446,7 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
             "speech_boundaries": "copied_from_timing_analysis_not_inferred_from_asr",
             "assistant_times": "onset_from_audible_run_end_from_text_arrival",
             "assistant_turn_silence_ms": ASSISTANT_TURN_SILENCE_MS,
+            "participant_capture_scale": scale,
         },
         "utterances": utterances,
         "overlaps": copy.deepcopy(timing.get("overlaps") or []),

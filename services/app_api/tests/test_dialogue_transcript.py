@@ -4,7 +4,8 @@ import unittest
 import wave
 from pathlib import Path
 
-from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA,
+from study.dialogue_transcript import (DIALOGUE_TRANSCRIPT_SCHEMA, _rescaled,
+                                       capture_scale,
                                        prepare_dialogue_transcript)
 
 
@@ -16,6 +17,22 @@ class DialogueTranscriptTests(unittest.TestCase):
             wav.setsampwidth(2)
             wav.setframerate(16000)
             wav.writeframes(b"\0\0" * round(duration_s * 16000))
+
+    def test_short_capture_is_stretched_and_a_covering_one_is_not(self):
+        """A recording that holds fewer seconds than it spans places every
+        later participant event early; one that covers the session must be
+        left exactly alone."""
+        path = Path(tempfile.mkdtemp()) / "participant_raw.wav"
+        self._write_wav(path, duration_s=10.0)
+        self.assertAlmostEqual(
+            capture_scale(path, [{"end_ms": 14000.0}]), 1.4, places=3)
+        self.assertEqual(capture_scale(path, [{"end_ms": 10100.0}]), 1.0)
+        self.assertEqual(capture_scale(path, []), 1.0)
+
+    def test_rescale_holds_the_capture_origin_fixed(self):
+        rows = _rescaled([{"start_ms": 1000.0, "end_ms": 2000.0}], 2.0,
+                         ("start_ms", "end_ms"), 1000.0)
+        self.assertEqual((rows[0]["start_ms"], rows[0]["end_ms"]), (1000.0, 3000.0))
 
     def test_uses_timing_boundaries_and_preserves_route_switches(self):
         with tempfile.TemporaryDirectory() as temporary:
