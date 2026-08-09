@@ -86,6 +86,24 @@ def _pane(child, width: str):
         width=width, height="840px", overflow="auto", display="block"))
 
 
+def _labels_legend():
+    """The label definitions, once above the units rather than on each row.
+
+    Repeated per unit they are longer than the unit; on hover alone they are
+    only found by someone who already knows they are there.
+    """
+    import ipywidgets as widgets
+
+    items = "".join(
+        f"<div style='margin-bottom:2px'><code>{name}</code> &mdash; "
+        f"{LABEL_HELP[name]}</div>"
+        for name in ("delivery ids",) + UNIT_LABELS)
+    return widgets.HTML(
+        f"<div style='color:#666;font-size:90%;margin-bottom:8px'>{items}"
+        f"<div style='margin-top:4px'><i>The four grounding stages are null "
+        f"unless complete_raw is 1.</i></div></div>")
+
+
 def _field_label(name: str):
     """A unit label carrying its codebook rule as hover text."""
     import ipywidgets as widgets
@@ -433,7 +451,7 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
     fields = widgets.VBox([
         _head("Units", "One row per critical unit. Evidence cites the "
                        "utterance ids that ground each label."),
-        units_area,
+        _labels_legend(), units_area,
         _head("Repairs", "One move per utterance, in the codebook's priority "
                          "order. First deliveries and plain agreement are not "
                          "repairs."),
