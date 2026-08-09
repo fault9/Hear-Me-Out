@@ -68,10 +68,17 @@ def _pane(child, width: str):
         width=width, height="840px", overflow="auto", display="block"))
 
 
-def _clipped(text, limit: int = 96) -> str:
-    """Enough of a criterion to choose by; the brief above carries the rest."""
-    text = " ".join(str(text or "").split())
-    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+def _levels_html(rows: list[dict]) -> str:
+    """The scenario's levels, listed beside the buttons that choose them.
+
+    Not on the buttons: a radio option gets one row of fixed height, and a
+    criterion long enough to wrap prints over the option beneath it.
+    """
+    items = "".join(
+        f"<li><b>{row.get('score')}</b> — {row.get('criteria') or ''}</li>"
+        for row in rows)
+    return (f"<ul style='color:#444;font-size:90%;margin:0 0 4px 0;"
+            f"padding-left:20px'>{items}</ul>")
 
 
 def _scenario_html(scenario: dict) -> str:
@@ -85,7 +92,7 @@ def _scenario_html(scenario: dict) -> str:
             f"<b>Critical units</b><ol>{units}</ol>"
             f"<b>Bounded action</b>: {scenario.get('bounded_action') or ''}<br>"
             f"<b>Required final account</b>: "
-            f"{scenario.get('required_final_account') or ''}"
+            f"{scenario.get('required_final_account') or ''}<br>"
             f"<b>Outcome levels</b><ul>{levels}</ul></div>")
 
 
@@ -143,6 +150,7 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
                              layout=widgets.Layout(width="620px"))
     spontaneous = widgets.Dropdown(description="Spontaneous",
                                    layout=widgets.Layout(width="620px"))
+    level_criteria = widgets.HTML()
     level = widgets.RadioButtons(description="Outcome")
     level_evidence = widgets.TagsInput(allow_duplicates=False,
                                        layout=widgets.Layout(width="620px"))
@@ -297,8 +305,8 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
         scores = [row.get("score") for row in rows]
         # The levels are the scenario's, not a fixed scale, and choosing one
         # off a bare 1-4 means scrolling back to the brief for every packet.
-        level.options = [(f"{row.get('score')} — {_clipped(row.get('criteria'))}",
-                          row.get("score")) for row in rows]
+        level_criteria.value = _levels_html(rows)
+        level.options = [(str(s), s) for s in scores]
         level.value = outcome.get("level") if outcome.get("level") in scores else None
         level_evidence.allowed_tags = _ids(packet)
         level_evidence.value = [v for v in outcome.get("evidence_utterance_ids") or []
@@ -409,7 +417,7 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
         probe, spontaneous,
         _head("Task outcome", "The scenario's own levels. The rationale "
                               "argues the level against the one above it."),
-        level, level_evidence, rationale, level_conf,
+        level_criteria, level, level_evidence, rationale, level_conf,
         _head("Final-account accuracy", "Whether the probe response states "
                                         "what actually happened. Scored apart "
                                         "from the level, never folded into it."),
