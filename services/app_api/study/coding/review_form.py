@@ -193,9 +193,9 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
     add_repair = widgets.Button(description="Add repair", icon="plus")
     add_flag = widgets.Button(description="Add access flag", icon="plus")
 
-    probe = widgets.Dropdown(description="Final probe",
+    probe = widgets.Dropdown(description="Request",
                              layout=widgets.Layout(width="620px"))
-    spontaneous = widgets.Dropdown(description="Spontaneous",
+    spontaneous = widgets.Dropdown(description="Unprompted",
                                    layout=widgets.Layout(width="620px"))
     level_criteria = widgets.HTML()
     level = widgets.RadioButtons(description="Outcome")
@@ -477,10 +477,11 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
         # the level is the ordinal outcome (6), and accuracy is scored on the
         # probe response (7). Under one heading a coder cites the readback as
         # evidence for the level.
-        _head("Final probe", "The first assistant response to the first "
-                             "request for a summary, or an earlier turn that "
-                             "gives the whole account unprompted. Neither "
-                             "means retention stays null."),
+        _head("Final probe", "The participant turn asking for a summary, or "
+                             "an assistant turn that gives the whole account "
+                             "unprompted. Retention is scored on the "
+                             "assistant's reply; neither turn means retention "
+                             "stays null."),
         probe, spontaneous,
         _head("Task outcome", "The scenario's own levels. The rationale "
                               "argues the level against the one above it."),
