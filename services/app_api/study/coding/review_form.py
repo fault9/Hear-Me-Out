@@ -54,6 +54,20 @@ def _head(title: str, hint: str):
         f"<div style='color:#666;font-size:90%;margin-bottom:6px'>{hint}</div>")
 
 
+def _pane(child, width: str):
+    """A column that scrolls on its own.
+
+    The height belongs on a block container wrapping the box, never on the box
+    itself: a flex column told to fit a height shrinks its rows to reach it,
+    and the widgets carrying no width of their own - the radio buttons, the
+    tag pickers, the buttons - collapse to a line.
+    """
+    import ipywidgets as widgets
+
+    return widgets.Box([child], layout=widgets.Layout(
+        width=width, height="840px", overflow="auto", display="block"))
+
+
 def _clipped(text, limit: int = 96) -> str:
     """Enough of a criterion to choose by; the brief above carries the rest."""
     text = " ".join(str(text or "").split())
@@ -405,12 +419,10 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
                               "decides these outside the form."),
         flags_area, add_flag,
         notes, save, status,
-    ], layout=widgets.Layout(width="56%", height="840px", overflow="auto",
-                             padding="0 14px 0 0"))
-    brief = widgets.VBox([scenario, transcript], layout=widgets.Layout(
-        width="44%", height="840px", overflow="auto"))
+    ], layout=widgets.Layout(padding="0 14px 0 0"))
+    brief = widgets.VBox([scenario, transcript])
     display(widgets.VBox([
         widgets.HBox([picker, coder_box]),
-        widgets.HBox([fields, brief]),
+        widgets.HBox([_pane(fields, "56%"), _pane(brief, "44%")]),
     ]))
     _load()
