@@ -29,16 +29,27 @@ class DialogueTranscriptTests(unittest.TestCase):
         self.assertEqual(capture_scale(path, [{"end_ms": 10100.0}]), 1.0)
         self.assertEqual(capture_scale(path, []), 1.0)
 
-    def test_recovered_time_lands_in_the_silences_not_the_speech(self):
-        """What went missing is quiet, so an utterance keeps the duration it
-        was recorded with and only the gaps absorb the shortfall."""
-        intervals = [{"start_ms": 5000.0, "end_ms": 10000.0},
-                     {"start_ms": 20000.0, "end_ms": 25000.0}]
-        mapped = capture_time_map(intervals, 1.5, 0.0, 40000.0)
-        self.assertAlmostEqual(mapped(10000.0) - mapped(5000.0), 5000.0, places=6)
-        self.assertAlmostEqual(mapped(25000.0) - mapped(20000.0), 5000.0, places=6)
-        self.assertAlmostEqual(mapped(40000.0), 60000.0, places=6)
-        self.assertEqual(capture_time_map(intervals, 1.0, 0.0, 40000.0)(7777.0), 7777.0)
+    def test_file_position_is_read_off_the_chunk_that_holds_it(self):
+        """The capture timeline says where each chunk's samples landed and
+        when they arrived, so the mapping is looked up rather than modelled."""
+        session_dir = Path(tempfile.mkdtemp())
+        # 128 ms of audio delivered every 192 ms: the graph runs behind.
+        (session_dir / "client_timeline.json").write_text(json.dumps({
+            "capture": {"sample_rate_hz": 16000, "chunks": [
+                {"chunk_sequence": i + 1, "capture_start_sample": i * 2048,
+                 "sample_count": 2048, "timeline_start_ms": i * 192.0}
+                for i in range(10)]}}))
+        mapped = capture_time_map(session_dir, 1.5, 0.0)
+        self.assertAlmostEqual(mapped(0.0), 0.0, places=6)
+        self.assertAlmostEqual(mapped(128.0), 192.0, places=6)
+        self.assertAlmostEqual(mapped(1152.0), 1728.0, places=6)
+        self.assertAlmostEqual(mapped(160.0), 224.0, places=6)
+        self.assertEqual(capture_time_map(session_dir, 1.0, 0.0)(7777.0), 7777.0)
+
+    def test_unreadable_capture_timeline_falls_back_to_a_stretch(self):
+        empty = Path(tempfile.mkdtemp())
+        self.assertAlmostEqual(capture_time_map(empty, 1.5, 0.0)(1000.0), 1500.0,
+                               places=6)
 
     def test_uses_timing_boundaries_and_preserves_route_switches(self):
         with tempfile.TemporaryDirectory() as temporary:

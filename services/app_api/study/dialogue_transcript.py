@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import copy
 import json
 import os
@@ -384,36 +385,41 @@ def capture_scale(raw_path: Path, assistant_intervals: list[dict]) -> float:
     return scale if scale - 1.0 > CAPTURE_SHORTFALL_TOLERANCE else 1.0
 
 
-def capture_time_map(intervals: list[dict], scale: float, origin: float,
-                     captured_ms: float) -> Callable[[float], float]:
-    """Map recorded time to wall-clock time for a session that lost buffers.
+def capture_time_map(session_dir: Path, scale: float,
+                     origin: float) -> Callable[[float], float]:
+    """Map a position in the participant recording to the browser clock.
 
-    What went missing is silence, so speech keeps the duration it was recorded
-    with and the shortfall is shared out across the quiet stretches in
-    proportion to the quiet each already holds. Stretching everything by one
-    factor instead inflates each utterance by the same ratio, which places
-    early turns late whenever the participant fell quiet more later on.
+    The capture timeline records, for every delivered chunk, where its samples
+    landed in the file and when they arrived. Where the audio graph runs
+    behind real time those two diverge steadily, so a position in the file is
+    read off the chunk that holds it rather than modelled. Falls back to a
+    single stretch when the timeline is unreadable, and to identity when the
+    recording already covers the session.
     """
     if scale == 1.0:
         return lambda ms: ms
-    speech = sorted(((float(row["start_ms"]), float(row["end_ms"]))
-                     for row in intervals), key=lambda pair: pair[0])
-    end = max(captured_ms, speech[-1][1] if speech else 0.0)
-    gaps, cursor = [], origin
-    for start, stop in speech:
-        gaps.append((cursor, max(start, cursor)))
-        cursor = max(stop, cursor)
-    gaps.append((cursor, max(end, cursor)))
-    quiet = sum(stop - start for start, stop in gaps)
-    missing = (end - origin) * (scale - 1.0)
-    if quiet <= 0:
-        return lambda ms: origin + (ms - origin) * scale
-    stretch = 1.0 + missing / quiet
+    linear = lambda ms: origin + (ms - origin) * scale  # noqa: E731
+    try:
+        capture = json.loads(
+            (session_dir / "client_timeline.json").read_text()).get("capture") or {}
+        rate = float(capture.get("sample_rate_hz") or 0)
+        chunks = sorted(
+            ((float(row["capture_start_sample"]) / rate * 1000.0,
+              float(row["sample_count"]) / rate * 1000.0,
+              float(row["timeline_start_ms"]))
+             for row in capture.get("chunks") or []),
+            key=lambda row: row[0])
+    except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError):
+        return linear
+    if not chunks:
+        return linear
+    starts = [row[0] for row in chunks]
 
     def mapped(ms: float) -> float:
-        shift = sum(min(max(ms - start, 0.0), stop - start) * (stretch - 1.0)
-                    for start, stop in gaps)
-        return ms + shift
+        offset = ms - origin
+        index = min(max(bisect.bisect_right(starts, offset) - 1, 0), len(chunks) - 1)
+        start, _, arrival = chunks[index]
+        return arrival + (offset - start)
 
     return mapped
 
@@ -445,8 +451,7 @@ def prepare_dialogue_transcript(session: dict, data_root: Path,
     model_fragments = transcript.get("model") or []
     origin_ms = _capture_origin_ms(session_dir, timing)
     scale = capture_scale(raw_path, assistant_intervals)
-    mapped = capture_time_map(participant_intervals, scale, origin_ms,
-                              captured_duration_ms(raw_path))
+    mapped = capture_time_map(session_dir, scale, origin_ms)
     participant_intervals = _remapped(
         participant_intervals, mapped, ("start_ms", "end_ms"))
     end_ms = max(
