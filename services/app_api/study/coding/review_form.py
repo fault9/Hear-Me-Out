@@ -37,6 +37,13 @@ def _utterances(packet: dict, speaker: str | None = None) -> list[tuple[str, str
             if speaker is None or row.get("speaker") == speaker]
 
 
+def _ids(packet: dict, speaker: str | None = None) -> list[str]:
+    """Bare ids for the tag pickers. The transcript sits above the form, so a
+    row needs the id rather than a second copy of the text."""
+    return [row.get("id") for row in packet.get("utterances") or []
+            if speaker is None or row.get("speaker") == speaker]
+
+
 def _scenario_html(scenario: dict) -> str:
     units = "".join(f"<li>{u}</li>" for u in scenario.get("unit_definitions") or [])
     levels = "".join(
@@ -105,16 +112,16 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
     spontaneous = widgets.Dropdown(description="Spontaneous",
                                    layout=widgets.Layout(width="620px"))
     level = widgets.RadioButtons(description="Outcome")
-    level_evidence = widgets.SelectMultiple(description="Evidence", rows=4,
-                                            layout=widgets.Layout(width="620px"))
+    level_evidence = widgets.TagsInput(allow_duplicates=False,
+                                       layout=widgets.Layout(width="620px"))
     rationale = widgets.Textarea(description="Rationale",
                                  layout=widgets.Layout(width="620px", height="60px"))
     level_conf = widgets.BoundedFloatText(min=0, max=1, step=0.01, value=0.9,
                                           description="Confidence")
     account = widgets.RadioButtons(options=list(FINAL_ACCOUNT_VALUES),
                                    description="Final account")
-    account_evidence = widgets.SelectMultiple(description="Evidence", rows=4,
-                                              layout=widgets.Layout(width="620px"))
+    account_evidence = widgets.TagsInput(allow_duplicates=False,
+                                         layout=widgets.Layout(width="620px"))
     account_conf = widgets.BoundedFloatText(min=0, max=1, step=0.01, value=0.9,
                                             description="Confidence")
     notes = widgets.Textarea(description="Notes",
@@ -126,32 +133,35 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
             options.append(("null", None))
         if value not in [v for _, v in options]:
             value = options[0][1]
-        return widgets.ToggleButtons(options=options, value=value,
-                                     layout=widgets.Layout(width="230px"))
+        return widgets.ToggleButtons(
+            options=options, value=value, style={"button_width": "48px"},
+            layout=widgets.Layout(width="170px"))
+
+    def _tags(allowed: list[str], value) -> "widgets.TagsInput":
+        return widgets.TagsInput(
+            value=[v for v in (value or []) if v in allowed],
+            allowed_tags=allowed, allow_duplicates=False,
+            layout=widgets.Layout(width="520px"))
 
     def _unit_box(unit: dict, packet: dict):
         rows, fields = [], {}
+        all_ids, participant_ids = _ids(packet), _ids(packet, "participant")
         for name in UNIT_LABELS:
             toggle = _tri(name, unit.get(name))
             conf = widgets.BoundedFloatText(
-                min=0, max=1, step=0.01, description="conf",
+                min=0, max=1, step=0.01,
                 value=float((unit.get("confidence") or {}).get(name) or 0.9),
-                layout=widgets.Layout(width="150px"))
-            evidence = widgets.SelectMultiple(
-                options=_utterances(packet), rows=3,
-                value=tuple((unit.get("evidence_utterance_ids") or {}).get(name) or ()),
-                layout=widgets.Layout(width="520px"))
+                layout=widgets.Layout(width="80px"))
+            evidence = _tags(
+                all_ids, (unit.get("evidence_utterance_ids") or {}).get(name))
             fields[name] = {"value": toggle, "confidence": conf,
                             "evidence": evidence}
             rows.append(widgets.HBox([
-                widgets.HTML(f"<code style='width:130px;display:inline-block'>"
+                widgets.HTML(f"<code style='width:120px;display:inline-block'>"
                              f"{name}</code>"), toggle, conf, evidence]))
-        delivery = widgets.SelectMultiple(
-            options=_utterances(packet, "participant"), rows=4,
-            value=tuple(unit.get("delivery_utterance_ids") or ()),
-            layout=widgets.Layout(width="620px"))
+        delivery = _tags(participant_ids, unit.get("delivery_utterance_ids"))
         rows.insert(0, widgets.HBox([
-            widgets.HTML("<code style='width:130px;display:inline-block'>"
+            widgets.HTML("<code style='width:120px;display:inline-block'>"
                          "delivery ids</code>"), delivery]))
         fields["delivery"] = delivery
         fields["unit_index"] = unit.get("unit_index")
@@ -254,15 +264,17 @@ def coder(study_id: int = 1, initials: str = "", data_root: Path | None = None) 
                   if isinstance(row, dict)]
         level.options = [(str(s), s) for s in scores]
         level.value = outcome.get("level") if outcome.get("level") in scores else None
-        level_evidence.options = _utterances(packet)
-        level_evidence.value = tuple(outcome.get("evidence_utterance_ids") or ())
+        level_evidence.allowed_tags = _ids(packet)
+        level_evidence.value = [v for v in outcome.get("evidence_utterance_ids") or []
+                                if v in level_evidence.allowed_tags]
         rationale.value = outcome.get("rationale") or ""
         level_conf.value = float(outcome.get("confidence") or 0.9)
 
         acc = labels.get("final_account_accuracy") or {}
         account.value = acc.get("value") or FINAL_ACCOUNT_VALUES[0]
-        account_evidence.options = _utterances(packet)
-        account_evidence.value = tuple(acc.get("evidence_utterance_ids") or ())
+        account_evidence.allowed_tags = _ids(packet)
+        account_evidence.value = [v for v in acc.get("evidence_utterance_ids") or []
+                                  if v in account_evidence.allowed_tags]
         account_conf.value = float(acc.get("confidence") or 0.9)
         notes.value = labels.get("notes") or ""
         with status:
