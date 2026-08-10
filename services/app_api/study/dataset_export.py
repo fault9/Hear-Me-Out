@@ -403,12 +403,22 @@ def _coverage_warnings(coverage: Counter, analytical_count: int) -> list[str]:
     return warnings
 
 
+def _scenario_key(value: object) -> str:
+    """The scenarios table keys on the bare id while a session carries it as
+    "scenario_20". Joined on the raw value every title came out empty, and an
+    empty covariate in every model formula empties the model frame."""
+    text = str(value or "")
+    prefix = "scenario_"
+    return text[len(prefix):] if text.startswith(prefix) else text
+
+
 def build_dataset(study_id: int, out_dir: Path) -> dict:
     data_root = Path(os.path.expanduser(os.environ.get("STUDY_DATA_ROOT", "/workspace/data")))
     backend = get_backend()
     study = backend.get_study(study_id) or {}
     participants = backend.list_participants(study_id)
-    scenarios = {str(row["id"]): row for row in backend.list_scenarios(study_id)}
+    scenarios = {_scenario_key(row["id"]): row
+                 for row in backend.list_scenarios(study_id)}
     runs = backend.list_runs(study_id)
     sessions = annotate_analysis_scopes(backend.list_sessions(study_id), runs)
     answers = backend.list_answers(study_id)
@@ -502,7 +512,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         ]
         integrity = timing.get("integrity") or {}
         capture_gaps = integrity.get("capture_gaps") or {}
-        scenario = scenarios.get(str(session.get("scenario_id"))) or {}
+        scenario = scenarios.get(_scenario_key(session.get("scenario_id"))) or {}
         started, ended = session.get("started_at"), session.get("ended_at")
         final = final_labels.get(sid)
         derived = (final or {}).get("derived") or {}
@@ -604,7 +614,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         final = final_labels.get(sid)
         if not final:
             continue
-        scenario = scenarios.get(str(session.get("scenario_id"))) or {}
+        scenario = scenarios.get(_scenario_key(session.get("scenario_id"))) or {}
         spec = ((scenario.get("scenario_card") or {}).get("analysis_spec") or {})
         unit_texts = list(spec.get("critical_units") or [])
         for unit in final.get("units") or []:
