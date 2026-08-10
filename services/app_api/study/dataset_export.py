@@ -403,6 +403,83 @@ def _coverage_warnings(coverage: Counter, analytical_count: int) -> list[str]:
     return warnings
 
 
+def _carry_file(previous: Path, out_dir: Path, name: str,
+                key_fields: tuple[str, ...]) -> int:
+    """Fill this export's blank cells from the matching row of an earlier one.
+
+    Only blanks are filled, which is what makes the merge safe: a fresh export
+    writes every human-entry cell empty and every machine column populated, so
+    a recomputed value can never be overwritten by a stale one.
+    """
+    old_path, new_path = previous / name, out_dir / name
+    if not old_path.exists() or not new_path.exists():
+        return 0
+    with old_path.open(newline="") as handle:
+        prior = {tuple(row.get(key, "") for key in key_fields): row
+                 for row in csv.DictReader(handle)}
+    with new_path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        columns = reader.fieldnames or []
+        rows = list(reader)
+    carried = 0
+    for row in rows:
+        source = prior.get(tuple(row.get(key, "") for key in key_fields))
+        if not source:
+            continue
+        # Evaluated before testing: any() short-circuits, and carrying only the
+        # first blank of a row silently drops the rest of a verdict.
+        filled = [_fill_blank(row, source, column) for column in columns]
+        if any(filled):
+            carried += 1
+    _write_csv(new_path, rows, columns)
+    return carried
+
+
+def _fill_blank(row: dict, source: dict, column: str) -> bool:
+    if str(row.get(column) or "").strip():
+        return False
+    value = str(source.get(column) or "").strip()
+    if not value:
+        return False
+    row[column] = value
+    return True
+
+
+def carry_verification(previous: Path, out_dir: Path) -> dict:
+    """Carry a turn-verification review forward into a newer export.
+
+    The review is entered into the export's own queue files, so re-exporting to
+    pick up new sessions would otherwise abandon a half-finished one.
+    """
+    if previous.resolve() == out_dir.resolve():
+        raise ValueError("carry source and destination are the same export")
+    carried = {
+        "events": _carry_file(previous, out_dir,
+                              "turn_verification_queue.csv", ("event_key",)),
+        "gaps": _carry_file(previous, out_dir,
+                            "turn_gap_verification_queue.csv",
+                            ("session_id", "gap_id")),
+        "session_reviews": _carry_file(previous, out_dir,
+                                       "turn_session_review_queue.csv",
+                                       ("session_id",)),
+    }
+    # Manual additions are hand-authored in full and a new export writes the
+    # template empty, so they are copied rather than merged.
+    old_path = previous / "turn_event_manual_additions.csv"
+    new_path = out_dir / "turn_event_manual_additions.csv"
+    added = []
+    if old_path.exists() and new_path.exists():
+        with old_path.open(newline="") as handle:
+            added = list(csv.DictReader(handle))
+        with new_path.open(newline="") as handle:
+            columns = csv.DictReader(handle).fieldnames or []
+        if added:
+            _write_csv(new_path, added, columns)
+    carried["manual_additions"] = len(added)
+    carried["from"] = str(previous)
+    return carried
+
+
 def _scenario_key(value: object) -> str:
     """The scenarios table keys on the bare id while a session carries it as
     "scenario_20". Joined on the raw value every title came out empty, and an
@@ -1030,12 +1107,18 @@ def main() -> None:
     parser.add_argument("--study-id", type=int,
                         default=int(os.environ.get("CODING_STUDY_ID", "1")))
     parser.add_argument("--out", default=None)
+    parser.add_argument("--carry-verification-from", default=None, type=Path,
+                        help="earlier export whose turn-verification review "
+                             "should be carried into this one")
     args = parser.parse_args()
     data_root = Path(os.path.expanduser(os.environ.get("STUDY_DATA_ROOT", "/workspace/data")))
     out_dir = Path(args.out) if args.out else (
         data_root / "exports" / f"study{args.study_id}"
         / time.strftime("dataset_%Y%m%dT%H%M%SZ", time.gmtime()))
     summary = build_dataset(args.study_id, out_dir)
+    if args.carry_verification_from:
+        summary["carried_verification"] = carry_verification(
+            args.carry_verification_from, out_dir)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
