@@ -675,10 +675,17 @@ export function useSoundboardAudit(opts: {
         for (const [condition, group] of groups) {
           scripts.push({ condition, turns: await buildTurns(group) })
         }
-        const order = scripts.map((s) => s.condition)
+        // A cycle holds every condition once, so none drifts with the server,
+        // and each cycle rotates the seeded order by one, so none keeps the
+        // slot after the cooldown either: over a run divisible by the number
+        // of conditions every condition holds every position equally often.
+        // Drawn rather than rotated, position balance is left to chance - over
+        // 60 cycles of four one condition led 21 times and another 12.
+        const order = shuffled(scripts.map((s) => s.condition), config.seed)
         const plan: { rep: number; condition: string; cycle: number }[] = []
         for (let cycle = 1; cycle <= config.reps; cycle++) {
-          for (const condition of order) {
+          const turn = (cycle - 1) % order.length
+          for (const condition of [...order.slice(turn), ...order.slice(0, turn)]) {
             plan.push({ rep: plan.length + 1, condition, cycle })
           }
         }
