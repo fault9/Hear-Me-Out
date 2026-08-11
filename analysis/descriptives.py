@@ -1,15 +1,23 @@
-"""Blind pooled descriptives — safe before collection ends.
+"""Pooled descriptives, blind by default.
 
 Reports the coding outcomes and self-report distributions POOLED ACROSS
 CONDITIONS. Condition appears only in design bookkeeping and data-availability
 counts, which say how much data exists rather than what it shows, so nothing
 here can reveal a contrast.
 
-Usage: python3 descriptives.py
+    python3 descriptives.py                  pooled only (safe any time)
+    python3 descriptives.py --by-condition   repeats every section per
+                                             condition, for the runs that are
+                                             already unblinded
+
+The flag exists so that the tables beside a model estimate come from the same
+frames the model used, rather than being assembled separately. It is gated the
+way models.R is: run.sh passes it only for exploratory and confirmatory runs.
 """
 
 import csv
 import os
+import sys
 from collections import Counter, defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -327,6 +335,20 @@ def self_report(sessions):
             print(f"      {count:3d}  {value}")
 
 
+def by_condition(sessions, units, events, moves):
+    """Every outcome section again, one condition at a time."""
+    conditions = sorted({r["condition"] for r in sessions if r.get("condition")})
+    for condition in conditions:
+        cell = [r for r in sessions if r.get("condition") == condition]
+        ids = {r["session_id"] for r in cell}
+        print(f"\n{'=' * 72}\n=== {condition}  ({len(cell)} interactions)\n{'=' * 72}")
+        uptake([u for u in units if u["session_id"] in ids])
+        repair(cell, [m for m in moves if m["session_id"] in ids])
+        turn_taking(cell, [e for e in events if e["session_id"] in ids])
+        experience(cell, [u for u in units if u["session_id"] in ids])
+        self_report([dict(r) for r in cell])
+
+
 def main():
     sessions = _read(FRAMES, "scenario_level.csv")
     if sessions is None:
@@ -339,11 +361,17 @@ def main():
     keep = {r["session_id"] for r in sessions}
     moves = [m for m in moves if m["session_id"] in keep]
 
+    unblinded = "--by-condition" in sys.argv
     coverage(sessions, units, events)
+    print(f"\n{'#' * 72}\n# POOLED ACROSS CONDITIONS\n{'#' * 72}")
     uptake(units)
     repair(sessions, moves)
     turn_taking(sessions, events)
     experience(sessions, units)
+    if unblinded:
+        by_condition(sessions, units, events, moves)
+        self_report([dict(r) for r in sessions])
+        return
     for row in sessions:  # blind guard: nothing below may group by condition
         del row["condition"]
     self_report(sessions)

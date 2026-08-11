@@ -70,6 +70,16 @@ echo "=== copied   $(ls "$HERE/data"/*.csv | wc -l) csv files"
 
 cd "$HERE"
 python3 prep.py
+
+# Descriptives come from the same frames the models use, so the tables beside
+# an estimate cannot drift from it. Condition stays hidden unless this run is
+# already unblinded.
+if [ "$MODE" = "--permute" ]; then
+  python3 descriptives.py | tee "output/descriptives.txt"
+else
+  python3 descriptives.py --by-condition | tee "output/descriptives.txt"
+fi
+
 Rscript models.R "$MODE"
 
 mkdir -p "$RUN"
