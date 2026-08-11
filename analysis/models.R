@@ -64,6 +64,13 @@ unit_file <- if (sensitivity) {
 }
 units <- read.csv(file.path(frames, unit_file), stringsAsFactors = FALSE)
 
+read_optional <- function(name) {
+  path <- file.path(frames, name)
+  if (file.exists(path)) read.csv(path, stringsAsFactors = FALSE) else NULL
+}
+events <- read_optional("turn_events_certified.csv")
+gaps <- read_optional("turn_gaps_certified.csv")
+
 UPTAKE_STAGES <- c("acknowledgement", "update_claim", "incorporation",
                    "retention")
 
@@ -137,12 +144,52 @@ if (permute) {
   cat("=== CONFIRMATORY RUN — this is the once-only real analysis ===\n")
 }
 
+# The two primary contrasts hold the post-transition voice constant. The
+# third asks whether a converted voice matters at all, which is the baseline
+# the other two are read against; it is secondary and stays outside the
+# prespecified Holm family.
 contrasts <- list(
   A = c(treated = "vc_activation", reference = "stable_converted"),
   B = c(treated = "vc_deactivation", reference = "stable_natural")
 )
+secondary_contrasts <- list(
+  C = c(treated = "stable_converted", reference = "stable_natural")
+)
 
-fit_one <- function(sub, outcome) {
+# An episode in a certified session is not a verified episode. Counting only
+# what a listener confirmed keeps the automatic nominations - 45% of which did
+# not survive verification - out of the models.
+turn_counts <- function(events, sessions) {
+  if (is.null(events) || !nrow(events)) return(NULL)
+  judged <- events[nzchar(as.character(events$verifier_initials)), ]
+  if (!nrow(judged)) return(NULL)
+  judged$ov <- parse_binary(judged$verified_overlap, "verified_overlap")
+  judged$pre <- parse_binary(judged$verified_assistant_premature_onset,
+                             "verified_assistant_premature_onset")
+  judged$bi <- parse_binary(judged$verified_participant_barge_in,
+                            "verified_participant_barge_in")
+  per <- do.call(rbind, lapply(split(judged, judged$session_id), function(g)
+    data.frame(session_id = g$session_id[1],
+               verified_overlaps = sum(g$ov, na.rm = TRUE),
+               verified_premature = sum(g$pre, na.rm = TRUE),
+               verified_barge_ins = sum(g$bi, na.rm = TRUE),
+               stringsAsFactors = FALSE)))
+  # A certified session with nothing confirmed contributes zeros, not a gap in
+  # the frame; dropping it would condition the count on having any event.
+  base <- data.frame(session_id = unique(events$session_id),
+                     stringsAsFactors = FALSE)
+  out <- merge(base, per, by = "session_id", all.x = TRUE)
+  for (field in c("verified_overlaps", "verified_premature",
+                  "verified_barge_ins")) {
+    out[[field]][is.na(out[[field]])] <- 0L
+  }
+  merge(sessions[, c("session_id", "participant_id", "condition",
+                     "scenario_title", "position")], out, by = "session_id")
+}
+
+turns <- turn_counts(events, dat)
+
+fit_one <- function(sub, outcome, count_field = "repairs_post") {
   sub$cond <- factor(sub$condition,
                      levels = c(sub$reference[1], sub$treated[1]))
   if (outcome == "grounding") {
@@ -167,10 +214,11 @@ fit_one <- function(sub, outcome) {
                 dispersion = NA_real_,
                 note = paste(m@optinfo$conv$lme4$messages, collapse = "; ")))
   }
-  # Repairs: Poisson first; refit negative-binomial when overdispersed
+  # Counts: Poisson first; refit negative-binomial when overdispersed
   # (Pearson chi-square / df > 1.5).
-  m <- glmmTMB(repairs_post ~ cond + scenario_title + position + (1 | participant_id),
-               data = sub, family = poisson)
+  form <- as.formula(paste(count_field,
+                           "~ cond + scenario_title + position + (1 | participant_id)"))
+  m <- glmmTMB(form, data = sub, family = poisson)
   pearson <- sum(residuals(m, type = "pearson")^2)
   ratio <- pearson / df.residual(m)
   label <- "Poisson GLMM"
@@ -184,63 +232,93 @@ fit_one <- function(sub, outcome) {
                  error = function(e) NA_real_)
   list(estimate = row[1, 1], se = row[1, 2], p = row[1, 4],
        model = label, n = nrow(sub),
-       outcome_rate = mean(sub$repairs_post),
-       outcome_events = sum(sub$repairs_post), stages = 1L,
+       outcome_rate = mean(sub[[count_field]]),
+       outcome_events = sum(sub[[count_field]]), stages = 1L,
        re_sd = re, singular = isTRUE(re < 1e-4), dispersion = ratio,
        note = if (isTRUE(m$sdr$pdHess)) "" else "Hessian not positive definite")
 }
 
-results <- data.frame()
+all_contrasts <- c(contrasts, secondary_contrasts)
+specs <- list()
 for (name in names(contrasts)) {
-  pair <- contrasts[[name]]
   for (outcome in c("grounding", "repairs_post")) {
-    frame <- if (outcome == "grounding" && grounding_level != "scenario") {
-      units
-    } else {
-      dat
+    specs[[length(specs) + 1]] <- list(name = name, outcome = outcome,
+                                       family = "primary")
+  }
+}
+for (name in names(secondary_contrasts)) {
+  for (outcome in c("grounding", "repairs_post")) {
+    specs[[length(specs) + 1]] <- list(name = name, outcome = outcome,
+                                       family = "secondary")
+  }
+}
+if (!is.null(turns)) {
+  for (name in names(all_contrasts)) {
+    for (outcome in c("verified_premature", "verified_overlaps")) {
+      specs[[length(specs) + 1]] <- list(name = name, outcome = outcome,
+                                         family = "secondary")
     }
-    sub <- frame[frame$condition %in% pair, ]
-    sub$treated <- pair[["treated"]]
-    sub$reference <- pair[["reference"]]
-    sub <- sub[!is.na(sub$position), ]
-    keep <- if (outcome == "repairs_post") {
-      !is.na(sub$repairs_post)
-    } else {
-      !is.na(sub$grounding)
-    }
-    fit <- tryCatch(fit_one(sub[keep, ], outcome),
-                    error = function(e) list(estimate = NA, se = NA, p = NA,
-                                             model = paste("FAILED:", conditionMessage(e)),
-                                             n = sum(keep), outcome_rate = NA,
-                                             outcome_events = NA, re_sd = NA,
-                                             stages = NA,
-                                             singular = NA, dispersion = NA,
-                                             note = conditionMessage(e)))
-    results <- rbind(results, data.frame(
-      contrast = sprintf("%s: %s vs %s", name, pair[["treated"]], pair[["reference"]]),
-      outcome = if (outcome != "grounding") {
-        outcome
-      } else if (grounding_level == "stacked") {
-        "grounding/stacked"
-      } else if (grounding_level == "unit") {
-        paste0("grounding/", grounding_outcome)
-      } else {
-        outcome
-      },
-      model = fit$model, estimate = fit$estimate,
-      se = fit$se, p = fit$p, n_obs = fit$n,
-      ci_low = fit$estimate - 1.96 * fit$se,
-      ci_high = fit$estimate + 1.96 * fit$se,
-      outcome_rate = fit$outcome_rate, outcome_events = fit$outcome_events,
-      stages = fit$stages,
-      re_sd = fit$re_sd, singular = fit$singular, dispersion = fit$dispersion,
-      note = fit$note,
-      n_participants = length(unique(sub$participant_id[keep])),
-      permuted = permute))
   }
 }
 
-results$p_holm <- p.adjust(results$p, method = "holm")
+results <- data.frame()
+for (spec in specs) {
+  pair <- all_contrasts[[spec$name]]
+  outcome <- spec$outcome
+  counted <- outcome != "grounding"
+  frame <- if (outcome == "grounding" && grounding_level != "scenario") {
+    units
+  } else if (startsWith(outcome, "verified_")) {
+    turns
+  } else {
+    dat
+  }
+  sub <- frame[frame$condition %in% pair, ]
+  sub$treated <- pair[["treated"]]
+  sub$reference <- pair[["reference"]]
+  sub <- sub[!is.na(sub$position), ]
+  keep <- if (counted) !is.na(sub[[outcome]]) else !is.na(sub$grounding)
+  fit <- tryCatch(fit_one(sub[keep, ], if (counted) "count" else "grounding",
+                          count_field = outcome),
+                  error = function(e) list(estimate = NA, se = NA, p = NA,
+                                           model = paste("FAILED:", conditionMessage(e)),
+                                           n = sum(keep), outcome_rate = NA,
+                                           outcome_events = NA, re_sd = NA,
+                                           stages = NA,
+                                           singular = NA, dispersion = NA,
+                                           note = conditionMessage(e)))
+  results <- rbind(results, data.frame(
+    family = spec$family,
+    contrast = sprintf("%s: %s vs %s", spec$name, pair[["treated"]],
+                       pair[["reference"]]),
+    outcome = if (outcome != "grounding") {
+      outcome
+    } else if (grounding_level == "stacked") {
+      "grounding/stacked"
+    } else if (grounding_level == "unit") {
+      paste0("grounding/", grounding_outcome)
+    } else {
+      outcome
+    },
+    model = fit$model, estimate = fit$estimate,
+    se = fit$se, p = fit$p, n_obs = fit$n,
+    ci_low = fit$estimate - 1.96 * fit$se,
+    ci_high = fit$estimate + 1.96 * fit$se,
+    outcome_rate = fit$outcome_rate, outcome_events = fit$outcome_events,
+    stages = fit$stages,
+    re_sd = fit$re_sd, singular = fit$singular, dispersion = fit$dispersion,
+    note = fit$note,
+    n_participants = length(unique(sub$participant_id[keep])),
+    permuted = permute))
+}
+
+# The prespecified family is the two primary contrasts crossed with the two
+# co-primary outcomes. The secondary contrast and the verified turn-taking
+# counts are reported unadjusted and labelled, rather than being folded into a
+# family that was frozen before they existed.
+results$p_holm <- NA_real_
+primary <- results$family == "primary"
+results$p_holm[primary] <- p.adjust(results$p[primary], method = "holm")
 stem <- if (permute) "smoke_results" else if (exploratory) {
   "exploratory_results"
 } else {
@@ -250,15 +328,21 @@ if (sensitivity) stem <- paste0(stem, "_sensitivity_complete_technical")
 out <- file.path(here, "output", paste0(stem, ".csv"))
 dir.create(dirname(out), showWarnings = FALSE, recursive = TRUE)
 write.csv(results, out, row.names = FALSE)
-print(results[, c("contrast", "outcome", "model", "estimate", "ci_low",
-                  "ci_high", "p", "p_holm", "n_obs")])
+show <- c("contrast", "outcome", "model", "estimate", "ci_low", "ci_high",
+          "p", "p_holm", "n_obs")
+cat("\n=== primary family (Holm-adjusted) ===\n")
+print(results[primary, show])
+if (any(!primary)) {
+  cat("\n=== secondary, unadjusted ===\n")
+  print(results[!primary, setdiff(show, "p_holm")])
+}
 
 # Whether the design can carry these models is answerable on partial data;
 # whether the effect is real is not. A singular random effect, a near-constant
 # outcome or a 20-wide confidence interval means the model needs changing, and
 # that change has to be made before the confirmatory run rather than after it.
 cat("\n=== model diagnostics ===\n")
-print(results[, c("contrast", "outcome", "n_obs", "n_participants",
+print(results[, c("family", "contrast", "outcome", "n_obs", "n_participants",
                   "stages", "outcome_events", "outcome_rate", "re_sd",
                   "singular", "dispersion", "note")])
 cat("\nRead as: singular TRUE means the participant random effect collapsed;\n")
@@ -266,4 +350,47 @@ cat("outcome_rate near 0 or 1 means the logistic model has little to fit;\n")
 cat("dispersion over 1.5 is why the repair model switches to negative binomial;\n")
 cat("a ci_low/ci_high spanning several log-odds means the data cannot yet\n")
 cat("distinguish anything, which is a power statement and not a null result.\n")
+# Detector precision is a prerequisite, not an aside: if the automatic gap
+# detector is less accurate under one voice than another, every automatic
+# turn-taking count carries the manipulation inside it. The sample was
+# stratified on condition so this could be checked rather than assumed.
+if (!is.null(gaps)) {
+  judged <- gaps[nzchar(as.character(gaps$verifier_initials)), ]
+  if (nrow(judged)) {
+    judged$real <- parse_binary(judged$verified_positive_gap,
+                                "verified_positive_gap")
+    cat("\n=== response-gap detector precision (verified sample) ===\n")
+    per <- do.call(rbind, lapply(split(judged, judged$condition), function(g) {
+      n <- sum(!is.na(g$real))
+      k <- sum(g$real, na.rm = TRUE)
+      # Wilson interval: at these counts a normal approximation would run
+      # outside [0, 1].
+      z <- 1.96
+      phat <- if (n) k / n else NA_real_
+      centre <- (k + z^2 / 2) / (n + z^2)
+      halfwidth <- z * sqrt(phat * (1 - phat) / n + z^2 / (4 * n^2)) /
+        (1 + z^2 / n)
+      data.frame(condition = g$condition[1], judged = n, real = k,
+                 precision = round(phat, 3),
+                 ci_low = round(max(0, centre - halfwidth), 3),
+                 ci_high = round(min(1, centre + halfwidth), 3))
+    }))
+    print(per, row.names = FALSE)
+    if (nrow(per) > 1 && min(per$judged) >= 5) {
+      test <- tryCatch(
+        summary(glmer(real ~ condition + (1 | participant_id), data = judged,
+                      family = binomial,
+                      control = glmerControl(optimizer = "bobyqa"))),
+        error = function(e) NULL)
+      if (!is.null(test)) {
+        cat("\nprecision by condition (logistic, participant intercept):\n")
+        print(round(test$coefficients, 4))
+      }
+    }
+    cat("\nPrecision far below 1 means the automatic gap count is not a\n")
+    cat("measurement; differing precision across conditions means it is not\n")
+    cat("even a comparable one. Report verified gaps weighted by stratum.\n")
+  }
+}
+
 cat("\nwritten:", out, "\n")

@@ -60,6 +60,10 @@ TURN_GAP_KEEP = [
     "session_id", "participant_id", "condition", "gap_id", "direction",
     "from_speaker", "to_speaker", "gap_duration_ms", "verified_positive_gap",
     "verified_gap_duration_ms",
+    # Precision is estimated from the verified sample and weighted back by
+    # stratum, so both which gaps were drawn and which were judged must
+    # survive into the frame.
+    "sample_stratum", "verification_sample", "verifier_initials",
 ]
 
 
