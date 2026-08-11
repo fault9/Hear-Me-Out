@@ -62,7 +62,8 @@ unit_file <- if (sensitivity) {
 } else {
   "unit_level.csv"
 }
-units <- read.csv(file.path(frames, unit_file), stringsAsFactors = FALSE)
+units_raw <- read.csv(file.path(frames, unit_file), stringsAsFactors = FALSE)
+units <- units_raw
 
 read_optional <- function(name) {
   path <- file.path(frames, name)
@@ -74,18 +75,39 @@ gaps <- read_optional("turn_gaps_certified.csv")
 UPTAKE_STAGES <- c("acknowledgement", "update_claim", "incorporation",
                    "retention")
 
-stack_uptake <- function(u) {
+stack_uptake <- function(u, missing_as_failure = FALSE) {
   rows <- lapply(UPTAKE_STAGES, function(stage) {
     data.frame(participant_id = u$participant_id, session_id = u$session_id,
                condition = u$condition, scenario_title = u$scenario_title,
                analytical_position = u$analytical_position,
                unit_key = paste(u$session_id, u$unit_index, sep = ":"),
+               attempted = parse_binary(u$attempted, "attempted"),
                stage = stage, grounding = parse_binary(u[[stage]], stage),
                stringsAsFactors = FALSE)
   })
   out <- do.call(rbind, rows)
-  # A stage the coder could not judge is missing, not a failure.
-  out[!is.na(out$grounding), ]
+  if (!missing_as_failure) {
+    # A stage the coder could not judge is missing, not a failure.
+    return(out[!is.na(out$grounding), ])
+  }
+  # End-to-end: among units the participant tried to communicate, a stage that
+  # never became observable is a failure of the whole path rather than absent
+  # data. The frozen plan names this a sensitivity, not a replacement for the
+  # co-primary, because it answers a different question - whether information
+  # survived the interaction, rather than whether it was taken up once it
+  # arrived.
+  out <- out[!is.na(out$attempted) & out$attempted == 1L, ]
+  out$grounding[is.na(out$grounding)] <- 0L
+  out
+}
+
+as_unit_frame <- function(u) {
+  u$participant_id <- factor(u$participant_id)
+  u$unit_key <- factor(u$unit_key)
+  u$scenario_title <- factor(u$scenario_title)
+  u$position <- suppressWarnings(as.integer(u$analytical_position))
+  if ("stage" %in% names(u)) u$stage <- factor(u$stage, levels = UPTAKE_STAGES)
+  u
 }
 
 parse_binary <- function(values, field) {
@@ -101,16 +123,23 @@ parse_binary <- function(values, field) {
   result
 }
 
+endtoend <- NULL
+delivery <- NULL
 if (grounding_level == "stacked") {
-  units <- stack_uptake(units)
-  units$participant_id <- factor(units$participant_id)
-  units$unit_key <- factor(units$unit_key)
-  units$scenario_title <- factor(units$scenario_title)
-  units$stage <- factor(units$stage, levels = UPTAKE_STAGES)
-  units$position <- suppressWarnings(as.integer(units$analytical_position))
+  units <- as_unit_frame(stack_uptake(units_raw))
+  endtoend <- as_unit_frame(stack_uptake(units_raw, missing_as_failure = TRUE))
+  # Whether delivery itself depends on condition decides whether the co-primary
+  # conditions on a post-treatment variable.
+  delivery <- as_unit_frame(within(units_raw, {
+    unit_key <- paste(session_id, unit_index, sep = ":")
+    grounding <- parse_binary(complete_transmitted, "complete_transmitted")
+  }))
+  delivery <- delivery[!is.na(delivery$grounding), ]
   cat(sprintf("grounding: stacked over %s (%d observations, %d units)\n",
               paste(UPTAKE_STAGES, collapse = "/"), nrow(units),
               nlevels(units$unit_key)))
+  cat(sprintf("end-to-end sensitivity: %d observations; delivery: %d units\n",
+              nrow(endtoend), nrow(delivery)))
 } else if (grounding_level == "unit") {
   units$grounding <- parse_binary(units[[grounding_outcome]], grounding_outcome)
   units$participant_id <- factor(units$participant_id)
@@ -174,9 +203,19 @@ turn_counts <- function(events, sessions) {
                verified_premature = sum(g$pre, na.rm = TRUE),
                verified_barge_ins = sum(g$bi, na.rm = TRUE),
                stringsAsFactors = FALSE)))
-  # A certified session with nothing confirmed contributes zeros, not a gap in
-  # the frame; dropping it would condition the count on having any event.
-  base <- data.frame(session_id = unique(events$session_id),
+  # A session whose candidates were all judged and none confirmed contributes
+  # zeros; dropping it would condition the count on having had an event. A
+  # session still part-way through verification contributes nothing, because a
+  # count of what has been confirmed so far is not a count of what happened.
+  complete <- vapply(split(events, events$session_id),
+                     function(g) all(nzchar(as.character(g$verifier_initials))),
+                     logical(1))
+  pending <- names(complete)[!complete]
+  if (length(pending)) {
+    cat(sprintf("turn counts: %d session(s) excluded, verification incomplete\n",
+                length(pending)))
+  }
+  base <- data.frame(session_id = names(complete)[complete],
                      stringsAsFactors = FALSE)
   out <- merge(base, per, by = "session_id", all.x = TRUE)
   for (field in c("verified_overlaps", "verified_premature",
@@ -260,14 +299,29 @@ if (!is.null(turns)) {
     }
   }
 }
+for (name in names(all_contrasts)) {
+  if (!is.null(delivery)) {
+    specs[[length(specs) + 1]] <- list(name = name, outcome = "delivery",
+                                       family = "secondary")
+  }
+  if (!is.null(endtoend)) {
+    specs[[length(specs) + 1]] <- list(name = name, outcome = "endtoend",
+                                       family = "secondary")
+  }
+}
 
 results <- data.frame()
 for (spec in specs) {
   pair <- all_contrasts[[spec$name]]
   outcome <- spec$outcome
-  counted <- outcome != "grounding"
+  binary <- outcome %in% c("grounding", "delivery", "endtoend")
+  counted <- !binary
   frame <- if (outcome == "grounding" && grounding_level != "scenario") {
     units
+  } else if (outcome == "delivery") {
+    delivery
+  } else if (outcome == "endtoend") {
+    endtoend
   } else if (startsWith(outcome, "verified_")) {
     turns
   } else {
@@ -291,7 +345,11 @@ for (spec in specs) {
     family = spec$family,
     contrast = sprintf("%s: %s vs %s", spec$name, pair[["treated"]],
                        pair[["reference"]]),
-    outcome = if (outcome != "grounding") {
+    outcome = if (outcome == "delivery") {
+      "complete_transmitted"
+    } else if (outcome == "endtoend") {
+      "grounding/end-to-end (sensitivity)"
+    } else if (outcome != "grounding") {
       outcome
     } else if (grounding_level == "stacked") {
       "grounding/stacked"

@@ -85,6 +85,14 @@ fi
 
 Rscript models.R "$MODE"
 
+# The technical sensitivity analysis is part of the frozen plan, so it runs
+# whenever the main models do rather than needing a second invocation nobody
+# remembers to make.
+if [ -f "output/frames/scenario_level_sensitivity_complete_technical.csv" ]; then
+  Rscript models.R "$MODE" --complete-technical-sensitivity || \
+    echo "sensitivity models failed; primary results above are unaffected" >&2
+fi
+
 mkdir -p "$RUN"
 cp -r "$HERE/output/"* "$RUN/"
 
