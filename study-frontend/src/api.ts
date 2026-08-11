@@ -213,6 +213,10 @@ export const adminApi = {
     jpost(`/studies/${id}/review/turn-verdict`, body, adminHeaders(t)),
   reviewClaim: (t: string, id: number, reviewer: string) =>
     jpost(`/studies/${id}/review/claim`, { reviewer }, adminHeaders(t)),
+  // The queue is pinned to one export so the item set cannot move mid-pass;
+  // this is how sessions recorded since it began enter the queue.
+  reviewRepin: (t: string, id: number) =>
+    jpost(`/studies/${id}/review/repin`, {}, adminHeaders(t)),
   reviewContext: (t: string, id: number, sessionId: string, fromMs: number, toMs: number) =>
     jget(`/studies/${id}/review/context?session_id=${encodeURIComponent(sessionId)}`
          + `&from_ms=${Math.round(fromMs)}&to_ms=${Math.round(toMs)}`, adminHeaders(t)),

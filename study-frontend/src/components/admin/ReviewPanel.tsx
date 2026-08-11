@@ -70,6 +70,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const [note, setNote] = useState("")
   const [correctionMs, setCorrectionMs] = useState(0)
   const [exportName, setExportName] = useState("")
+  const [latestExport, setLatestExport] = useState("")
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map())
@@ -93,6 +94,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       const data = await adminApi.reviewQueue(token, studyId)
       setEvents(data.events || [])
       setExportName(data.export || "")
+      setLatestExport(data.latest_export || "")
       setCorrectionMs(data.participant_capture_latency_correction_ms || 0)
       const next = (data.events || []).findIndex((e: Event) => !e.verdict)
       setIndex(next === -1 ? 0 : next)
@@ -297,6 +299,21 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <Badge variant="secondary">{done} / {events.length} verified</Badge>
         <span className="text-muted-foreground">item {index + 1} · {exportName}</span>
+        {latestExport && latestExport !== exportName && (
+          <Button size="sm" variant="outline" disabled={busy}
+            onClick={async () => {
+              setBusy(true); setErr(null)
+              try {
+                const r: any = await adminApi.reviewRepin(token, studyId)
+                await load()
+                setErr(`Queue advanced to ${r.export}: ${r.events} events, `
+                  + `${r.completed} already verified.`)
+              } catch (e: any) { setErr(e?.message || String(e)) }
+              finally { setBusy(false) }
+            }}>
+            Load newer export
+          </Button>
+        )}
         <Button size="sm" variant="secondary" disabled={busy}
           onClick={async () => {
             setBusy(true); setErr(null)

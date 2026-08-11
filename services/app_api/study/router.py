@@ -635,6 +635,11 @@ def build_study_router() -> APIRouter:
     def _review_dir(study_id: int) -> Path:
         return Path(os.path.expanduser(_DATA_ROOT)) / "review" / f"study{study_id}"
 
+    def _latest_export(study_id: int) -> Optional[str]:
+        base = Path(os.path.expanduser(_DATA_ROOT)) / "exports" / f"study{study_id}"
+        exports = sorted(base.glob("dataset_*")) if base.is_dir() else []
+        return exports[-1].name if exports else None
+
     def _pinned_export(study_id: int) -> Optional[Path]:
         """The export this review pass runs against. Pinned on first use so a
         later export cannot change the item set mid-pass."""
@@ -700,10 +705,44 @@ def build_study_router() -> APIRouter:
         # microphone file needs it added back to land on the same instant.
         study = backend.get_study(study_id) or {}
         timing_settings = ((study.get("settings") or {}).get("timing") or {})
-        return {"export": export.name, "events": events,
+        return {"export": export.name, "latest_export": _latest_export(study_id),
+                "events": events,
                 "participant_capture_latency_correction_ms": float(
                     timing_settings.get("participant_capture_latency_correction_ms") or 0.0),
                 "completed": sum(1 for e in events if e["verdict"])}
+
+    @router.post("/studies/{study_id}/review/repin",
+                 dependencies=[Depends(require_admin)])
+    async def review_repin(study_id: int):
+        """Advance the pass to the newest export.
+
+        The pin holds the item set still while a pass is under way, which is
+        also why sessions recorded since it began never appear. Advancing is
+        how they enter the queue. Verdicts are keyed by event and stored
+        outside the export, so everything already verified stays verified.
+        """
+        latest = _latest_export(study_id)
+        if latest is None:
+            raise HTTPException(status_code=409, detail=(
+                "No dataset export found. Download the analysis dataset first."))
+        pass_file = _review_dir(study_id) / "pass.json"
+        previous = None
+        if pass_file.is_file():
+            try:
+                previous = json.loads(pass_file.read_text()).get("export")
+            except ValueError:
+                previous = None
+        pass_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(pass_file, {"export": latest,
+                                      "pinned_at_unix_s": time.time(),
+                                      "previous_export": previous})
+        export, rows = _queue_rows(study_id)
+        verdicts = _load_verdicts(study_id)
+        keys = [row.get("event_key") or f"{row['session_id']}::{row['episode_id']}"
+                for row in rows]
+        return {"export": export.name, "previous_export": previous,
+                "events": len(keys),
+                "completed": sum(1 for key in keys if key in verdicts)}
 
     @router.post("/studies/{study_id}/review/turn-verdict",
                  dependencies=[Depends(require_admin)])
