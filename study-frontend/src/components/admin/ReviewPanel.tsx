@@ -122,7 +122,6 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   // One transport drives both tracks in lockstep; solo is a mute, not a
   // separate player, so isolating a track never desynchronizes the position.
   const [playing, setPlaying] = useState(false)
-  const [showOpposite, setShowOpposite] = useState(false)
   const [position, setPosition] = useState(0)
   const [duration, setDuration] = useState(0)
   const [solo, setSolo] = useState<"both" | "participant_raw" | "assistant">("both")
@@ -278,7 +277,6 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     // unchanged records exactly what it measured.
     setBounds({ start: event.verdict?.verified_gap_start_ms ?? event.gap_start_ms,
                 end: event.verdict?.verified_gap_end_ms ?? event.gap_end_ms })
-    setShowOpposite(false)
     setUnlocked(null)
     const upcoming = events[index + 1]
     if (upcoming) {
@@ -403,19 +401,6 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   if (!event) return <p className="text-sm text-muted-foreground">Queue is empty.</p>
 
   const [from, to] = eventWindow(event)
-  // The non-nominated direction folds away but must stay reachable: initiator
-  // is an automatic classification, and hearing the opposite of what it
-  // claims is exactly what verification exists to record.
-  const opposite = event.initiator === "participant"
-    ? "verified_assistant_premature_onset"
-    : event.initiator === "assistant"
-      ? "verified_participant_barge_in" : null
-  const oppositeFolded = opposite != null && !showOpposite && !answers[opposite]
-  const inOppositeChain = (key: string): boolean => {
-    if (key === opposite) return true
-    const parent = questions.find((q) => q.key === key)?.dependsOn
-    return parent ? inOppositeChain(parent) : false
-  }
   const missing = unanswered(answers, questions)
   const locked = complete(event) && unlocked !== keyOf(event)
   const span = (start: any, end: any): string => {
@@ -510,18 +495,6 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
 
       <div className="rounded-lg border p-3">
         {questions.map((q) => {
-          if (oppositeFolded && inOppositeChain(q.key)) {
-            if (q.key !== opposite) return null
-            return (
-              <div key={q.key} className="mb-3">
-                <button type="button"
-                  className="text-xs text-muted-foreground underline"
-                  onClick={() => setShowOpposite(true)}>
-                  Hear the opposite direction? Show “{q.label}”
-                </button>
-              </div>
-            )
-          }
           const enabled = applicable(q.key, answers, questions)
           return (
             <div key={q.key} className={enabled ? "mb-3" : "mb-3 opacity-40"}>
