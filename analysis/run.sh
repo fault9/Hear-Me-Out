@@ -3,6 +3,7 @@
 # the models, archive the output with a record of what produced it.
 #
 #   analysis/run.sh <export-dir>                  # permuted (default, safe)
+#   analysis/run.sh <export-dir> --exploratory    # real labels, preliminary
 #   CONFIRMATORY=1 analysis/run.sh <export-dir> --confirmatory
 #
 # Only analysis/data and analysis/output are cleared, and both are rebuilt from
@@ -21,9 +22,14 @@ SRC="${1:-}"
 MODE="${2:---permute}"
 
 if [ -z "$SRC" ]; then
-  echo "usage: $0 <export-dir> [--permute|--confirmatory]" >&2
+  echo "usage: $0 <export-dir> [--permute|--exploratory|--confirmatory]" >&2
   exit 2
 fi
+
+case "$MODE" in
+  --permute|--exploratory|--confirmatory) ;;
+  *) echo "unknown mode: $MODE" >&2; exit 2 ;;
+esac
 
 SRC="$(cd "$SRC" 2>/dev/null && pwd)" || { echo "no such directory: ${1}" >&2; exit 2; }
 
