@@ -10,9 +10,16 @@
 # Two primary contrasts, each holding the post-transition voice state constant:
 #   A: vc_activation   vs stable_converted
 #   B: vc_deactivation vs stable_natural
-# Co-primary outcomes: demonstrated_grounding (logistic GLMM) and
-# repair_post_boundary (Poisson GLMM, negative-binomial if overdispersed).
-# The four tests form one Holm-adjusted family.
+# Co-primary outcomes: grounding (logistic GLMM) and repair_post_boundary
+# (Poisson GLMM, negative-binomial if overdispersed). The four tests form one
+# Holm-adjusted family.
+#
+# GROUNDING_LEVEL selects the grounding outcome. The interaction-level
+# demonstrated_grounding proved unidentifiable on collected data - 3 successes
+# across 45 interactions, complete separation, intervals thousands of log-odds
+# wide - so the prespecified fallback moves it to the critical unit, where
+# incorporation sits near half and there are twice as many observations.
+# Set GROUNDING_LEVEL=scenario to refit the original.
 
 suppressMessages({
   library(lme4)
@@ -38,6 +45,15 @@ frame_file <- if (sensitivity) {
 dat <- read.csv(file.path(frames, frame_file), stringsAsFactors = FALSE)
 if (sensitivity) cat("(sensitivity frame: excludes participants with any technically invalid analytical attempt)\n")
 
+grounding_level <- Sys.getenv("GROUNDING_LEVEL", "unit")
+grounding_outcome <- Sys.getenv("GROUNDING_OUTCOME", "incorporation")
+unit_file <- if (sensitivity) {
+  "unit_level_sensitivity_complete_technical.csv"
+} else {
+  "unit_level.csv"
+}
+units <- read.csv(file.path(frames, unit_file), stringsAsFactors = FALSE)
+
 parse_binary <- function(values, field) {
   text <- tolower(trimws(as.character(values)))
   result <- rep(NA_integer_, length(text))
@@ -51,6 +67,16 @@ parse_binary <- function(values, field) {
   result
 }
 
+if (grounding_level == "unit") {
+  units$grounding <- parse_binary(units[[grounding_outcome]], grounding_outcome)
+  units$participant_id <- factor(units$participant_id)
+  units$scenario_title <- factor(units$scenario_title)
+  units$position <- suppressWarnings(as.integer(units$analytical_position))
+  cat(sprintf("grounding: unit-level %s (%d units)\n",
+              grounding_outcome, sum(!is.na(units$grounding))))
+} else {
+  cat("grounding: interaction-level demonstrated_grounding\n")
+}
 dat$grounding <- parse_binary(dat$demonstrated_grounding,
                               "demonstrated_grounding")
 dat$repairs_post <- suppressWarnings(as.integer(dat$repair_post_boundary))
@@ -63,6 +89,8 @@ if (permute) {
   set.seed(20260805)
   dat$condition <- ave(dat$condition, dat$participant_id,
                        FUN = function(x) sample(x))
+  units$condition <- ave(units$condition, units$participant_id,
+                         FUN = function(x) sample(x))
 } else if (exploratory) {
   cat("=== EXPLORATORY RUN — real labels, incomplete data ===\n")
   cat("Estimates are preliminary and will move. Read the diagnostics: they\n")
@@ -121,11 +149,16 @@ fit_one <- function(sub, outcome) {
 results <- data.frame()
 for (name in names(contrasts)) {
   pair <- contrasts[[name]]
-  sub <- dat[dat$condition %in% pair, ]
-  sub$treated <- pair[["treated"]]
-  sub$reference <- pair[["reference"]]
-  sub <- sub[!is.na(sub$position), ]
   for (outcome in c("grounding", "repairs_post")) {
+    frame <- if (outcome == "grounding" && grounding_level == "unit") {
+      units
+    } else {
+      dat
+    }
+    sub <- frame[frame$condition %in% pair, ]
+    sub$treated <- pair[["treated"]]
+    sub$reference <- pair[["reference"]]
+    sub <- sub[!is.na(sub$position), ]
     keep <- if (outcome == "repairs_post") {
       !is.na(sub$repairs_post)
     } else {
@@ -140,7 +173,12 @@ for (name in names(contrasts)) {
                                              note = conditionMessage(e)))
     results <- rbind(results, data.frame(
       contrast = sprintf("%s: %s vs %s", name, pair[["treated"]], pair[["reference"]]),
-      outcome = outcome, model = fit$model, estimate = fit$estimate,
+      outcome = if (outcome == "grounding" && grounding_level == "unit") {
+        paste0("grounding/", grounding_outcome)
+      } else {
+        outcome
+      },
+      model = fit$model, estimate = fit$estimate,
       se = fit$se, p = fit$p, n_obs = fit$n,
       ci_low = fit$estimate - 1.96 * fit$se,
       ci_high = fit$estimate + 1.96 * fit$se,

@@ -36,6 +36,9 @@ UNIT_KEEP = [
     # Distinguishes a stage the coder could not judge from one the
     # transmitted track gated away.
     "grounding_gated_reason",
+    # Carried down from the interaction so a unit-level model can hold the
+    # same covariates as the scenario-level one.
+    "scenario_title", "analytical_position",
 ]
 
 TURN_EVENT_KEEP = [
@@ -121,6 +124,11 @@ def main():
 
     units = read_rows("units.csv")
     keep_ids = {r["session_id"] for r in included}
+    covariates = {r["session_id"]: {"scenario_title": r.get("scenario_title"),
+                                    "analytical_position": r.get(
+                                        "analytical_position")}
+                  for r in included}
+    units = [{**u, **covariates.get(u["session_id"], {})} for u in units]
     write_frame("unit_level.csv",
                 [u for u in units if u["session_id"] in keep_ids], UNIT_KEEP)
     sensitivity_ids = {row["session_id"] for row in sensitivity}
