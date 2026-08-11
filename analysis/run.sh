@@ -72,12 +72,15 @@ cd "$HERE"
 python3 prep.py
 
 # Descriptives come from the same frames the models use, so the tables beside
-# an estimate cannot drift from it. Condition stays hidden unless this run is
-# already unblinded.
-if [ "$MODE" = "--permute" ]; then
-  python3 descriptives.py | tee "output/descriptives.txt"
-else
-  python3 descriptives.py --by-condition | tee "output/descriptives.txt"
+# an estimate cannot drift from it. The blind pass runs whatever the mode, and
+# is written separately: it stays quotable on its own while collection is open.
+# The stratified pass is added only for a run that is already unblinded.
+python3 descriptives.py > "output/descriptives_blind.txt"
+cat "output/descriptives_blind.txt"
+if [ "$MODE" != "--permute" ]; then
+  python3 descriptives.py --by-condition \
+    > "output/descriptives_by_condition.txt"
+  cat "output/descriptives_by_condition.txt"
 fi
 
 Rscript models.R "$MODE"
