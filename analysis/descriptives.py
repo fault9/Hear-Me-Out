@@ -190,12 +190,14 @@ def turn_taking(sessions, events):
     per_session = Counter(r["session_id"] for r in verified
                           if r.get("verified_assistant_premature_onset") == "1")
     affected = sum(1 for s in reviewed if per_session[s])
-    print(f"  interactions with >=1 premature onset  {affected} of {len(reviewed)} reviewed")
+    print(f"  interactions with >=1 premature onset  {affected} of "
+          f"{len(reviewed)} reviewed")
     print(f"  per reviewed interaction: overlaps {overlaps / len(reviewed):.1f}  "
           f"premature {premature / len(reviewed):.1f}  "
           f"barge-ins {barge / len(reviewed):.1f}")
-    for field, label in (("verified_assistant_stop_latency_ms", "assistant stop latency"),
-                         ("verified_participant_stop_latency_ms", "participant stop latency")):
+    latency = (("verified_assistant_stop_latency_ms", "assistant stop latency"),
+               ("verified_participant_stop_latency_ms", "participant stop latency"))
+    for field, label in latency:
         values = []
         for row in verified:
             try:
@@ -206,6 +208,99 @@ def turn_taking(sessions, events):
                  f"{sorted(values)[len(values) // 2]:.0f} ms" if values
                  else "NO OBSERVATIONS COLLECTED")
         print(f"  {label:<32} {state}")
+
+
+def _ranks(values):
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    out = [0.0] * len(values)
+    start = 0
+    while start < len(order):
+        stop = start
+        while stop + 1 < len(order) and values[order[stop + 1]] == values[order[start]]:
+            stop += 1
+        average = (start + stop) / 2 + 1
+        for position in range(start, stop + 1):
+            out[order[position]] = average
+        start = stop + 1
+    return out
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sx = sum((x - mx) ** 2 for x in xs) ** 0.5
+    sy = sum((y - my) ** 2 for y in ys) ** 0.5
+    if not sx or not sy:
+        return None
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sx * sy)
+
+
+def _spearman(xs, ys):
+    return _pearson(_ranks(xs), _ranks(ys))
+
+
+def _within(triples):
+    """Participant-mean-centred pairs.
+
+    Each participant contributes four interactions, so a raw correlation mixes
+    within-participant covariation with between-participant differences in how
+    people use a Likert scale. Centring leaves only the former.
+    """
+    grouped = defaultdict(list)
+    for participant, first, second in triples:
+        grouped[participant].append((first, second))
+    xs, ys = [], []
+    for pairs in grouped.values():
+        if len(pairs) < 2:
+            continue
+        mx = sum(a for a, _ in pairs) / len(pairs)
+        my = sum(b for _, b in pairs) / len(pairs)
+        for a, b in pairs:
+            xs.append(a - mx)
+            ys.append(b - my)
+    return xs, ys
+
+
+def experience(sessions, units):
+    """Behavioural measures against self-report. Exploratory and pooled."""
+    print("\n== BEHAVIOUR vs SELF-REPORT (exploratory, pooled) ==")
+    retained = defaultdict(list)
+    for unit in units:
+        if _coded(unit, "retention"):
+            retained[unit["session_id"]].append(int(unit["retention"]))
+
+    def number(row, field):
+        try:
+            return float(row[field])
+        except (TypeError, ValueError, KeyError):
+            return None
+
+    measures = [
+        ("repair_total", lambda r: number(r, "repair_total")),
+        ("outcome_level", lambda r: number(r, "outcome_level")),
+        ("retained_fraction",
+         lambda r: (sum(retained[r["session_id"]]) / len(retained[r["session_id"]]))
+         if retained[r["session_id"]] else None),
+    ]
+    print(f"  {'behavioural':<18} {'self-report':<30} {'n':>4} "
+          f"{'rho':>7} {'rho within':>11}")
+    for name, getter in measures:
+        for field in LIKERT:
+            triples = [(r["participant_id"], getter(r), number(r, field))
+                       for r in sessions]
+            triples = [t for t in triples if t[1] is not None and t[2] is not None]
+            if len(triples) < 10:
+                continue
+            raw = _spearman([t[1] for t in triples], [t[2] for t in triples])
+            xs, ys = _within(triples)
+            inner = _spearman(xs, ys)
+            print(f"  {name:<18} {field:<30} {len(triples):>4} "
+                  f"{raw if raw is None else f'{raw:7.2f}'} "
+                  f"{inner if inner is None else f'{inner:11.2f}'}")
+    print("  (Spearman; no inference — the modelled version belongs in the")
+    print("   exploratory analyses, with participant random intercepts.)")
 
 
 def self_report(sessions):
@@ -248,6 +343,7 @@ def main():
     uptake(units)
     repair(sessions, moves)
     turn_taking(sessions, events)
+    experience(sessions, units)
     for row in sessions:  # blind guard: nothing below may group by condition
         del row["condition"]
     self_report(sessions)
