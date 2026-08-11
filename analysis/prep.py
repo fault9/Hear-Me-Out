@@ -49,7 +49,7 @@ TURN_EVENT_KEEP = [
     "participant_stop_latency_ms_candidate", "verified_overlap",
     "verified_participant_barge_in", "verified_assistant_premature_onset",
     "successful_assistant_yielding", "disruptive_assistant_interruption",
-    "assistant_backchannel_onset",
+    "assistant_backchannel_onset", "participant_backchannel_onset",
     "verified_assistant_stop_latency_ms", "verified_participant_stop_latency_ms",
     # An episode in a certified session is not the same as a verified
     # episode; without this the two cannot be told apart in a frame.

@@ -304,6 +304,7 @@ VERDICT_FIELDS = (
     "verified_overlap", "verified_participant_barge_in",
     "verified_assistant_premature_onset", "successful_assistant_yielding",
     "disruptive_assistant_interruption", "assistant_backchannel_onset",
+    "participant_backchannel_onset",
     "verified_assistant_stop_latency_ms",
     "verified_participant_stop_latency_ms", "verifier_initials",
     "verification_note",
@@ -314,16 +315,22 @@ VERDICT_FIELDS = (
 # premature onset, and neither exists without real simultaneous speech.
 # Blanked at ingest and again on read, so "no barge-in" can never reach the
 # frames as "failed to yield" (missing != zero, per the data dictionary).
+# Each gate names the answer its children require. A participant continuer is
+# the one judgment that follows a "no": it distinguishes an onset that was not
+# an attempt on the floor from one that was never meant to be, which the
+# barge-in question alone cannot separate.
 TURN_VERDICT_GATES = (
-    ("verified_overlap", (
+    ("verified_overlap", "1", (
         "verified_participant_barge_in", "verified_assistant_premature_onset",
         "successful_assistant_yielding", "disruptive_assistant_interruption",
-        "assistant_backchannel_onset",
+        "assistant_backchannel_onset", "participant_backchannel_onset",
         "verified_assistant_stop_latency_ms",
         "verified_participant_stop_latency_ms")),
-    ("verified_participant_barge_in", (
+    ("verified_participant_barge_in", "1", (
         "successful_assistant_yielding", "verified_assistant_stop_latency_ms")),
-    ("verified_assistant_premature_onset", (
+    ("verified_participant_barge_in", "0", (
+        "participant_backchannel_onset",)),
+    ("verified_assistant_premature_onset", "1", (
         "disruptive_assistant_interruption", "assistant_backchannel_onset",
         "verified_participant_stop_latency_ms")),
 )
@@ -331,8 +338,8 @@ TURN_VERDICT_GATES = (
 
 def gate_turn_verdict(record: dict) -> dict:
     gated = dict(record)
-    for parent, children in TURN_VERDICT_GATES:
-        if str(gated.get(parent) or "").strip() != "1":
+    for parent, required, children in TURN_VERDICT_GATES:
+        if str(gated.get(parent) or "").strip() != required:
             for child in children:
                 gated[child] = None
     return gated
@@ -965,6 +972,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "verified_overlap", "verified_participant_barge_in",
         "verified_assistant_premature_onset", "successful_assistant_yielding",
         "disruptive_assistant_interruption", "assistant_backchannel_onset",
+        "participant_backchannel_onset",
         "verified_assistant_stop_latency_ms",
         "verified_participant_stop_latency_ms", "verifier_initials",
         "verification_note",

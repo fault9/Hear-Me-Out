@@ -15,7 +15,8 @@ type Event = Record<string, any>
 // transport, different question — so they are one panel in two modes.
 type Mode = "overlap" | "gap"
 
-type Question = { key: string; label: string; hint?: string; dependsOn?: string }
+type Question = { key: string; label: string; hint?: string
+                  dependsOn?: string; dependsValue?: string }
 
 const QUESTIONS: Question[] = [
   { key: "verified_overlap",
@@ -29,6 +30,12 @@ const QUESTIONS: Question[] = [
   { key: "successful_assistant_yielding", label: "Assistant yielded successfully?",
     hint: "did the assistant cede the floor — descriptive, not approval",
     dependsOn: "verified_participant_barge_in" },
+  // The one judgment that follows a "no": an onset that was not an attempt on
+  // the floor is either a continuer or simply speech that happened to land
+  // there, and the barge-in question cannot separate them.
+  { key: "participant_backchannel_onset", label: "Participant backchannel?",
+    hint: "a continuer (mm-hm, yeah, right) rather than speech that merely coincided",
+    dependsOn: "verified_participant_barge_in", dependsValue: "0" },
   { key: "disruptive_assistant_interruption", label: "Disruptive assistant interruption?",
     hint: "did it cut the participant off or derail them",
     dependsOn: "verified_assistant_premature_onset" },
@@ -49,8 +56,21 @@ const GAP_QUESTIONS: Question[] = [
 function applicable(key: string, answers: Verdict, questions: Question[]): boolean {
   const question = questions.find((q) => q.key === key)
   if (!question?.dependsOn) return true
-  return answers[question.dependsOn] === "1"
+  return answers[question.dependsOn] === (question.dependsValue ?? "1")
     && applicable(question.dependsOn, answers, questions)
+}
+
+// Blank has meant three things at once - not asked, not applicable, and
+// deliberately neither - and the ambiguity turned a mid-pass change to the
+// question set into an apparent change in the assistant's behaviour. An
+// applicable question now has to be answered, so "neither" is recorded as
+// two explicit noes rather than as absence.
+function unanswered(verdict: Verdict | null | undefined,
+                    questions: Question[]): string[] {
+  const answers = withInapplicableCleared({ ...(verdict || {}) }, questions)
+  return questions
+    .filter((q) => applicable(q.key, answers, questions) && answers[q.key] == null)
+    .map((q) => q.key)
 }
 
 function withInapplicableCleared(answers: Verdict, questions: Question[]): Verdict {
@@ -82,6 +102,11 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const [index, setIndex] = useState(0)
   const [answers, setAnswers] = useState<Verdict>({})
   const [note, setNote] = useState("")
+  // A finished item is read-only until deliberately unlocked. The store is
+  // append-only so nothing is destroyed, but the export reads the latest
+  // record, and an accidental Enter on a completed episode would make a
+  // stray keystroke the effective judgment.
+  const [unlocked, setUnlocked] = useState<string | null>(null)
   // Verified gap boundaries, in timeline ms. Seeded from the detector so
   // confirming a gap unchanged records what it measured.
   const [bounds, setBounds] = useState<{ start: any; end: any }>({ start: 0, end: 0 })
@@ -106,14 +131,23 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const stopAt = useRef<number | null>(null)
 
   const event = events[index]
-  const done = events.filter((e) => e.verdict).length
+  const questionsFor = (item: Event): Question[] =>
+    (item?.gap_key ? GAP_QUESTIONS : QUESTIONS)
+  const complete = (item: Event): boolean =>
+    Boolean(item?.verdict) && unanswered(item.verdict, questionsFor(item)).length === 0
+  const done = events.filter(complete).length
+  const outstanding = events.filter((e) => e.verdict && !complete(e)).length
   const questions = mode === "gap" ? GAP_QUESTIONS : QUESTIONS
   const keyOf = (item: Event): string => item?.gap_key || item?.event_key
 
   // A repinned queue mixes a few new candidates into many already judged, so
   // stepping by one walks back into finished work. Advance to what is not done.
   const nextUnverified = useCallback((from: number, rows: Event[]): number => {
-    for (let i = from + 1; i < rows.length; i += 1) if (!rows[i].verdict) return i
+    for (let i = from + 1; i < rows.length; i += 1) {
+      const item = rows[i]
+      const list = item?.gap_key ? GAP_QUESTIONS : QUESTIONS
+      if (!item.verdict || unanswered(item.verdict, list).length) return i
+    }
     return Math.min(from + 1, rows.length - 1)
   }, [])
 
@@ -129,7 +163,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       setExportName(data.export || "")
       setLatestExport(data.latest_export || "")
       setCorrectionMs(data.participant_capture_latency_correction_ms || 0)
-      const first = rows.findIndex((e: Event) => !e.verdict)
+      const first = rows.findIndex((e: Event) => !e.verdict
+        || unanswered(e.verdict, e.gap_key ? GAP_QUESTIONS : QUESTIONS).length)
       setIndex(first === -1 ? 0 : first)
       setStarted(true)
     } catch (e: any) { setErr(e?.message || String(e)) }
@@ -244,6 +279,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     setBounds({ start: event.verdict?.verified_gap_start_ms ?? event.gap_start_ms,
                 end: event.verdict?.verified_gap_end_ms ?? event.gap_end_ms })
     setShowOpposite(false)
+    setUnlocked(null)
     const upcoming = events[index + 1]
     if (upcoming) {
       audioFor(upcoming.session_id, "participant_raw").catch(() => {})
@@ -255,6 +291,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
 
   const save = useCallback(async () => {
     if (!event) return
+    if (complete(event) && unlocked !== keyOf(event)) return
+    if (unanswered(answers, questions).length) return
     setBusy(true); setErr(null)
     try {
       const start = Number(bounds.start)
@@ -277,8 +315,9 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       setIndex(nextUnverified(index, events))
     } catch (e: any) { setErr(e?.message || String(e)) }
     finally { setBusy(false) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answers, bounds, event, events, index, mode, nextUnverified, note,
-      reviewer, studyId, token])
+      questions, reviewer, studyId, token, unlocked])
 
   useEffect(() => {
     if (!started) return
@@ -377,6 +416,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     const parent = questions.find((q) => q.key === key)?.dependsOn
     return parent ? inOppositeChain(parent) : false
   }
+  const missing = unanswered(answers, questions)
+  const locked = complete(event) && unlocked !== keyOf(event)
   const span = (start: any, end: any): string => {
     const a = parseFloat(start)
     const b = parseFloat(end)
@@ -395,8 +436,11 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <Badge variant="secondary">{done} / {events.length} verified</Badge>
         <span className="text-muted-foreground">item {index + 1} · {exportName}</span>
-        {event?.verdict && (
-          <Badge variant="outline">already verified · re-judging overwrites</Badge>
+        {event?.verdict && complete(event) && (
+          <Badge variant="outline">already verified</Badge>
+        )}
+        {outstanding > 0 && (
+          <Badge variant="secondary">{outstanding} verified but missing an answer</Badge>
         )}
         {latestExport && latestExport !== exportName && (
           <Button size="sm" variant="outline" disabled={busy}
@@ -533,7 +577,21 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button size="sm" variant="ghost" disabled={index === 0}
             onClick={() => setIndex((i) => i - 1)}>← Previous</Button>
-          <Button size="sm" disabled={busy} onClick={save}>Save &amp; next</Button>
+          {locked ? (
+            <Button size="sm" variant="secondary"
+              onClick={() => setUnlocked(keyOf(event))}>
+              Re-judge this item
+            </Button>
+          ) : (
+            <Button size="sm" disabled={busy || missing.length > 0} onClick={save}>
+              Save &amp; next
+            </Button>
+          )}
+          {!locked && missing.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              answer {missing.length} more to save
+            </span>
+          )}
           <Button size="sm" variant="secondary"
             onClick={() => setIndex(nextUnverified(index, events))}>Skip</Button>
           {err && <span className="text-sm text-destructive">{err}</span>}
