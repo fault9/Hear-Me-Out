@@ -88,6 +88,11 @@ def _event_key(row: dict) -> str:
     return f"{row.get('session_id')}:{row.get('episode_id')}"
 
 
+def _reviewed_in_full(row: dict) -> bool:
+    return (str(row.get("full_session_reviewed") or "").strip().lower()
+            in ("1", "true", "yes"))
+
+
 def _finalize_candidate(row: dict) -> dict:
     key = _event_key(row)
     _initials(row, key)
@@ -230,7 +235,8 @@ def _finalize_gap(row: dict) -> dict:
 
 
 def _summary(events: list[dict], gaps: list[dict],
-             session_reviews: list[dict]) -> list[dict]:
+             session_reviews: list[dict],
+             reviewed_sessions: set[str] | None = None) -> list[dict]:
     by_session: dict[str, dict] = defaultdict(lambda: {
         "overlap_count": 0, "overlap_duration_ms": 0.0,
         "participant_barge_in_count": 0, "successful_assistant_yielding_count": 0,
@@ -282,6 +288,12 @@ def _summary(events: list[dict], gaps: list[dict],
         participant_gaps = source["participant_response_gaps"]
         rows.append({
             **identity[sid],
+            # Whether the automatic nomination for this session was
+            # checked against the full recording. Where it was not, the
+            # counts below bound only what nomination found.
+            "full_session_reviewed": (
+                1 if reviewed_sessions is None or sid in reviewed_sessions
+                else 0),
             "overlap_count": source["overlap_count"],
             "overlap_duration_ms": source["overlap_duration_ms"],
             "participant_barge_in_count": barge,
@@ -315,7 +327,15 @@ def _summary(events: list[dict], gaps: list[dict],
     return rows
 
 
-def finalize(dataset: Path) -> dict:
+def finalize(dataset: Path, *,
+             require_full_session_review: bool = True) -> dict:
+    """Compile the manual turn review for one export.
+
+    The full-track review bounds false negatives: without it a rate is
+    "of automatically nominated episodes", not "of episodes". It can be
+    waived, but never silently - the manifest and every summary row record
+    whether the session behind them was reviewed in full.
+    """
     dataset = Path(dataset)
     manifest_path = dataset / "turn_verification_manifest.json"
     if manifest_path.exists():
@@ -330,9 +350,12 @@ def finalize(dataset: Path) -> dict:
 
     errors: list[str] = []
     reviewed_sessions: set[str] = set()
+    nomination_only: set[str] = set()
     expected_additions: Counter = Counter()
     for row in session_reviews:
         sid = str(row.get("session_id") or "")
+        if not require_full_session_review and not _reviewed_in_full(row):
+            continue
         try:
             _initials(row, sid)
             reviewed = _bool(row.get("full_session_reviewed"),
@@ -353,8 +376,11 @@ def finalize(dataset: Path) -> dict:
         key = _event_key(row)
         sid = str(row.get("session_id") or "")
         if sid not in reviewed_sessions:
-            errors.append(f"{key}: session has no completed full-track review")
-            continue
+            if require_full_session_review:
+                errors.append(
+                    f"{key}: session has no completed full-track review")
+                continue
+            nomination_only.add(sid)
         if key in seen_event_keys:
             errors.append(f"duplicate event key: {key}")
             continue
@@ -389,8 +415,11 @@ def finalize(dataset: Path) -> dict:
         key = f"{row.get('session_id')}:{row.get('gap_id')}"
         sid = str(row.get("session_id") or "")
         if sid not in reviewed_sessions:
-            errors.append(f"{key}: session has no completed full-track review")
-            continue
+            if require_full_session_review:
+                errors.append(
+                    f"{key}: session has no completed full-track review")
+                continue
+            nomination_only.add(sid)
         if key in seen_gap_keys:
             errors.append(f"duplicate gap key: {key}")
             continue
@@ -405,6 +434,8 @@ def finalize(dataset: Path) -> dict:
         "status": "invalid_or_incomplete" if errors else "complete",
         "dataset": str(dataset),
         "sessions_reviewed": len(reviewed_sessions),
+        "sessions_nomination_only": len(nomination_only),
+        "full_session_review_complete": not nomination_only,
         "candidate_events": len(candidates),
         "manual_additions": len(additions),
         "candidate_gaps": len(gap_candidates),
@@ -433,7 +464,8 @@ def finalize(dataset: Path) -> dict:
         "verification_status", "final_positive_gap", "final_gap_start_ms",
         "final_gap_end_ms", "final_gap_duration_ms",
     ]
-    summary_rows = _summary(verified_events, verified_gaps, session_reviews)
+    summary_rows = _summary(verified_events, verified_gaps, session_reviews,
+                            reviewed_sessions)
     summary_fields = list(summary_rows[0]) if summary_rows else [
         "session_id", "participant_id", "condition"]
     _write_csv(dataset / "turn_events_adjudicated.csv", adjudicated_events,
@@ -474,8 +506,12 @@ def finalize(dataset: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m study.turn_verification")
     parser.add_argument("--dataset", required=True, type=Path)
+    parser.add_argument("--allow-nomination-only", action="store_true",
+                        help="finalize without the full-track session review; "
+                             "rates then bound nominated episodes only")
     args = parser.parse_args()
-    result = finalize(args.dataset)
+    result = finalize(args.dataset,
+                      require_full_session_review=not args.allow_nomination_only)
     print(json.dumps(result, indent=2, sort_keys=True))
     if result["status"] != "complete":
         raise SystemExit(2)

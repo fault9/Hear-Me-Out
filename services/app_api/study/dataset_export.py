@@ -403,7 +403,8 @@ def _coverage_warnings(coverage: Counter, analytical_count: int) -> list[str]:
     return warnings
 
 
-def compile_verification(out_dir: Path) -> dict:
+def compile_verification(out_dir: Path, *,
+                         require_full_session_review: bool = True) -> dict:
     """Compile the manual turn review into this export.
 
     An incomplete review is not a failure here: finalize records what is
@@ -413,11 +414,14 @@ def compile_verification(out_dir: Path) -> dict:
     from study.turn_verification import VerificationError, finalize
 
     try:
-        report = finalize(out_dir)
+        report = finalize(
+            out_dir, require_full_session_review=require_full_session_review)
     except (VerificationError, OSError) as exc:
         return {"status": "not_compiled", "reason": str(exc)}
-    keep = ("status", "sessions_reviewed", "candidate_events", "candidate_gaps",
-            "manual_additions", "verified_events", "verified_gaps")
+    keep = ("status", "sessions_reviewed", "sessions_nomination_only",
+            "full_session_review_complete", "candidate_events",
+            "candidate_gaps", "manual_additions", "verified_events",
+            "verified_gaps")
     compiled = {key: report[key] for key in keep if key in report}
     compiled["outstanding"] = len(report.get("errors") or [])
     return compiled
@@ -1133,6 +1137,9 @@ def main() -> None:
     parser.add_argument("--study-id", type=int,
                         default=int(os.environ.get("CODING_STUDY_ID", "1")))
     parser.add_argument("--out", default=None)
+    parser.add_argument("--allow-nomination-only", action="store_true",
+                        help="compile the turn review without the full-track "
+                             "session review")
     parser.add_argument("--skip-verification", action="store_true",
                         help="do not compile the manual turn review "
                              "into this export")
@@ -1149,7 +1156,9 @@ def main() -> None:
         summary["carried_verification"] = carry_verification(
             args.carry_verification_from, out_dir)
     if not args.skip_verification:
-        summary["turn_verification"] = compile_verification(out_dir)
+        summary["turn_verification"] = compile_verification(
+            out_dir,
+            require_full_session_review=not args.allow_nomination_only)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
