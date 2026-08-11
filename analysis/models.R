@@ -194,7 +194,7 @@ results <- data.frame()
 for (name in names(contrasts)) {
   pair <- contrasts[[name]]
   for (outcome in c("grounding", "repairs_post")) {
-    frame <- if (outcome == "grounding" && grounding_level == "unit") {
+    frame <- if (outcome == "grounding" && grounding_level != "scenario") {
       units
     } else {
       dat
