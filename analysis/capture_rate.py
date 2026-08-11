@@ -14,6 +14,7 @@ import json, os, sys
 from pathlib import Path
 sys.path.insert(0, os.path.expanduser("~/Hear-Me-Out/services/app_api"))
 from study.artifacts import resolve_artifact_path  # noqa: E402
+from study.session_scope import annotate_analysis_scopes  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 
 ROOT = Path(os.environ.get("STUDY_DATA_ROOT") or os.path.expanduser("~/study-data"))
@@ -46,20 +47,22 @@ def ratios(session: dict) -> tuple[list[float], float, float]:
 
 
 backend = get_backend()
-print(f"{'session':26s} {'median':>7s} {'first10%':>9s} {'last10%':>8s} "
+# Inclusion is derived, not stored: raw sessions carry no analysis scope.
+sessions = annotate_analysis_scopes(backend.list_sessions(1), backend.list_runs(1))
+print(f"{'session':26s} {'in':>2s} {'median':>7s} {'first10%':>9s} {'last10%':>8s} "
       f"{'audio_s':>8s} {'wall_s':>7s}")
-for session in sorted(backend.list_sessions(1),
-                      key=lambda s: str(s.get("session_id") or "")):
+for session in sorted(sessions, key=lambda s: str(s.get("session_id") or "")):
     sid = str(session.get("session_id") or "")
-    if "_S01_" in sid or not session.get("analysis_included"):
+    if "_S01_" in sid:
         continue
+    mark = "1" if session.get("analysis_included") else "-"
     values, audio_s, wall_s = ratios(session)
     if not values:
-        print(f"{sid:26s}  no capture timeline")
+        print(f"{sid:26s} {mark:>2s}  no capture timeline")
         continue
     ordered = sorted(values)
     edge = max(1, len(values) // 10)
     flag = "  <-- audio is compressed" if audio_s and wall_s / audio_s > 1.02 else ""
-    print(f"{sid:26s} {ordered[len(ordered) // 2]:7.3f} "
+    print(f"{sid:26s} {mark:>2s} {ordered[len(ordered) // 2]:7.3f} "
           f"{sum(values[:edge]) / edge:9.3f} {sum(values[-edge:]) / edge:8.3f} "
           f"{audio_s:8.1f} {wall_s:7.1f}{flag}")
