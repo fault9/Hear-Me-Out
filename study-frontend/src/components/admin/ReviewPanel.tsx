@@ -71,6 +71,9 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const [correctionMs, setCorrectionMs] = useState(0)
   const [exportName, setExportName] = useState("")
   const [latestExport, setLatestExport] = useState("")
+  const [pass, setPass] = useState<
+    { export: string | null; latest_export: string | null;
+      events: number; completed: number } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map())
@@ -254,6 +257,15 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     return () => window.removeEventListener("keydown", onKey)
   }, [started, playing, position, events, index, playEvent, playFrom, pauseAll, save])
 
+  useEffect(() => {
+    if (started) return
+    let live = true
+    adminApi.reviewPass(token, studyId)
+      .then((p: any) => { if (live) setPass(p) })
+      .catch(() => { if (live) setPass(null) })
+    return () => { live = false }
+  }, [started, token, studyId])
+
   if (!started) {
     return (
       <div className="max-w-md">
@@ -264,6 +276,31 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
         <label className="text-xs text-muted-foreground">Your initials</label>
         <Input value={reviewer} className="mb-3 mt-1 w-40"
           onChange={(e) => { setReviewer(e.target.value); localStorage.setItem("review_initials", e.target.value) }} />
+        {pass && (
+          <div className="mb-3 rounded border p-3 text-xs text-muted-foreground">
+            <div>queue: {pass.export || "none pinned"}
+              {pass.events ? ` · ${pass.completed} of ${pass.events} verified` : ""}</div>
+            {pass.latest_export && pass.latest_export !== pass.export ? (
+              <div className="mt-2 flex items-center gap-2">
+                <span>newer export available: {pass.latest_export}</span>
+                <Button size="sm" variant="outline" disabled={busy}
+                  onClick={async () => {
+                    setBusy(true); setErr(null)
+                    try {
+                      const r: any = await adminApi.reviewRepin(token, studyId)
+                      setPass({ export: r.export, latest_export: r.export,
+                                events: r.events, completed: r.completed })
+                    } catch (e: any) { setErr(e?.message || String(e)) }
+                    finally { setBusy(false) }
+                  }}>
+                  Load newer export
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-1">up to date</div>
+            )}
+          </div>
+        )}
         <Button disabled={!reviewer.trim() || busy} onClick={load}>
           {busy ? "Loading…" : "Start verification"}
         </Button>

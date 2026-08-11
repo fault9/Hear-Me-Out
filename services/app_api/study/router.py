@@ -711,6 +711,35 @@ def build_study_router() -> APIRouter:
                     timing_settings.get("participant_capture_latency_correction_ms") or 0.0),
                 "completed": sum(1 for e in events if e["verdict"])}
 
+    @router.get("/studies/{study_id}/review/pass",
+                dependencies=[Depends(require_admin)])
+    async def review_pass(study_id: int):
+        """Which export the pass is pinned to, and whether a newer one exists.
+
+        Cheap enough to call before starting: the queue itself is hundreds of
+        rows, and the choice of export belongs before a pass, not inside one.
+        """
+        latest = _latest_export(study_id)
+        pass_file = _review_dir(study_id) / "pass.json"
+        pinned = None
+        if pass_file.is_file():
+            try:
+                pinned = json.loads(pass_file.read_text()).get("export")
+            except ValueError:
+                pinned = None
+        events = completed = 0
+        try:
+            _, rows = _queue_rows(study_id)
+            verdicts = _load_verdicts(study_id)
+            keys = [row.get("event_key")
+                    or f"{row['session_id']}::{row['episode_id']}" for row in rows]
+            events = len(keys)
+            completed = sum(1 for key in keys if key in verdicts)
+        except HTTPException:
+            pass
+        return {"export": pinned, "latest_export": latest,
+                "events": events, "completed": completed}
+
     @router.post("/studies/{study_id}/review/repin",
                  dependencies=[Depends(require_admin)])
     async def review_repin(study_id: int):
