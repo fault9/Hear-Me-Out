@@ -25,12 +25,17 @@ SCENARIO_KEEP = [
     "post_trust", "post_outcome_confidence", "post_finish_communicating",
     "post_final_response_accurate", "post_misunderstood",
     "post_self_reported_outcome", "post_wanted_to_end",
+    # Provenance: which labels are human and which the judge's.
+    "coding_label_source",
 ]
 
 UNIT_KEEP = [
     "session_id", "participant_id", "condition", "unit_index", "attempted",
     "complete_raw", "complete_transmitted", "delivery_relative_to_boundary",
     "acknowledgement", "update_claim", "incorporation", "retention",
+    # Distinguishes a stage the coder could not judge from one the
+    # transmitted track gated away.
+    "grounding_gated_reason",
 ]
 
 TURN_EVENT_KEEP = [
@@ -43,6 +48,9 @@ TURN_EVENT_KEEP = [
     "successful_assistant_yielding", "disruptive_assistant_interruption",
     "assistant_backchannel_onset",
     "verified_assistant_stop_latency_ms", "verified_participant_stop_latency_ms",
+    # An episode in a certified session is not the same as a verified
+    # episode; without this the two cannot be told apart in a frame.
+    "verifier_initials",
 ]
 
 TURN_GAP_KEEP = [
