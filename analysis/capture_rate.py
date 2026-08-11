@@ -13,7 +13,10 @@ session or was wrong throughout.
 import json, os, sys
 from pathlib import Path
 sys.path.insert(0, os.path.expanduser("~/Hear-Me-Out/services/app_api"))
-from study.artifacts import resolve_artifact_path  # noqa: E402
+from study.artifacts import (load_manifest_artifact,  # noqa: E402
+                             resolve_artifact_path)
+from study.dialogue_transcript import (CAPTURE_SHORTFALL_TOLERANCE,  # noqa: E402
+                                       captured_duration_ms)
 from study.session_scope import annotate_analysis_scopes  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 
@@ -46,23 +49,44 @@ def ratios(session: dict) -> tuple[list[float], float, float]:
     return values, audio_total, wall_total
 
 
+def shortfall(session: dict) -> tuple[float, float, float]:
+    """The scale the transcript pipeline would apply, by its own measure.
+
+    Wall-clock span comes from the assistant track, timed from playback
+    packets and the only clock in the session known to be intact.
+    """
+    raw = (session.get("files") or {}).get("participant_raw")
+    resolved = resolve_artifact_path(ROOT, raw)
+    timing = load_manifest_artifact(session, ROOT, "timing_latest") or {}
+    assistant = timing.get("assistant_intervals") or []
+    if resolved is None or not assistant:
+        return 0.0, 0.0, 0.0
+    held_ms = captured_duration_ms(resolved)
+    span_ms = max(float(row["end_ms"]) for row in assistant)
+    if held_ms <= 0 or span_ms <= 0:
+        return 0.0, 0.0, 0.0
+    return span_ms / held_ms, held_ms / 1000.0, span_ms / 1000.0
+
+
 backend = get_backend()
 # Inclusion is derived, not stored: raw sessions carry no analysis scope.
 sessions = annotate_analysis_scopes(backend.list_sessions(1), backend.list_runs(1))
-print(f"{'session':26s} {'in':>2s} {'median':>7s} {'first10%':>9s} {'last10%':>8s} "
-      f"{'audio_s':>8s} {'wall_s':>7s}")
+print(f"{'session':26s} {'in':>2s} {'scale':>6s} {'held_s':>7s} {'span_s':>7s} "
+      f"{'chunk':>6s}   note")
 for session in sorted(sessions, key=lambda s: str(s.get("session_id") or "")):
     sid = str(session.get("session_id") or "")
     if "_S01_" in sid:
         continue
     mark = "1" if session.get("analysis_included") else "-"
-    values, audio_s, wall_s = ratios(session)
-    if not values:
-        print(f"{sid:26s} {mark:>2s}  no capture timeline")
+    scale, held_s, span_s = shortfall(session)
+    values, _, _ = ratios(session)
+    chunk = sorted(values)[len(values) // 2] if values else 0.0
+    if not scale:
+        print(f"{sid:26s} {mark:>2s}   no timing artifact")
         continue
-    ordered = sorted(values)
-    edge = max(1, len(values) // 10)
-    flag = "  <-- audio is compressed" if audio_s and wall_s / audio_s > 1.02 else ""
-    print(f"{sid:26s} {mark:>2s} {ordered[len(ordered) // 2]:7.3f} "
-          f"{sum(values[:edge]) / edge:9.3f} {sum(values[-edge:]) / edge:8.3f} "
-          f"{audio_s:8.1f} {wall_s:7.1f}{flag}")
+    lost = span_s - held_s
+    note = ""
+    if scale - 1.0 > CAPTURE_SHORTFALL_TOLERANCE:
+        note = f"<-- compressed, {lost:.0f}s missing; transcript rescaled, timing NOT"
+    print(f"{sid:26s} {mark:>2s} {scale:6.3f} {held_s:7.1f} {span_s:7.1f} "
+          f"{chunk:6.3f}   {note}")
