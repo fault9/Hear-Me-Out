@@ -211,6 +211,10 @@ export const adminApi = {
     jget(`/studies/${id}/review/turn-queue`, adminHeaders(t)),
   reviewVerdict: (t: string, id: number, body: unknown) =>
     jpost(`/studies/${id}/review/turn-verdict`, body, adminHeaders(t)),
+  reviewGapQueue: (t: string, id: number) =>
+    jget(`/studies/${id}/review/gap-queue`, adminHeaders(t)),
+  reviewGapVerdict: (t: string, id: number, body: unknown) =>
+    jpost(`/studies/${id}/review/gap-verdict`, body, adminHeaders(t)),
   reviewClaim: (t: string, id: number, reviewer: string) =>
     jpost(`/studies/${id}/review/claim`, { reviewer }, adminHeaders(t)),
   // The queue is pinned to one export so the item set cannot move mid-pass;

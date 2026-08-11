@@ -374,6 +374,51 @@ def load_turn_verdicts(data_root: Path, study_id: int) -> dict[str, dict]:
     return verdicts
 
 
+GAP_VERDICT_FIELDS = (
+    "verified_positive_gap", "verified_gap_start_ms", "verified_gap_end_ms",
+    "verified_gap_duration_ms", "verifier_initials", "verification_note",
+)
+
+
+def gap_key(session_id: object, gap_id: object) -> str:
+    return f"{session_id}:{gap_id}"
+
+
+def load_gap_verdicts(data_root: Path, study_id: int) -> dict[str, dict]:
+    """Manual response-gap decisions, keyed by session and gap id.
+
+    Same append-only store as the episode verdicts and read the same way: the
+    last record for a gap is the one the dataset uses.
+    """
+    path = (Path(data_root) / "review" / f"study{int(study_id)}"
+            / "turn_gap_verdicts.jsonl")
+    verdicts: dict[str, dict] = {}
+    if not path.is_file():
+        return verdicts
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        key = record.get("gap_key")
+        if key:
+            verdicts[str(key)] = record
+    return verdicts
+
+
+def gate_gap_verdict(verdict: dict | None) -> dict:
+    # A gap judged not positive carries no corrected boundaries: those are a
+    # judgment about a gap that exists, and must not read as zero-length.
+    fields = {field: (verdict or {}).get(field) for field in GAP_VERDICT_FIELDS}
+    if str(fields.get("verified_positive_gap")) not in ("1", "True", "true"):
+        for field in ("verified_gap_start_ms", "verified_gap_end_ms",
+                      "verified_gap_duration_ms"):
+            fields[field] = None
+    return fields
+
+
 def _verdict_fields(verdict: dict | None) -> dict:
     return {field: (verdict or {}).get(field) for field in VERDICT_FIELDS}
 
@@ -563,6 +608,7 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
     # Load each session's timing artifact once; scenarios.csv and turn_events.csv
     # both read it, and one pass keeps the coverage tally per session.
     verdicts = load_turn_verdicts(data_root, study_id)
+    gap_verdicts = load_gap_verdicts(data_root, study_id)
     coverage: Counter = Counter()
     timing_by_session = {
         str(session["session_id"]):
@@ -830,12 +876,8 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
             gap_rows.append({
                 **common,
                 **gap,
-                "verified_positive_gap": None,
-                "verified_gap_start_ms": None,
-                "verified_gap_end_ms": None,
-                "verified_gap_duration_ms": None,
-                "verifier_initials": None,
-                "verification_note": None,
+                **gate_gap_verdict(
+                    gap_verdicts.get(gap_key(sid, gap.get("gap_id")))),
             })
     event_columns = [
         "session_id", "participant_id", "condition", "analysis_included",
@@ -988,6 +1030,10 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
             1 for row in verification_rows if not row.get("verifier_initials")),
         "turn_verification_candidates": len(verification_rows),
         "turn_gap_verification_candidates": len(gap_verification_rows),
+        "turn_gaps_verified": sum(
+            1 for row in gap_rows if row.get("verifier_initials")),
+        "turn_gaps_pending_verification": sum(
+            1 for row in gap_verification_rows if not row.get("verifier_initials")),
         "turn_sessions_requiring_full_review": len(session_review_rows),
         "overlap_200ms_candidates": sum(
             bool(row.get("overlap_200ms_candidate")) for row in event_rows),

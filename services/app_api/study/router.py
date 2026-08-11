@@ -773,6 +773,75 @@ def build_study_router() -> APIRouter:
                 "events": len(keys),
                 "completed": sum(1 for key in keys if key in verdicts)}
 
+    def _gap_verdict_path(study_id: int) -> Path:
+        return _review_dir(study_id) / "turn_gap_verdicts.jsonl"
+
+    def _load_gap_verdicts(study_id: int) -> dict:
+        path = _gap_verdict_path(study_id)
+        verdicts: dict[str, dict] = {}
+        if not path.is_file():
+            return verdicts
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            verdicts[str(row.get("gap_key"))] = row
+        return verdicts
+
+    @router.get("/studies/{study_id}/review/gap-queue",
+                dependencies=[Depends(require_admin)])
+    async def review_gap_queue(study_id: int):
+        """Response-gap candidates from the pinned export, with any verdict.
+
+        Judging a gap is judging a silence: whether the pause the detector
+        found is real, and where it actually starts and ends. Condition is
+        withheld for the same reason as in the episode queue.
+        """
+        export = _pinned_export(study_id)
+        if export is None:
+            raise HTTPException(status_code=409, detail=(
+                "No dataset export found. Download the analysis dataset first."))
+        path = export / "turn_gap_verification_queue.csv"
+        if not path.is_file():
+            raise HTTPException(
+                status_code=409,
+                detail="Export has no turn_gap_verification_queue.csv")
+        with path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        verdicts = _load_gap_verdicts(study_id)
+        gaps = []
+        for row in rows:
+            key = f"{row.get('session_id')}:{row.get('gap_id')}"
+            gaps.append({k: v for k, v in row.items() if k != "condition"}
+                        | {"gap_key": key, "verdict": verdicts.get(key)})
+        study = backend.get_study(study_id) or {}
+        timing_settings = ((study.get("settings") or {}).get("timing") or {})
+        return {"export": export.name, "gaps": gaps,
+                "participant_capture_latency_correction_ms": float(
+                    timing_settings.get(
+                        "participant_capture_latency_correction_ms") or 0.0),
+                "completed": sum(1 for g in gaps if g["verdict"])}
+
+    @router.post("/studies/{study_id}/review/gap-verdict",
+                 dependencies=[Depends(require_admin)])
+    async def review_gap_verdict(study_id: int, body: dict):
+        key = str(body.get("gap_key") or "").strip()
+        if not key:
+            raise HTTPException(status_code=422, detail="gap_key is required")
+        from .dataset_export import gate_gap_verdict
+
+        # Boundaries below a "not a gap" are not judgments; never record them.
+        record = {"gap_key": key, "session_id": body.get("session_id"),
+                  "gap_id": body.get("gap_id"), "recorded_at_unix_s": time.time(),
+                  **gate_gap_verdict(body)}
+        path = _gap_verdict_path(study_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        append_jsonl(path, [record])
+        return {"ok": True, "gap_key": key}
+
     @router.post("/studies/{study_id}/review/turn-verdict",
                  dependencies=[Depends(require_admin)])
     async def review_turn_verdict(study_id: int, body: dict):

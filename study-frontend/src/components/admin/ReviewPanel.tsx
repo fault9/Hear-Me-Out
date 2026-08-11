@@ -10,8 +10,14 @@ const WINDOW_PAD_MS = 2000
 
 type Verdict = Record<string, string | null>
 type Event = Record<string, any>
+// Overlaps and response gaps are the two halves of turn-taking: who spoke over
+// whom, and how long the silence between turns ran. Same audio, same
+// transport, different question — so they are one panel in two modes.
+type Mode = "overlap" | "gap"
 
-const QUESTIONS: { key: string; label: string; hint?: string; dependsOn?: string }[] = [
+type Question = { key: string; label: string; hint?: string; dependsOn?: string }
+
+const QUESTIONS: Question[] = [
   { key: "verified_overlap",
     label: "Real simultaneous speech (not noise or leakage)?" },
   { key: "verified_participant_barge_in", label: "Participant barge-in?",
@@ -31,27 +37,34 @@ const QUESTIONS: { key: string; label: string; hint?: string; dependsOn?: string
     dependsOn: "verified_assistant_premature_onset" },
 ]
 
+const GAP_QUESTIONS: Question[] = [
+  { key: "verified_positive_gap",
+    label: "Real response gap (silence between two real turns)?",
+    hint: "No if either boundary is noise, or if speech continues inside the gap" },
+]
+
 // A question only applies while every ancestor is "yes": yielding is only a
 // judgment about a verified barge-in, disruption only about a verified
 // premature onset. Anything below a "no" stays blank — never recorded as 0.
-function applicable(key: string, answers: Verdict): boolean {
-  const question = QUESTIONS.find((q) => q.key === key)
+function applicable(key: string, answers: Verdict, questions: Question[]): boolean {
+  const question = questions.find((q) => q.key === key)
   if (!question?.dependsOn) return true
-  return answers[question.dependsOn] === "1" && applicable(question.dependsOn, answers)
+  return answers[question.dependsOn] === "1"
+    && applicable(question.dependsOn, answers, questions)
 }
 
-function withInapplicableCleared(answers: Verdict): Verdict {
+function withInapplicableCleared(answers: Verdict, questions: Question[]): Verdict {
   const next = { ...answers }
-  for (const q of QUESTIONS) if (!applicable(q.key, next)) next[q.key] = null
+  for (const q of questions) if (!applicable(q.key, next, questions)) next[q.key] = null
   return next
 }
 
 function eventWindow(event: Event): [number, number] {
-  // Centered on the overlap itself: enough lead-in to hear who already held
-  // the floor, not the whole pair of turns.
-  const start = parseFloat(event.overlap_start_ms)
-  const end = parseFloat(event.overlap_end_ms)
-  if (Number.isFinite(start) && Number.isFinite(end) && end > start)
+  // Centered on the event itself: enough lead-in to hear who already held the
+  // floor, not the whole pair of turns.
+  const start = parseFloat(event.gap_start_ms ?? event.overlap_start_ms)
+  const end = parseFloat(event.gap_end_ms ?? event.overlap_end_ms)
+  if (Number.isFinite(start) && Number.isFinite(end) && end >= start)
     return [Math.max(0, start - WINDOW_PAD_MS), end + WINDOW_PAD_MS]
   const values = ["participant_onset_ms", "participant_offset_ms",
                   "assistant_onset_ms", "assistant_offset_ms"]
@@ -63,11 +76,15 @@ function eventWindow(event: Event): [number, number] {
 
 export function ReviewPanel({ token, studyId }: { token: string; studyId: number }) {
   const [reviewer, setReviewer] = useState(localStorage.getItem("review_initials") || "")
+  const [mode, setMode] = useState<Mode>("overlap")
   const [started, setStarted] = useState(false)
   const [events, setEvents] = useState<Event[]>([])
   const [index, setIndex] = useState(0)
   const [answers, setAnswers] = useState<Verdict>({})
   const [note, setNote] = useState("")
+  // Verified gap boundaries, in timeline ms. Seeded from the detector so
+  // confirming a gap unchanged records what it measured.
+  const [bounds, setBounds] = useState<{ start: any; end: any }>({ start: 0, end: 0 })
   const [correctionMs, setCorrectionMs] = useState(0)
   const [exportName, setExportName] = useState("")
   const [latestExport, setLatestExport] = useState("")
@@ -90,21 +107,27 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
 
   const event = events[index]
   const done = events.filter((e) => e.verdict).length
+  const questions = mode === "gap" ? GAP_QUESTIONS : QUESTIONS
+  const keyOf = (item: Event): string => item?.gap_key || item?.event_key
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (next: Mode = mode) => {
     setBusy(true); setErr(null)
     try {
-      const data = await adminApi.reviewQueue(token, studyId)
-      setEvents(data.events || [])
+      const data = next === "gap"
+        ? await adminApi.reviewGapQueue(token, studyId)
+        : await adminApi.reviewQueue(token, studyId)
+      const rows: Event[] = data.gaps || data.events || []
+      setMode(next)
+      setEvents(rows)
       setExportName(data.export || "")
       setLatestExport(data.latest_export || "")
       setCorrectionMs(data.participant_capture_latency_correction_ms || 0)
-      const next = (data.events || []).findIndex((e: Event) => !e.verdict)
-      setIndex(next === -1 ? 0 : next)
+      const first = rows.findIndex((e: Event) => !e.verdict)
+      setIndex(first === -1 ? 0 : first)
       setStarted(true)
     } catch (e: any) { setErr(e?.message || String(e)) }
     finally { setBusy(false) }
-  }, [token, studyId])
+  }, [token, studyId, mode])
 
   // Audio is cached per session+track: 378 events span far fewer sessions, so
   // most items reuse an already-fetched file.
@@ -178,7 +201,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     }).catch((e: any) => setErr(e?.message || String(e)))
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event?.event_key, audioFor, correctionMs])
+  }, [keyOf(event), audioFor, correctionMs])
 
   // The participant element is the clock; the assistant follows, and a
   // window play pauses itself at the window's end.
@@ -207,8 +230,12 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   // text times run ahead of its audio - both misread as evidence.
   useEffect(() => {
     if (!event) return
-    setAnswers(withInapplicableCleared({ ...(event.verdict || {}) }))
+    setAnswers(withInapplicableCleared({ ...(event.verdict || {}) }, questions))
     setNote(event.verdict?.verification_note || "")
+    // The detector's boundaries are the starting proposal: confirming a gap
+    // unchanged records exactly what it measured.
+    setBounds({ start: event.verdict?.verified_gap_start_ms ?? event.gap_start_ms,
+                end: event.verdict?.verified_gap_end_ms ?? event.gap_end_ms })
     setShowOpposite(false)
     const upcoming = events[index + 1]
     if (upcoming) {
@@ -217,24 +244,34 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     }
     return () => { pauseAll() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event?.event_key, token, studyId])
+  }, [keyOf(event), token, studyId])
 
   const save = useCallback(async () => {
     if (!event) return
     setBusy(true); setErr(null)
     try {
-      const body = {
+      const start = Number(bounds.start)
+      const end = Number(bounds.end)
+      const body = mode === "gap" ? {
+        ...answers, gap_key: event.gap_key, session_id: event.session_id,
+        gap_id: event.gap_id, verifier_initials: reviewer,
+        verification_note: note,
+        verified_gap_start_ms: start, verified_gap_end_ms: end,
+        verified_gap_duration_ms: end - start,
+      } : {
         ...answers, event_key: event.event_key, session_id: event.session_id,
         episode_id: event.episode_id, verifier_initials: reviewer,
         verification_note: note,
       }
-      await adminApi.reviewVerdict(token, studyId, body)
+      if (mode === "gap") await adminApi.reviewGapVerdict(token, studyId, body)
+      else await adminApi.reviewVerdict(token, studyId, body)
       setEvents((rows) => rows.map(
         (row, i) => (i === index ? { ...row, verdict: body } : row)))
       setIndex((i) => Math.min(i + 1, events.length - 1))
     } catch (e: any) { setErr(e?.message || String(e)) }
     finally { setBusy(false) }
-  }, [answers, event, events.length, index, note, reviewer, studyId, token])
+  }, [answers, bounds, event, events.length, index, mode, note, reviewer,
+      studyId, token])
 
   useEffect(() => {
     if (!started) return
@@ -270,9 +307,17 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
     return (
       <div className="max-w-md">
         <p className="mb-3 text-sm text-muted-foreground">
-          Manual verification of nominated overlap, barge-in and stop-latency events.
-          The voice condition is withheld — judge only what the two tracks show.
+          Manual verification of the automatic turn-taking candidates. The voice
+          condition is withheld — judge only what the two tracks show.
         </p>
+        <div className="mb-3 flex items-center gap-2">
+          {([["overlap", "Overlaps & barge-ins"],
+             ["gap", "Response gaps"]] as const).map(([value, label]) => (
+            <Button key={value} size="sm"
+              variant={mode === value ? "default" : "secondary"}
+              onClick={() => setMode(value)}>{label}</Button>
+          ))}
+        </div>
         <label className="text-xs text-muted-foreground">Your initials</label>
         <Input value={reviewer} className="mb-3 mt-1 w-40"
           onChange={(e) => { setReviewer(e.target.value); localStorage.setItem("review_initials", e.target.value) }} />
@@ -301,7 +346,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
             )}
           </div>
         )}
-        <Button disabled={!reviewer.trim() || busy} onClick={load}>
+        <Button disabled={!reviewer.trim() || busy} onClick={() => load(mode)}>
           {busy ? "Loading…" : "Start verification"}
         </Button>
         {err && <p className="mt-3 text-sm text-destructive">{err}</p>}
@@ -322,15 +367,22 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const oppositeFolded = opposite != null && !showOpposite && !answers[opposite]
   const inOppositeChain = (key: string): boolean => {
     if (key === opposite) return true
-    const parent = QUESTIONS.find((q) => q.key === key)?.dependsOn
+    const parent = questions.find((q) => q.key === key)?.dependsOn
     return parent ? inOppositeChain(parent) : false
   }
-  const overlapStart = parseFloat(event.overlap_start_ms)
-  const overlapEnd = parseFloat(event.overlap_end_ms)
-  const overlapAt = Number.isFinite(overlapStart) && Number.isFinite(overlapEnd)
-    ? `${(overlapStart / 1000).toFixed(1)}–${(overlapEnd / 1000).toFixed(1)}s`
-      + ` (${((overlapEnd - overlapStart) / 1000).toFixed(1)}s)`
-    : "—"
+  const span = (start: any, end: any): string => {
+    const a = parseFloat(start)
+    const b = parseFloat(end)
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return "—"
+    return `${(a / 1000).toFixed(1)}–${(b / 1000).toFixed(1)}s (${(b - a).toFixed(0)}ms)`
+  }
+  const facts: [string, any][] = mode === "gap"
+    ? [["session", event.session_id], ["gap", event.gap_id],
+       ["direction", `${event.from_speaker} → ${event.to_speaker}`],
+       ["detected", span(event.gap_start_ms, event.gap_end_ms)]]
+    : [["session", event.session_id], ["episode", event.episode_id],
+       ["initiator", event.initiator],
+       ["overlap at", span(event.overlap_start_ms, event.overlap_end_ms)]]
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -369,10 +421,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
 
       <div className="rounded-lg border p-3">
         <div className="grid gap-2 text-xs sm:grid-cols-4">
-          {[["session", event.session_id], ["episode", event.episode_id],
-            ["initiator", event.initiator],
-            ["overlap at", overlapAt],
-          ].map(([label, value]) => (
+          {facts.map(([label, value]) => (
             <div key={String(label)}>
               <div className="font-medium">{String(label)}</div>
               <div className="font-mono text-muted-foreground">{String(value ?? "—")}</div>
@@ -419,7 +468,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
               </div>
             )
           }
-          const enabled = applicable(q.key, answers)
+          const enabled = applicable(q.key, answers, questions)
           return (
             <div key={q.key} className={enabled ? "mb-3" : "mb-3 opacity-40"}>
               <div className="mb-1 text-sm font-medium">
@@ -432,7 +481,8 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
                 {[["1", "Yes"], ["0", "No"]].map(([value, label]) => (
                   <Button key={value} size="sm" disabled={!enabled}
                     variant={answers[q.key] === value ? "default" : "secondary"}
-                    onClick={() => setAnswers((a) => withInapplicableCleared({ ...a, [q.key]: value }))}>
+                    onClick={() => setAnswers(
+                      (a) => withInapplicableCleared({ ...a, [q.key]: value }, questions))}>
                     {label}
                   </Button>
                 ))}
@@ -440,6 +490,34 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
             </div>
           )
         })}
+        {mode === "gap" && answers.verified_positive_gap === "1" && (
+          <div className="mb-3 rounded border p-2">
+            <div className="mb-1 text-sm font-medium">
+              Boundaries
+              <span className="ml-2 text-xs text-muted-foreground">
+                scrub to the moment, then set — leave as-is to confirm the detector
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="secondary"
+                onClick={() => setBounds((b) => ({ ...b, start: position * 1000 }))}>
+                Set start = {position.toFixed(2)}s
+              </Button>
+              <Button size="sm" variant="secondary"
+                onClick={() => setBounds((b) => ({ ...b, end: position * 1000 }))}>
+                Set end = {position.toFixed(2)}s
+              </Button>
+              <Button size="sm" variant="ghost"
+                onClick={() => setBounds({ start: event.gap_start_ms,
+                                           end: event.gap_end_ms })}>
+                Reset
+              </Button>
+              <span className="font-mono text-xs text-muted-foreground">
+                {span(bounds.start, bounds.end)}
+              </span>
+            </div>
+          </div>
+        )}
         <label className="text-xs text-muted-foreground">Note (optional)</label>
         <Input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1" />
         <div className="mt-3 flex flex-wrap items-center gap-2">
