@@ -815,8 +815,12 @@ def build_study_router() -> APIRouter:
         gaps = []
         # The stratum names the condition, so it is withheld with it.
         withheld = ("condition", "sample_stratum")
+        # An export predating the sample has no such column; that means every
+        # candidate, not none of them.
+        sampled = any("verification_sample" in row for row in rows)
         for row in rows:
-            if str(row.get("verification_sample")) not in ("1", "True", "true"):
+            if sampled and str(row.get("verification_sample")) not in (
+                    "1", "True", "true"):
                 continue
             key = f"{row.get('session_id')}:{row.get('gap_id')}"
             gaps.append({k: v for k, v in row.items() if k not in withheld}
