@@ -346,7 +346,23 @@ def by_condition(sessions, units, events, moves):
         repair(cell, [m for m in moves if m["session_id"] in ids])
         turn_taking(cell, [e for e in events if e["session_id"] in ids])
         experience(cell, [u for u in units if u["session_id"] in ids])
+        false_updates(cell)
         self_report([dict(r) for r in cell])
+
+
+def false_updates(sessions):
+    """An explicit claim to have recorded something, followed by failure to use
+    or report it. Reported descriptively: the measure exists only where a
+    claimed update occurred, so a condition contrast would condition on a
+    post-treatment variable."""
+    coded = [r for r in sessions if _coded(r, "false_update_confirmation")]
+    if not coded:
+        return
+    hits = sum(1 for r in coded if r["false_update_confirmation"] == "1")
+    print("\nfalse update confirmation")
+    print(f"  {'coded interactions':<34} {len(coded)}")
+    print(f"  {'with a false update confirmation':<34} {hits}"
+          f"  ({100 * hits / len(coded):.1f}%)")
 
 
 def main():
@@ -368,6 +384,7 @@ def main():
     repair(sessions, moves)
     turn_taking(sessions, events)
     experience(sessions, units)
+    false_updates(sessions)
     if unblinded:
         by_condition(sessions, units, events, moves)
         self_report([dict(r) for r in sessions])

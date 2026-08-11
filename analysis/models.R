@@ -408,6 +408,80 @@ cat("outcome_rate near 0 or 1 means the logistic model has little to fit;\n")
 cat("dispersion over 1.5 is why the repair model switches to negative binomial;\n")
 cat("a ci_low/ci_high spanning several log-odds means the data cannot yet\n")
 cat("distinguish anything, which is a power statement and not a null result.\n")
+# Task outcome is ordinal with four populated levels, so it is modelled as
+# such rather than dichotomised. clmm is not a hard dependency: where the
+# package is absent the run continues without it and says so.
+if (requireNamespace("ordinal", quietly = TRUE)) {
+  cat("\n=== task outcome (cumulative-link mixed model, secondary) ===\n")
+  dat$outcome_ordinal <- suppressWarnings(as.integer(dat$outcome_level))
+  for (name in names(all_contrasts)) {
+    pair <- all_contrasts[[name]]
+    sub <- dat[dat$condition %in% pair & !is.na(dat$outcome_ordinal)
+               & !is.na(dat$position), ]
+    sub$cond <- factor(sub$condition, levels = c(pair[["reference"]],
+                                                 pair[["treated"]]))
+    sub$level <- factor(sub$outcome_ordinal, ordered = TRUE)
+    fit <- tryCatch(
+      ordinal::clmm(level ~ cond + scenario_title + position +
+                      (1 | participant_id), data = sub),
+      error = function(e) NULL)
+    if (is.null(fit)) {
+      cat(sprintf("  %s: did not converge (n=%d)\n", name, nrow(sub)))
+      next
+    }
+    co <- summary(fit)$coefficients
+    row <- co[grep("^cond", rownames(co)), , drop = FALSE]
+    cat(sprintf("  %s: %s vs %s  estimate %.3f  [%.3f, %.3f]  p=%.4f  n=%d\n",
+                name, pair[["treated"]], pair[["reference"]],
+                row[1, 1], row[1, 1] - 1.96 * row[1, 2],
+                row[1, 1] + 1.96 * row[1, 2], row[1, 4], nrow(sub)))
+    cat(sprintf("      level distribution: %s\n",
+                paste(names(table(sub$level)), table(sub$level),
+                      sep = "=", collapse = " ")))
+  }
+} else {
+  cat("\n(ordinal package not installed; task-outcome model skipped)\n")
+}
+
+# Behavioural-perceptual associations. Not contrasts and not causal: the
+# question is whether what participants reported tracks what the interaction
+# did. Uptake is the proportion of observable stages a unit reached, averaged
+# over the interaction, because the interaction-level derived outcome is too
+# rare to relate to anything.
+if (!is.null(units) && "stage" %in% names(units)) {
+  per_session <- do.call(rbind, lapply(split(units, units$session_id),
+    function(g) data.frame(session_id = g$session_id[1],
+                           uptake_fraction = mean(g$grounding, na.rm = TRUE),
+                           stringsAsFactors = FALSE)))
+  linked <- merge(dat, per_session, by = "session_id")
+  pairs <- list(c("post_trust", "uptake_fraction"),
+                c("post_outcome_confidence", "uptake_fraction"),
+                c("post_effort", "repair_total"),
+                c("post_frustration", "repair_total"))
+  cat("\n=== behavioural-perceptual associations (secondary, not causal) ===\n")
+  for (pair in pairs) {
+    response <- pair[1]
+    predictor <- pair[2]
+    frame <- linked
+    frame$y <- suppressWarnings(as.numeric(frame[[response]]))
+    frame$x <- suppressWarnings(as.numeric(frame[[predictor]]))
+    frame <- frame[!is.na(frame$y) & !is.na(frame$x), ]
+    fit <- tryCatch(lme4::lmer(y ~ x + (1 | participant_id), data = frame),
+                    error = function(e) NULL)
+    if (is.null(fit)) {
+      cat(sprintf("  %-26s ~ %-16s did not converge (n=%d)\n",
+                  response, predictor, nrow(frame)))
+      next
+    }
+    co <- summary(fit)$coefficients
+    cat(sprintf("  %-26s ~ %-16s %+.3f per unit [%.3f, %.3f]  n=%d\n",
+                response, predictor, co["x", 1],
+                co["x", 1] - 1.96 * co["x", 2], co["x", 1] + 1.96 * co["x", 2],
+                nrow(frame)))
+  }
+  cat("  Scale points per unit of the predictor; intervals are Wald.\n")
+}
+
 # Detector precision is a prerequisite, not an aside: if the automatic gap
 # detector is less accurate under one voice than another, every automatic
 # turn-taking count carries the manipulation inside it. The sample was
