@@ -465,7 +465,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       </div>
 
       <div className="rounded-lg border p-3">
-        {QUESTIONS.map((q) => {
+        {questions.map((q) => {
           if (oppositeFolded && inOppositeChain(q.key)) {
             if (q.key !== opposite) return null
             return (
