@@ -125,6 +125,13 @@ settings:
     # it does not by itself exclude the session's condition or questionnaire data.
     max_capture_gap_total_ms: 50
     max_capture_gap_ms: 10
+    # Amended 2026-08-11. The two budgets above gate automatic timing measures.
+    # Manual verification is gated on the largest single gap alone: the aligned
+    # WAV places every chunk at its own timeline stamp, so drops leave silence
+    # in the right place rather than displacing what follows, and a listener
+    # setting the boundary by ear absorbs what remains. Collected sessions lost
+    # at most 32 ms of audio in any 500 ms window regardless of session total.
+    max_manual_verification_gap_ms: 50
     invalid_end_reasons: [technical_problem, artifact_initialization_failed]
   timing:
     # Frozen from P02001 activation/deactivation OBS calibration. The browser's

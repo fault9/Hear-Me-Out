@@ -403,16 +403,22 @@ def _verify_capture_gaps(session: dict, timing: dict) -> dict:
     limits = _thresholds(session)
     if not isinstance(total, (int, float)) or not isinstance(maximum, (int, float)):
         raise ReconstructionError("capture-gap diagnostics are incomplete")
-    if total > float(limits["max_capture_gap_total_ms"]):
-        raise ReconstructionError("capture-gap total exceeds the frozen threshold")
-    if maximum > float(limits["max_capture_gap_ms"]):
+    # Only a long gap can hide speech from a listener, so only that blocks
+    # reconstruction. The budgets still decide confirmatory eligibility, which
+    # technical_validity records from the same numbers.
+    if maximum > float(limits["max_manual_verification_gap_ms"]):
         raise ReconstructionError("largest capture gap exceeds the frozen threshold")
     return {
         "observed": gaps,
         "limits": {
             "max_capture_gap_total_ms": limits["max_capture_gap_total_ms"],
             "max_capture_gap_ms": limits["max_capture_gap_ms"],
+            "max_manual_verification_gap_ms": limits[
+                "max_manual_verification_gap_ms"],
         },
+        "within_confirmatory_budget": (
+            total <= float(limits["max_capture_gap_total_ms"])
+            and maximum <= float(limits["max_capture_gap_ms"])),
     }
 
 

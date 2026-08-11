@@ -212,13 +212,15 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertNotIn("microphone_capture_drops", failure_codes)
         self.assertIn("microphone_capture_drops", warning_codes)
 
-    def test_large_capture_gap_preserves_condition_data_but_blocks_timing(self):
+    def test_long_single_capture_gap_preserves_condition_data_but_blocks_timing(self):
+        # Half a second of missing microphone audio can hide a whole turn, so
+        # no amount of listening recovers it.
         with tempfile.TemporaryDirectory() as temp:
             session, timing = self._fixture(Path(temp))
             timing["integrity"]["capture_gaps"] = {
                 "gap_count": 2,
-                "total_gap_ms": 60,
-                "max_gap_ms": 12,
+                "total_gap_ms": 512,
+                "max_gap_ms": 504,
                 "browser_reported_estimated_dropped_samples": 4096,
             }
 
@@ -227,6 +229,29 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertEqual(result["status"], "valid")
         self.assertTrue(result["valid_for_condition_analysis"])
         self.assertFalse(result["valid_for_timing_reconstruction"])
+        self.assertIn("microphone_capture_drops",
+                      {warning["code"] for warning in result["warnings"]})
+
+    def test_accumulated_small_gaps_keep_manual_verification_but_not_confirmatory(self):
+        # Many single blocks lost across a session leave silence in the right
+        # place; a listener still hears where the turn starts, but the
+        # automatic measurement keeps its frozen budget.
+        with tempfile.TemporaryDirectory() as temp:
+            session, timing = self._fixture(Path(temp))
+            timing["status"] = BOUNDARY_CONFIRMATION_STATUS
+            timing["integrity"]["capture_gaps"] = {
+                "gap_count": 145,
+                "total_gap_ms": 1160,
+                "max_gap_ms": 8,
+                "browser_reported_estimated_dropped_samples": 18560,
+            }
+
+            result = evaluate_technical_validity(session, Path(temp), timing)
+
+        self.assertEqual(result["status"], "valid")
+        self.assertTrue(result["valid_for_timing_reconstruction"])
+        self.assertTrue(result["valid_for_manual_turn_verification"])
+        self.assertFalse(result["valid_for_confirmatory_timing_analysis"])
         self.assertIn("microphone_capture_drops",
                       {warning["code"] for warning in result["warnings"]})
 

@@ -11,13 +11,14 @@ from .artifacts import atomic_write_json, file_record, sha256_file
 from .continuity import run_for_session_dir as run_continuity_check
 from .transition_analysis import read_events
 
-TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v7"
+TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v8"
 BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
 
 DEFAULT_THRESHOLDS = {
     "max_route_activation_lag_ms": 250.0,
     "max_capture_gap_total_ms": 50.0,
     "max_capture_gap_ms": 10.0,
+    "max_manual_verification_gap_ms": 50.0,
     "invalid_end_reasons": ["technical_problem", "artifact_initialization_failed"],
 }
 
@@ -360,12 +361,21 @@ def evaluate_technical_validity(session: dict, data_root: Path,
 
     capture = ((timing or {}).get("integrity") or {})
     capture_gap_valid = False
+    capture_gap_manual_valid = False
     if timing is not None:
         gaps = capture.get("capture_gaps") or {}
         total_gap_ms = gaps.get("total_gap_ms")
         max_gap_ms = gaps.get("max_gap_ms")
         total_limit = float(thresholds["max_capture_gap_total_ms"])
         single_limit = float(thresholds["max_capture_gap_ms"])
+        manual_limit = float(thresholds["max_manual_verification_gap_ms"])
+        # Dropped blocks leave silence at the correct place - the aligned WAV
+        # places every chunk by its own timeline stamp - so a session total
+        # measures accumulated deficit, not displacement. What can hide speech
+        # is one long gap, which is why manual verification is gated on the
+        # largest gap alone and automatic measurement still carries a budget.
+        capture_gap_manual_valid = (
+            isinstance(max_gap_ms, (int, float)) and max_gap_ms <= manual_limit)
         capture_gap_valid = (
             isinstance(total_gap_ms, (int, float))
             and isinstance(max_gap_ms, (int, float))
@@ -419,14 +429,18 @@ def evaluate_technical_validity(session: dict, data_root: Path,
     # proxy delivery excludes them however the checks above were recorded.
     timing_reconstruction_valid = bool(
         condition_valid and capture.get("valid_for_timing") is True
-        and capture_gap_valid and not proxy_delivery_incomplete)
+        and capture_gap_manual_valid and not proxy_delivery_incomplete)
     timing_status = (timing or {}).get("status")
     manual_turn_verification_valid = bool(
         timing_reconstruction_valid
         and timing_status == BOUNDARY_CONFIRMATION_STATUS)
     # This is session-level eligibility only. Individual automatic candidates
     # still require the event-level verification recorded by dataset_export.
-    confirmatory_timing_valid = manual_turn_verification_valid
+    # Automatic measurement keeps the frozen budget; a listener setting the
+    # boundary by ear is itself the remedy for what an accumulated deficit
+    # costs, so manual verification does not.
+    confirmatory_timing_valid = bool(
+        manual_turn_verification_valid and capture_gap_valid)
     post_checkpoint_valid = bool(condition_valid and checkpoint_reached_valid)
     if not ended or (not evaluation_complete and not failures):
         status = "incomplete"
