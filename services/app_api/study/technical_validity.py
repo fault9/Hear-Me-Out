@@ -9,9 +9,10 @@ from typing import Any
 
 from .artifacts import atomic_write_json, file_record, sha256_file
 from .continuity import run_for_session_dir as run_continuity_check
+from .dialogue_transcript import captured_duration_ms
 from .transition_analysis import read_events
 
-TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v8"
+TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v9"
 BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
 
 DEFAULT_THRESHOLDS = {
@@ -19,6 +20,7 @@ DEFAULT_THRESHOLDS = {
     "max_capture_gap_total_ms": 50.0,
     "max_capture_gap_ms": 10.0,
     "max_manual_verification_gap_ms": 50.0,
+    "max_capture_time_base_ratio": 1.25,
     "invalid_end_reasons": ["technical_problem", "artifact_initialization_failed"],
 }
 
@@ -358,6 +360,27 @@ def evaluate_technical_validity(session: dict, data_root: Path,
     add("xvc_route_executed", not vc_regions_without_inference,
         "Every scheduled VC region contains actual XVC inference.",
         observed=vc_regions_without_inference, expected=[])
+
+    # Sustained buffer starvation costs the recording whole seconds, so the
+    # file holds less time than it spans and plays back fast. The transcript
+    # remaps around a shortfall, but nothing recovers a session that lost a
+    # third of its time base - and the model heard that audio too, so the
+    # condition it ran under is not the condition that was assigned.
+    time_base_ratio = None
+    if timing is not None:
+        assistant_ends = [float(row["end_ms"])
+                          for row in (timing.get("assistant_intervals") or [])
+                          if row.get("end_ms") is not None]
+        raw_relative = (session.get("files") or {}).get("participant_raw")
+        held_ms = (captured_duration_ms(Path(data_root) / raw_relative)
+                   if raw_relative else 0.0)
+        if assistant_ends and held_ms > 0:
+            time_base_ratio = max(assistant_ends) / held_ms
+    time_base_limit = float(thresholds["max_capture_time_base_ratio"])
+    add("capture_time_base", time_base_ratio is None
+        or time_base_ratio <= time_base_limit,
+        "The participant recording holds the time it spans.",
+        observed=time_base_ratio, expected=f"<= {time_base_limit:g}")
 
     capture = ((timing or {}).get("integrity") or {})
     capture_gap_valid = False

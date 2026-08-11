@@ -212,6 +212,48 @@ class TechnicalValidityTests(unittest.TestCase):
         self.assertNotIn("microphone_capture_drops", failure_codes)
         self.assertIn("microphone_capture_drops", warning_codes)
 
+    def _with_recording(self, root, session, held_s, assistant_end_s):
+        """A participant WAV holding `held_s` of audio, against an assistant
+        track still speaking at `assistant_end_s`."""
+        import wave
+        path = root / "participant_raw.wav"
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(b"\x00\x00" * int(16000 * held_s))
+        session["files"] = {"participant_raw": path.name}
+        return [{"start_ms": 0.0, "end_ms": assistant_end_s * 1000.0}]
+
+    def test_a_recording_missing_most_of_its_time_base_is_invalid(self):
+        # P01010 held 106 s of audio for a 148 s conversation: the file plays
+        # fast and nothing derived from it lines up with the assistant track.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session, timing = self._fixture(root)
+            timing["assistant_intervals"] = self._with_recording(
+                root, session, held_s=10.0, assistant_end_s=14.5)
+
+            result = evaluate_technical_validity(session, root, timing)
+
+        self.assertEqual(result["status"], "invalid")
+        self.assertFalse(result["valid_for_condition_analysis"])
+        self.assertIn("capture_time_base",
+                      {failure["code"] for failure in result["failures"]})
+
+    def test_a_recording_that_covers_its_session_passes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session, timing = self._fixture(root)
+            # 8% short - real, but recoverable and not this check's business.
+            timing["assistant_intervals"] = self._with_recording(
+                root, session, held_s=10.0, assistant_end_s=10.8)
+
+            result = evaluate_technical_validity(session, root, timing)
+
+        self.assertNotIn("capture_time_base",
+                         {failure["code"] for failure in result["failures"]})
+
     def test_long_single_capture_gap_preserves_condition_data_but_blocks_timing(self):
         # Half a second of missing microphone audio can hide a whole turn, so
         # no amount of listening recovers it.
