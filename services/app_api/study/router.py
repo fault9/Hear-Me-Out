@@ -813,9 +813,13 @@ def build_study_router() -> APIRouter:
             rows = list(csv.DictReader(handle))
         verdicts = _load_gap_verdicts(study_id)
         gaps = []
+        # The stratum names the condition, so it is withheld with it.
+        withheld = ("condition", "sample_stratum")
         for row in rows:
+            if str(row.get("verification_sample")) not in ("1", "True", "true"):
+                continue
             key = f"{row.get('session_id')}:{row.get('gap_id')}"
-            gaps.append({k: v for k, v in row.items() if k != "condition"}
+            gaps.append({k: v for k, v in row.items() if k not in withheld}
                         | {"gap_key": key, "verdict": verdicts.get(key)})
         study = backend.get_study(study_id) or {}
         timing_settings = ((study.get("settings") or {}).get("timing") or {})

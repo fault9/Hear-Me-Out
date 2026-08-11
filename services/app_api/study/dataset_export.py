@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import sys
@@ -382,6 +383,75 @@ GAP_VERDICT_FIELDS = (
 
 def gap_key(session_id: object, gap_id: object) -> str:
     return f"{session_id}:{gap_id}"
+
+
+# Judging every candidate gap by ear is not feasible, and the first N in queue
+# order would be one block of the earliest sessions - a convenience sample no
+# precision estimate can be built on. A stratified sample supports what the
+# analysis needs: how often the detector is right and how far its boundaries
+# move. Condition is a stratum so that precision can be shown not to differ by
+# it, an untested assumption that would otherwise confound every response-gap
+# comparison. Reviewers never see the stratum; the queue withholds it.
+GAP_VERIFICATION_SAMPLE = 200
+GAP_DURATION_BANDS = ((200.0, "under_200ms"), (600.0, "200_600ms"))
+
+
+def _gap_band(duration_ms: object) -> str:
+    try:
+        value = float(duration_ms)
+    except (TypeError, ValueError):
+        return "unknown"
+    for limit, name in GAP_DURATION_BANDS:
+        if value < limit:
+            return name
+    return "over_600ms"
+
+
+def _gap_stratum(row: dict) -> str:
+    return "|".join((str(row.get("condition")), str(row.get("direction")),
+                     _gap_band(row.get("gap_duration_ms"))))
+
+
+def select_gap_verification_sample(
+        rows: list[dict], size: int = GAP_VERIFICATION_SAMPLE) -> dict[str, str]:
+    """Choose which gaps get listened to, allocated across strata by size.
+
+    Membership is decided by hashing the gap key, so the sample is a property
+    of the data rather than of when it was drawn: the same gaps are chosen on
+    every export, and a later export adds candidates without reshuffling the
+    ones already judged.
+    """
+    if not rows:
+        return {}
+    strata: dict[str, list[dict]] = {}
+    for row in rows:
+        strata.setdefault(_gap_stratum(row), []).append(row)
+    size = min(size, len(rows))
+    counts, remainders = {}, []
+    for name, members in strata.items():
+        share = size * len(members) / len(rows)
+        counts[name] = min(len(members), max(1, int(share)))
+        remainders.append((share - int(share), name))
+    order = [name for _, name in sorted(remainders, reverse=True)]
+    while sum(counts.values()) < size:
+        progressed = False
+        for name in order:
+            if sum(counts.values()) >= size:
+                break
+            if counts[name] < len(strata[name]):
+                counts[name] += 1
+                progressed = True
+        if not progressed:
+            break
+    while sum(counts.values()) > size:
+        counts[max(counts, key=lambda name: counts[name])] -= 1
+    chosen: dict[str, str] = {}
+    for name, members in strata.items():
+        ranked = sorted(members, key=lambda row: hashlib.sha256(
+            gap_key(row.get("session_id"), row.get("gap_id")).encode()).hexdigest())
+        for row in ranked[:counts[name]]:
+            chosen[gap_key(row.get("session_id"), row.get("gap_id"))] = name
+    return chosen
 
 
 def load_gap_verdicts(data_root: Path, study_id: int) -> dict[str, dict]:
@@ -906,7 +976,8 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
         "participant_raw_path", "assistant_model_path",
         "gap_id", "direction", "from_speaker", "to_speaker", "from_interval",
         "to_interval", "gap_start_ms", "gap_end_ms", "gap_duration_ms",
-        "schema", "verified_positive_gap", "verified_gap_start_ms",
+        "schema", "sample_stratum", "verification_sample",
+        "verified_positive_gap", "verified_gap_start_ms",
         "verified_gap_end_ms", "verified_gap_duration_ms",
         "verifier_initials", "verification_note",
     ]
@@ -926,6 +997,20 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
             and row.get("valid_for_manual_turn_verification")
             and row.get("crosswalk_complete"))
     ]
+    # The rows are the same objects the queue filter selected, so marking them
+    # here marks both tables.
+    gap_sample = select_gap_verification_sample(gap_verification_rows)
+    for row in gap_rows:
+        stratum = gap_sample.get(gap_key(row.get("session_id"), row.get("gap_id")))
+        # Quotas shrink as sessions arrive, so a redraw would drop candidates
+        # already judged. Anything carrying a verdict stays in: an export may
+        # add listening work but must never discard it.
+        if stratum is None and row.get("verifier_initials"):
+            stratum = _gap_stratum(row)
+        row["sample_stratum"] = stratum
+        row["verification_sample"] = 1 if stratum else 0
+    gap_sample_rows = [row for row in gap_verification_rows
+                       if row.get("verification_sample")]
     session_review_rows = []
     for session in analytical:
         sid = str(session["session_id"])
@@ -1030,10 +1115,13 @@ def build_dataset(study_id: int, out_dir: Path) -> dict:
             1 for row in verification_rows if not row.get("verifier_initials")),
         "turn_verification_candidates": len(verification_rows),
         "turn_gap_verification_candidates": len(gap_verification_rows),
+        "turn_gap_verification_sample": len(gap_sample_rows),
+        "turn_gap_sample_strata": len({row.get("sample_stratum")
+                                       for row in gap_sample_rows}),
         "turn_gaps_verified": sum(
             1 for row in gap_rows if row.get("verifier_initials")),
         "turn_gaps_pending_verification": sum(
-            1 for row in gap_verification_rows if not row.get("verifier_initials")),
+            1 for row in gap_sample_rows if not row.get("verifier_initials")),
         "turn_sessions_requiring_full_review": len(session_review_rows),
         "overlap_200ms_candidates": sum(
             bool(row.get("overlap_200ms_candidate")) for row in event_rows),
@@ -1151,6 +1239,14 @@ Positive silence gaps at unambiguous speaker changes. Direction is
 `assistant_to_participant` for participant response gaps. These are derived
 from the same participant-experienced browser clock as the overlap episodes.
 The verification queue carries empty `verified_*` fields for manual review.
+
+Listening to every candidate is not feasible, so `verification_sample` marks a
+stratified sample of `GAP_VERIFICATION_SAMPLE` gaps drawn for verification; `sample_stratum` names the
+condition, direction and duration band it represents. Membership is a hash of
+`session_id:gap_id`, so the same gaps are drawn on every export, and any gap
+already carrying a verdict stays in the sample even if a later export's quotas
+would not have reached it. Estimates from the sample must be weighted by the
+population stratum sizes in this table, not by the sample's own proportions.
 
 ## turn_session_review_queue.csv / turn_event_manual_additions.csv
 Every timing-eligible included session receives a full-track review row. This
