@@ -1,24 +1,36 @@
 """Where do the dropped capture blocks land? Spread out is harmless; a burst
 inside one utterance is not.
 """
-import os, sys
+import json, os, sys
 from pathlib import Path
 sys.path.insert(0, os.path.expanduser("~/Hear-Me-Out/services/app_api"))
-from study.artifacts import load_manifest_artifact  # noqa: E402
+from study.artifacts import load_manifest_artifact, resolve_artifact_path  # noqa: E402
 from study.storage import get_backend  # noqa: E402
 
 ROOT = Path(os.environ.get("STUDY_DATA_DIR", os.path.expanduser("~/study-data")))
 WINDOW_S = 0.5
 
 
-def profile(timing: dict) -> str:
+def chunks_for(session: dict) -> dict:
+    """Chunk sample boundaries stay in the client timeline; the timing
+    artifact keeps only the gap summary derived from them."""
+    raw = (session.get("files") or {}).get("participant_raw")
+    resolved = resolve_artifact_path(ROOT, raw)
+    if resolved is None:
+        return {}
+    timeline = resolved.parent / "client_timeline.json"
+    if not timeline.is_file():
+        return {}
+    capture = (json.loads(timeline.read_text()).get("capture") or {})
+    return {int(row["chunk_sequence"]): row for row in capture.get("chunks") or []}
+
+
+def profile(timing: dict, chunks: dict) -> str:
     caps = (timing.get("integrity") or {}).get("capture_gaps") or {}
     rows = caps.get("gaps") or []
     if not rows:
         return f"clean  (total={caps.get('total_gap_ms') or 0:.0f}ms)"
     rate = float(caps.get("sample_rate_hz") or 16000)
-    chunks = {int(c["chunk_sequence"]): c
-              for c in ((timing.get("capture") or {}).get("chunks") or [])}
     # A gap sits between two chunks; the chunk timeline says when in the
     # session it happened, which is what matters for a nominated window.
     drops = sorted(
@@ -50,4 +62,6 @@ for session in sorted(backend.list_sessions(1),
     if not any(sid.startswith(p) for p in wanted) or "_S01_" in sid:
         continue
     timing = load_manifest_artifact(session, ROOT, "timing_latest")
-    print(f"{sid}  {profile(timing) if timing else 'no timing artifact'}")
+    print(f"{sid}  "
+          + (profile(timing, chunks_for(session)) if timing
+             else "no timing artifact"))
