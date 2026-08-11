@@ -17,9 +17,19 @@
 # GROUNDING_LEVEL selects the grounding outcome. The interaction-level
 # demonstrated_grounding proved unidentifiable on collected data - 3 successes
 # across 45 interactions, complete separation, intervals thousands of log-odds
-# wide - so the prespecified fallback moves it to the critical unit, where
-# incorporation sits near half and there are twice as many observations.
-# Set GROUNDING_LEVEL=scenario to refit the original.
+# wide - so the prespecified fallback moves it to the critical unit.
+#
+#   stacked  (default) one model over all four uptake stages, each unit
+#            contributing a row per observable stage, with stage as a fixed
+#            factor and random intercepts for participant and unit. The stages
+#            are complementary rather than nested - operational use occurs
+#            without acknowledgement, and exceeds claimed record update - so
+#            they are not a cascade to be modelled sequentially. Pooling them
+#            estimates one condition effect on uptake instead of splitting the
+#            same observations across four underpowered tests, and the
+#            condition-by-stage term reports whether that effect is uniform.
+#   unit     a single stage, named by GROUNDING_OUTCOME
+#   scenario the original interaction-level demonstrated_grounding
 
 suppressMessages({
   library(lme4)
@@ -45,7 +55,7 @@ frame_file <- if (sensitivity) {
 dat <- read.csv(file.path(frames, frame_file), stringsAsFactors = FALSE)
 if (sensitivity) cat("(sensitivity frame: excludes participants with any technically invalid analytical attempt)\n")
 
-grounding_level <- Sys.getenv("GROUNDING_LEVEL", "unit")
+grounding_level <- Sys.getenv("GROUNDING_LEVEL", "stacked")
 grounding_outcome <- Sys.getenv("GROUNDING_OUTCOME", "incorporation")
 unit_file <- if (sensitivity) {
   "unit_level_sensitivity_complete_technical.csv"
@@ -53,6 +63,23 @@ unit_file <- if (sensitivity) {
   "unit_level.csv"
 }
 units <- read.csv(file.path(frames, unit_file), stringsAsFactors = FALSE)
+
+UPTAKE_STAGES <- c("acknowledgement", "update_claim", "incorporation",
+                   "retention")
+
+stack_uptake <- function(u) {
+  rows <- lapply(UPTAKE_STAGES, function(stage) {
+    data.frame(participant_id = u$participant_id, session_id = u$session_id,
+               condition = u$condition, scenario_title = u$scenario_title,
+               analytical_position = u$analytical_position,
+               unit_key = paste(u$session_id, u$unit_index, sep = ":"),
+               stage = stage, grounding = parse_binary(u[[stage]], stage),
+               stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, rows)
+  # A stage the coder could not judge is missing, not a failure.
+  out[!is.na(out$grounding), ]
+}
 
 parse_binary <- function(values, field) {
   text <- tolower(trimws(as.character(values)))
@@ -67,7 +94,17 @@ parse_binary <- function(values, field) {
   result
 }
 
-if (grounding_level == "unit") {
+if (grounding_level == "stacked") {
+  units <- stack_uptake(units)
+  units$participant_id <- factor(units$participant_id)
+  units$unit_key <- factor(units$unit_key)
+  units$scenario_title <- factor(units$scenario_title)
+  units$stage <- factor(units$stage, levels = UPTAKE_STAGES)
+  units$position <- suppressWarnings(as.integer(units$analytical_position))
+  cat(sprintf("grounding: stacked over %s (%d observations, %d units)\n",
+              paste(UPTAKE_STAGES, collapse = "/"), nrow(units),
+              nlevels(units$unit_key)))
+} else if (grounding_level == "unit") {
   units$grounding <- parse_binary(units[[grounding_outcome]], grounding_outcome)
   units$participant_id <- factor(units$participant_id)
   units$scenario_title <- factor(units$scenario_title)
@@ -109,8 +146,14 @@ fit_one <- function(sub, outcome) {
   sub$cond <- factor(sub$condition,
                      levels = c(sub$reference[1], sub$treated[1]))
   if (outcome == "grounding") {
-    m <- glmer(grounding ~ cond + scenario_title + position + (1 | participant_id),
-               data = sub, family = binomial,
+    stacked <- "stage" %in% names(sub)
+    form <- if (stacked) {
+      grounding ~ cond + stage + scenario_title + position +
+        (1 | participant_id) + (1 | unit_key)
+    } else {
+      grounding ~ cond + scenario_title + position + (1 | participant_id)
+    }
+    m <- glmer(form, data = sub, family = binomial,
                control = glmerControl(optimizer = "bobyqa"))
     co <- summary(m)$coefficients
     row <- co[grep("^cond", rownames(co)), , drop = FALSE]
@@ -119,6 +162,7 @@ fit_one <- function(sub, outcome) {
                 outcome_rate = mean(sub$grounding),
                 outcome_events = sum(sub$grounding),
                 re_sd = sqrt(as.numeric(VarCorr(m)$participant_id)),
+                stages = if (stacked) nlevels(droplevels(sub$stage)) else 1L,
                 singular = lme4::isSingular(m),
                 dispersion = NA_real_,
                 note = paste(m@optinfo$conv$lme4$messages, collapse = "; ")))
@@ -141,7 +185,7 @@ fit_one <- function(sub, outcome) {
   list(estimate = row[1, 1], se = row[1, 2], p = row[1, 4],
        model = label, n = nrow(sub),
        outcome_rate = mean(sub$repairs_post),
-       outcome_events = sum(sub$repairs_post),
+       outcome_events = sum(sub$repairs_post), stages = 1L,
        re_sd = re, singular = isTRUE(re < 1e-4), dispersion = ratio,
        note = if (isTRUE(m$sdr$pdHess)) "" else "Hessian not positive definite")
 }
@@ -169,11 +213,16 @@ for (name in names(contrasts)) {
                                              model = paste("FAILED:", conditionMessage(e)),
                                              n = sum(keep), outcome_rate = NA,
                                              outcome_events = NA, re_sd = NA,
+                                             stages = NA,
                                              singular = NA, dispersion = NA,
                                              note = conditionMessage(e)))
     results <- rbind(results, data.frame(
       contrast = sprintf("%s: %s vs %s", name, pair[["treated"]], pair[["reference"]]),
-      outcome = if (outcome == "grounding" && grounding_level == "unit") {
+      outcome = if (outcome != "grounding") {
+        outcome
+      } else if (grounding_level == "stacked") {
+        "grounding/stacked"
+      } else if (grounding_level == "unit") {
         paste0("grounding/", grounding_outcome)
       } else {
         outcome
@@ -183,6 +232,7 @@ for (name in names(contrasts)) {
       ci_low = fit$estimate - 1.96 * fit$se,
       ci_high = fit$estimate + 1.96 * fit$se,
       outcome_rate = fit$outcome_rate, outcome_events = fit$outcome_events,
+      stages = fit$stages,
       re_sd = fit$re_sd, singular = fit$singular, dispersion = fit$dispersion,
       note = fit$note,
       n_participants = length(unique(sub$participant_id[keep])),
@@ -209,8 +259,8 @@ print(results[, c("contrast", "outcome", "model", "estimate", "ci_low",
 # that change has to be made before the confirmatory run rather than after it.
 cat("\n=== model diagnostics ===\n")
 print(results[, c("contrast", "outcome", "n_obs", "n_participants",
-                  "outcome_events", "outcome_rate", "re_sd", "singular",
-                  "dispersion", "note")])
+                  "stages", "outcome_events", "outcome_rate", "re_sd",
+                  "singular", "dispersion", "note")])
 cat("\nRead as: singular TRUE means the participant random effect collapsed;\n")
 cat("outcome_rate near 0 or 1 means the logistic model has little to fit;\n")
 cat("dispersion over 1.5 is why the repair model switches to negative binomial;\n")
