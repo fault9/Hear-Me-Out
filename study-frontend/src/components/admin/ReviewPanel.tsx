@@ -110,6 +110,13 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
   const questions = mode === "gap" ? GAP_QUESTIONS : QUESTIONS
   const keyOf = (item: Event): string => item?.gap_key || item?.event_key
 
+  // A repinned queue mixes a few new candidates into many already judged, so
+  // stepping by one walks back into finished work. Advance to what is not done.
+  const nextUnverified = useCallback((from: number, rows: Event[]): number => {
+    for (let i = from + 1; i < rows.length; i += 1) if (!rows[i].verdict) return i
+    return Math.min(from + 1, rows.length - 1)
+  }, [])
+
   const load = useCallback(async (next: Mode = mode) => {
     setBusy(true); setErr(null)
     try {
@@ -267,11 +274,11 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       else await adminApi.reviewVerdict(token, studyId, body)
       setEvents((rows) => rows.map(
         (row, i) => (i === index ? { ...row, verdict: body } : row)))
-      setIndex((i) => Math.min(i + 1, events.length - 1))
+      setIndex(nextUnverified(index, events))
     } catch (e: any) { setErr(e?.message || String(e)) }
     finally { setBusy(false) }
-  }, [answers, bounds, event, events.length, index, mode, note, reviewer,
-      studyId, token])
+  }, [answers, bounds, event, events, index, mode, nextUnverified, note,
+      reviewer, studyId, token])
 
   useEffect(() => {
     if (!started) return
@@ -388,6 +395,9 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <Badge variant="secondary">{done} / {events.length} verified</Badge>
         <span className="text-muted-foreground">item {index + 1} · {exportName}</span>
+        {event?.verdict && (
+          <Badge variant="outline">already verified · re-judging overwrites</Badge>
+        )}
         {latestExport && latestExport !== exportName && (
           <Button size="sm" variant="outline" disabled={busy}
             onClick={async () => {
@@ -525,7 +535,7 @@ export function ReviewPanel({ token, studyId }: { token: string; studyId: number
             onClick={() => setIndex((i) => i - 1)}>← Previous</Button>
           <Button size="sm" disabled={busy} onClick={save}>Save &amp; next</Button>
           <Button size="sm" variant="secondary"
-            onClick={() => setIndex((i) => Math.min(i + 1, events.length - 1))}>Skip</Button>
+            onClick={() => setIndex(nextUnverified(index, events))}>Skip</Button>
           {err && <span className="text-sm text-destructive">{err}</span>}
         </div>
       </div>
