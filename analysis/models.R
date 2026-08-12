@@ -531,6 +531,66 @@ if (!is.null(gaps)) {
         print(round(test$coefficients, 4))
       }
     }
+    # The outcome itself: response latency from verified boundaries. Two
+    # estimates that should agree in direction. The design-weighted mean puts
+    # each verified real gap back at its stratum's population share, so the
+    # sampling design cannot tilt the answer; the log-linear model gives the
+    # prespecified contrast with participant clustering. Confidence intervals
+    # for the weighted means resample participants, since gaps cluster there.
+    real <- judged[!is.na(judged$real) & judged$real == 1L
+                   & !is.na(suppressWarnings(as.numeric(
+                       judged$verified_gap_duration_ms))), ]
+    if (nrow(real) >= 20) {
+      real$dur <- as.numeric(real$verified_gap_duration_ms)
+      band <- function(d) ifelse(d < 200, "under_200ms",
+                                 ifelse(d < 600, "200_600ms", "over_600ms"))
+      gaps$stratum_all <- paste(gaps$condition, gaps$direction,
+                                band(suppressWarnings(as.numeric(
+                                  gaps$gap_duration_ms))), sep = "|")
+      real$stratum <- paste(real$condition, real$direction,
+                            band(as.numeric(real$gap_duration_ms)), sep = "|")
+      pop <- table(gaps$stratum_all)
+      jud <- table(judged$sample_stratum)
+      real$w <- as.numeric(pop[real$stratum]) / as.numeric(jud[real$stratum])
+      real <- real[!is.na(real$w), ]
+      wmean <- function(d) sum(d$w * d$dur) / sum(d$w)
+      cat("\n=== verified response gaps: design-weighted mean duration (ms) ===\n")
+      cells <- split(real, list(real$condition, real$direction), drop = TRUE)
+      set.seed(20260812)
+      for (name in sort(names(cells))) {
+        cell <- cells[[name]]
+        boots <- vapply(seq_len(2000), function(i) {
+          ids <- sample(unique(cell$participant_id),
+                        length(unique(cell$participant_id)), replace = TRUE)
+          take <- do.call(rbind, lapply(ids, function(pid)
+            cell[cell$participant_id == pid, ]))
+          wmean(take)
+        }, numeric(1))
+        cat(sprintf("  %-44s n=%3d  mean %6.0f  [%5.0f, %6.0f]\n", name,
+                    nrow(cell), wmean(cell),
+                    quantile(boots, .025, na.rm = TRUE),
+                    quantile(boots, .975, na.rm = TRUE)))
+      }
+      cat("\n=== verified gap duration contrasts (log-linear LMM, secondary) ===\n")
+      real$logdur <- log(pmax(real$dur, 1))
+      for (name in names(all_contrasts)) {
+        pair <- all_contrasts[[name]]
+        sub <- real[real$condition %in% pair, ]
+        sub$cond <- factor(sub$condition, levels = c(pair[["reference"]],
+                                                     pair[["treated"]]))
+        fit <- tryCatch(lme4::lmer(
+          logdur ~ cond + direction + (1 | participant_id), data = sub),
+          error = function(e) NULL)
+        if (is.null(fit)) { cat(sprintf("  %s: did not fit\n", name)); next }
+        co <- summary(fit)$coefficients
+        row <- co[grep("^cond", rownames(co)), , drop = FALSE]
+        cat(sprintf("  %s: %s vs %s  ratio %.2f  [%.2f, %.2f]  n=%d\n",
+                    name, pair[["treated"]], pair[["reference"]],
+                    exp(row[1, 1]), exp(row[1, 1] - 1.96 * row[1, 2]),
+                    exp(row[1, 1] + 1.96 * row[1, 2]), nrow(sub)))
+      }
+    }
+
     cat("\nPrecision far below 1 means the automatic gap count is not a\n")
     cat("measurement; differing precision across conditions means it is not\n")
     cat("even a comparable one. Report verified gaps weighted by stratum.\n")
