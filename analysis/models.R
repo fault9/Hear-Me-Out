@@ -188,10 +188,15 @@ secondary_contrasts <- list(
 # An episode in a certified session is not a verified episode. Counting only
 # what a listener confirmed keeps the automatic nominations - 45% of which did
 # not survive verification - out of the models.
-turn_counts <- function(events, sessions) {
+turn_counts <- function(events, gaps, sessions) {
   if (is.null(events) || !nrow(events)) return(NULL)
   judged <- events[nzchar(as.character(events$verifier_initials)), ]
   if (!nrow(judged)) return(NULL)
+  # Episodes below 200 ms of summed overlap stay in the events table as audit
+  # rows but are never queued for listening, so completeness is judged over
+  # what the queue actually asked for - mirroring the export's queue filter.
+  duration <- suppressWarnings(as.numeric(events$overlap_duration_ms))
+  queued <- events[!is.na(duration) & duration >= 200, ]
   judged$ov <- parse_binary(judged$verified_overlap, "verified_overlap")
   judged$pre <- parse_binary(judged$verified_assistant_premature_onset,
                              "verified_assistant_premature_onset")
@@ -207,7 +212,7 @@ turn_counts <- function(events, sessions) {
   # zeros; dropping it would condition the count on having had an event. A
   # session still part-way through verification contributes nothing, because a
   # count of what has been confirmed so far is not a count of what happened.
-  complete <- vapply(split(events, events$session_id),
+  complete <- vapply(split(queued, queued$session_id),
                      function(g) all(nzchar(as.character(g$verifier_initials))),
                      logical(1))
   pending <- names(complete)[!complete]
@@ -215,7 +220,14 @@ turn_counts <- function(events, sessions) {
     cat(sprintf("turn counts: %d session(s) excluded, verification incomplete\n",
                 length(pending)))
   }
-  base <- data.frame(session_id = names(complete)[complete],
+  # The events frame only holds sessions the detector nominated in, so on
+  # its own it conditions the count on having had a candidate. Every certified
+  # session appears in the gap frame, and a certified session with no
+  # nominated episode had zero events - nomination is the detector's job, and
+  # verification cannot add events the detector never saw.
+  eligible <- unique(c(events$session_id,
+                       if (!is.null(gaps)) gaps$session_id))
+  base <- data.frame(session_id = setdiff(eligible, pending),
                      stringsAsFactors = FALSE)
   out <- merge(base, per, by = "session_id", all.x = TRUE)
   for (field in c("verified_overlaps", "verified_premature",
@@ -226,7 +238,7 @@ turn_counts <- function(events, sessions) {
                      "scenario_title", "position")], out, by = "session_id")
 }
 
-turns <- turn_counts(events, dat)
+turns <- turn_counts(events, gaps, dat)
 
 fit_one <- function(sub, outcome, count_field = "repairs_post") {
   sub$cond <- factor(sub$condition,
