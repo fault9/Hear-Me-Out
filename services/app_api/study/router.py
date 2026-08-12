@@ -931,7 +931,13 @@ def build_study_router() -> APIRouter:
                   "assistant": "assistant_model_path"}.get(track)
         if column is None:
             raise HTTPException(status_code=422, detail="Unknown track")
-        _, rows = _queue_rows(study_id)
+        export, rows = _queue_rows(study_id)
+        # A session can be all gaps and no episodes; both queues carry the
+        # same path columns, so fall back to the gap queue before giving up.
+        gap_path = export / "turn_gap_verification_queue.csv"
+        if gap_path.is_file():
+            with gap_path.open(newline="") as handle:
+                rows = rows + list(csv.DictReader(handle))
         relative = next((row[column] for row in rows
                          if row["session_id"] == session_id and row.get(column)), None)
         if not relative:
