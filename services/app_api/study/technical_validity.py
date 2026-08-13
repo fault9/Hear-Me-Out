@@ -36,7 +36,12 @@ def _end_reason_reclassification(session: dict, data_root: Path) -> dict | None:
     evidence for each reclassified session, so the decision is auditable and
     never depends on how the recording sounds to a listener."""
     study_id = session.get("study_id")
-    path = (Path(data_root) / "review" / f"study{int(study_id or 0)}"
+    # Callers hold either the study data root or its media directory (see
+    # artifacts.artifact_bases); the review directory hangs off the root.
+    root = Path(data_root)
+    if root.name == "media":
+        root = root.parent
+    path = (root / "review" / f"study{int(study_id or 0)}"
             / "end_reason_reclassifications.json")
     if not path.is_file():
         return None
