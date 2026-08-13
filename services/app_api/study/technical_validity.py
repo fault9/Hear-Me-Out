@@ -12,7 +12,7 @@ from .continuity import run_for_session_dir as run_continuity_check
 from .dialogue_transcript import captured_duration_ms
 from .transition_analysis import read_events
 
-TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v9"
+TECHNICAL_VALIDITY_SCHEMA = "hmo.technical-validity.v10"
 BOUNDARY_CONFIRMATION_STATUS = "confirmed_for_candidate_nomination"
 
 DEFAULT_THRESHOLDS = {
@@ -23,6 +23,29 @@ DEFAULT_THRESHOLDS = {
     "max_capture_time_base_ratio": 1.25,
     "invalid_end_reasons": ["technical_problem", "artifact_initialization_failed"],
 }
+
+
+def _end_reason_reclassification(session: dict, data_root: Path) -> dict | None:
+    """A recorded decision that a participant-selected technical end reason
+    was not corroborated by the objective record.
+
+    The end-reason button is the participant's report, and a report can be
+    wrong in both directions: one session's record showed the assistant dead
+    from 241 s, corroborating it, while another ran full length with clean
+    playback and a questionnaire that contradicted it. The file holds the
+    evidence for each reclassified session, so the decision is auditable and
+    never depends on how the recording sounds to a listener."""
+    study_id = session.get("study_id")
+    path = (Path(data_root) / "review" / f"study{int(study_id or 0)}"
+            / "end_reason_reclassifications.json")
+    if not path.is_file():
+        return None
+    try:
+        records = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    record = records.get(str(session.get("session_id")))
+    return record if isinstance(record, dict) else None
 
 
 def _configured_thresholds(session: dict) -> dict:
@@ -143,9 +166,18 @@ def evaluate_technical_validity(session: dict, data_root: Path,
         )
     invalid_end_reasons = set(thresholds.get("invalid_end_reasons") or [])
     end_reason = session.get("end_reason")
-    add("end_reason", bool(end_reason) and end_reason not in invalid_end_reasons,
+    end_reason_ok = bool(end_reason) and end_reason not in invalid_end_reasons
+    reclassified = (None if end_reason_ok
+                    else _end_reason_reclassification(session, data_root))
+    add("end_reason", end_reason_ok or reclassified is not None,
         "The session has a non-technical end reason.",
-        observed=end_reason, expected=f"not one of {sorted(invalid_end_reasons)}")
+        observed=end_reason,
+        expected=f"not one of {sorted(invalid_end_reasons)}")
+    if reclassified is not None:
+        add("end_reason_reclassified", False,
+            "A participant-selected technical end reason was reclassified as "
+            "uncorroborated; the recorded evidence accompanies this warning.",
+            observed=reclassified, warning=True)
 
     browser_names = ["participant", "participant_raw", "model", "merged",
                      "client_timeline", "events"]

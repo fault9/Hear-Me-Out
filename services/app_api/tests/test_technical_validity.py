@@ -225,6 +225,35 @@ class TechnicalValidityTests(unittest.TestCase):
         session["files"] = {"participant_raw": path.name}
         return [{"start_ms": 0.0, "end_ms": assistant_end_s * 1000.0}]
 
+    def test_uncorroborated_technical_end_reason_can_be_reclassified(self):
+        # The button is the participant's report. Corroborated by the record
+        # it excludes; uncorroborated and reclassified with recorded evidence,
+        # it downgrades to a warning and the session stands.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session, timing = self._fixture(root)
+            session["study_id"] = 1
+            session["end_reason"] = "technical_problem"
+
+            unlisted = evaluate_technical_validity(session, root, timing)
+
+            review = root / "review" / "study1"
+            review.mkdir(parents=True)
+            (review / "end_reason_reclassifications.json").write_text(json.dumps({
+                session["session_id"]: {
+                    "recorded_at": "2026-08-13",
+                    "evidence": "full-length session, no failure codes, "
+                                "questionnaire contradicts the end reason",
+                }}))
+            listed = evaluate_technical_validity(session, root, timing)
+
+        self.assertEqual(unlisted["status"], "invalid")
+        self.assertIn("end_reason",
+                      {f["code"] for f in unlisted["failures"]})
+        self.assertEqual(listed["status"], "valid")
+        self.assertIn("end_reason_reclassified",
+                      {w["code"] for w in listed["warnings"]})
+
     def test_a_recording_missing_most_of_its_time_base_is_invalid(self):
         # P01010 held 106 s of audio for a 148 s conversation: the file plays
         # fast and nothing derived from it lines up with the assistant track.
