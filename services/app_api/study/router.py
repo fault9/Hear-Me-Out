@@ -364,7 +364,7 @@ def build_study_router() -> APIRouter:
     async def template():
         if yaml_io.TEMPLATE_PATH.exists():
             return FileResponse(str(yaml_io.TEMPLATE_PATH), media_type="application/x-yaml",
-                                filename="study.yaml")
+                                filename="pilot_study.yaml")
         raise HTTPException(status_code=404, detail="Template not found")
 
     @router.get("/studies", dependencies=[Depends(require_admin)])
