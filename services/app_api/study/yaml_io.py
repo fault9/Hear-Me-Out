@@ -17,7 +17,7 @@ from fastapi import HTTPException
 
 from .counterbalance import CounterbalanceError, validate_and_compile
 
-TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "pilot_study.yaml"
+TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "study.yaml"
 
 
 def study_to_dict(backend, study_id: int) -> dict:

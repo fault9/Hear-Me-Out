@@ -154,7 +154,7 @@ settings:
       require_manual_event_verification: true
       artifact: docs/study-artifacts/timing-validation/P02001_timing_validation.json
       artifact_sha256: 600ec7bce4a9bfd84c8bcd4bd1ed79de7fc43f1f1179d4841d097de5acaa5805
-  estimated_duration: 20-30 minutes
+  estimated_duration: ~30 minutes
   welcome_text: |
     Welcome
 
@@ -194,7 +194,7 @@ questionnaires:
       label: |
         ### Consent to participate
 
-        **Project:** Voice-Conditioned Grounding and Repair Study
+        **Project:** KTH Voice Study
 
         Please read the participant information before deciding whether to take part. By consenting,
         you confirm that:
@@ -202,12 +202,13 @@ questionnaires:
         - You have received information about the study and have had the opportunity to ask questions.
           You may keep a copy of the written information.
         - You consent to participate in this project.
-        - You consent to your personal data being handled within this project as described in the
-          participant information.
+        - You consent to text transcriptions of your conversations being analyzed by "automated third-party processing tools."
         - You understand that your speech will be recorded and may be digitally voice-converted or
           change between natural and converted speech during an interaction. You will not hear the
           converted version live, but you will hear two short excerpts of your converted speech
           afterward.
+        - All data will be stored on secure KTH servers.
+        - All sensitive and 
 
         ### Your data rights
 

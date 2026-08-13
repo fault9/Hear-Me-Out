@@ -315,7 +315,7 @@ class CounterbalanceTests(unittest.TestCase):
 class PilotTemplateTests(unittest.TestCase):
     @staticmethod
     def _protocol():
-        path = Path(__file__).resolve().parents[1] / "study" / "templates" / "pilot_study.yaml"
+        path = Path(__file__).resolve().parents[1] / "study" / "templates" / "study.yaml"
         return yaml.safe_load(path.read_text())
 
     def test_protocol_template_balances_scenarios_conditions_and_positions(self):
