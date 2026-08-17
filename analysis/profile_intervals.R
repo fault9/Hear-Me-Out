@@ -96,7 +96,8 @@ for (cc in CONTRASTS) {
   # of freedom. Matching it is what makes this a test of the estimator rather
   # than of two different models.
   mj <- glmmTMB(grounding ~ cond + stage + analytical_position + unit_identity +
-                  (1 | participant_id), data = joint, family = binomial)
+                  (1 | participant_id) + (1 | session_id),
+                data = joint, family = binomial)
   cj <- summary(mj)$coefficients$cond
   jrow <- cj[paste0("cond", cc$treated), , drop = FALSE]
   pj <- interval(mj, "profile", cc$treated)
