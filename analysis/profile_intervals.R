@@ -53,6 +53,8 @@ stack_units <- function(d) {
                stringsAsFactors = FALSE)
   }))
   out$unit_key <- paste(out$session_id, out$unit_index, sep = "|")
+  out$unit_identity <- factor(paste(out$scenario_title, out$unit_index, sep = "|"))
+  out$analytical_position <- factor(out$analytical_position)
   out$stage <- relevel(factor(out$stage), ref = "acknowledgement")
   out
 }
@@ -61,12 +63,15 @@ stacked <- stack_units(units)
 
 # Profile intervals fail loudly rather than silently falling back to Wald: a
 # reported profile interval has to be one.
-interval <- function(model, method) {
+interval <- function(model, method, level = NULL) {
   ci <- tryCatch(
     confint(model, method = method, parm = "beta_"),
     error = function(e) NULL, warning = function(w) NULL)
   if (is.null(ci)) return(c(NA_real_, NA_real_))
-  row <- grep("^cond", rownames(ci))
+  # With more than two conditions in the model, name the one wanted; with two,
+  # the single cond term is unambiguous.
+  row <- if (is.null(level)) grep("^cond", rownames(ci)) else
+    which(rownames(ci) == paste0("cond", level))
   if (!length(row)) return(c(NA_real_, NA_real_))
   as.numeric(ci[row[1], 1:2])
 }
@@ -74,6 +79,39 @@ interval <- function(model, method) {
 rows <- list()
 for (cc in CONTRASTS) {
   keep <- c(cc$reference, cc$treated)
+
+  # The manuscript fits ONE uptake model over every condition and reads the two
+  # contrasts off it; models.R fits a separate model per contrast on the two
+  # conditions involved. Both are fitted here, because the difference is a
+  # specification choice and not an artefact: the joint fit estimates stage,
+  # scenario, position and the participant variance from all 584 rows, the
+  # split fit from roughly half of them each time. Refitting with the reference
+  # level moved gives the contrast as a single coefficient, so the profile
+  # interval is the interval on the quantity of interest.
+  joint <- stacked
+  joint$cond <- relevel(factor(joint$condition), ref = cc$reference)
+  # unit_identity, not scenario title: the manuscript's design matrix carries a
+  # block for the specific critical unit (build_unit_design in
+  # confirmatory.py), which is finer than the scenario and costs more degrees
+  # of freedom. Matching it is what makes this a test of the estimator rather
+  # than of two different models.
+  mj <- glmmTMB(grounding ~ cond + stage + analytical_position + unit_identity +
+                  (1 | participant_id), data = joint, family = binomial)
+  cj <- summary(mj)$coefficients$cond
+  jrow <- cj[paste0("cond", cc$treated), , drop = FALSE]
+  pj <- interval(mj, "profile", cc$treated)
+  wj <- interval(mj, "wald", cc$treated)
+  rows[[length(rows) + 1]] <- data.frame(
+    contrast = sprintf("%s: %s", cc$id, cc$label),
+    outcome = "uptake (stacked)", spec = "joint_all_conditions",
+    model = "logistic GLMM",
+    estimate_or = exp(as.numeric(jrow[1, 1])),
+    profile_low = exp(pj[1]), profile_high = exp(pj[2]),
+    wald_low = exp(wj[1]), wald_high = exp(wj[2]),
+    p = as.numeric(jrow[1, 4]), n_obs = nrow(joint),
+    n_participants = length(unique(joint$participant_id)),
+    re_sd_participant = sqrt(as.numeric(VarCorr(mj)$cond$participant_id)),
+    stringsAsFactors = FALSE)
 
   for (spec in c("primary", "unit_re")) {
     sub <- stacked[stacked$condition %in% keep, ]
