@@ -106,9 +106,18 @@ cp -r "$HERE/output/"* "$RUN/"
 import collections, csv, sys
 with open(sys.argv[1], newline="", encoding="utf-8") as handle:
     rows = list(csv.DictReader(handle))
-counts = collections.Counter(r.get("coding_label_source") or "none" for r in rows)
-print("scenarios:  %d rows" % len(rows))
-print("labels:     " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+# scenarios.csv is the full attempt table - practice, superseded and invalid
+# attempts included - so label coverage is reported for the analysed subset
+# separately. Counting over the whole table reads as unlabelled analysis rows
+# when it is only ever excluded attempts that carry no label.
+included = [r for r in rows
+            if str(r.get("analysis_included", "")).lower() in ("1", "true")]
+fmt = lambda rs: ", ".join(
+    f"{k}={v}" for k, v in
+    sorted(collections.Counter(r.get("coding_label_source") or "none"
+                               for r in rs).items()))
+print("scenarios:  %d rows (%d analysed)" % (len(rows), len(included)))
+print("labels:     %s   [analysed: %s]" % (fmt(rows), fmt(included)))
 PY
 } > "$RUN/PROVENANCE.txt"
 
