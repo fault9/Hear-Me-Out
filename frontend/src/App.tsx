@@ -33,8 +33,7 @@ function App() {
   return (
     <div className="mx-auto flex max-w-6xl flex-col px-4 py-4 sm:px-8 sm:py-6 h-screen overflow-hidden">
       <header className="mb-4 flex items-center gap-4 sm:mb-5">
-        {/* Public assets resolve against the deploy base (the app is served
-            under /hmo), which Vite does not rewrite inside code. */}
+        {/* Public assets resolve against Vite's configured deployment base. */}
         <img src={`${import.meta.env.BASE_URL}KTH_Logo.jpg`} alt="KTH Logo" className="h-16 sm:h-20 flex-shrink-0" />
         <div className="flex flex-col gap-0.5 min-w-0 flex-1">
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Hear Me Out</h1>

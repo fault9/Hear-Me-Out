@@ -8,8 +8,8 @@ export default defineConfig(({ mode }) => {
   const personaplexUrl = env.VITE_PERSONAPLEX_URL || 'http://localhost:8000'
 
   return {
-    // Served under /hmo so the participant link ("/") never resolves to the
-    // tool UI, whichever APP_MODE the stack is running.
+    // The selected APP_MODE is served at the origin root. VITE_BASE remains
+    // configurable for local tooling, while the deployment build sets it to /.
     base: env.VITE_BASE || '/',
     plugins: [react()],
     resolve: {
