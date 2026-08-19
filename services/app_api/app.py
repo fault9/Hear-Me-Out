@@ -169,19 +169,6 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# Shown at "/" when the stack is not running the study, so a participant who
-# follows their link mid-audit gets a plain notice instead of the tool UI.
-STUDY_UNAVAILABLE_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Study unavailable</title></head>
-<body style="font-family:system-ui,sans-serif;max-width:34rem;margin:20vh auto;padding:0 1.5rem;line-height:1.6">
-<h1 style="font-size:1.25rem">The study is temporarily unavailable</h1>
-<p>Please try your link again later, or contact the researcher if this continues.</p>
-</body></html>
-"""
-
-
 class SPAStaticFiles(StaticFiles):
     """Static files with SPA fallback: unknown non-file paths (e.g. /admin) serve
     index.html so client-side routing and hard refreshes work. Real assets and the
@@ -1054,22 +1041,19 @@ def create_app():
     from ws_relay import register_chat_relay
     register_chat_relay(app)
 
-    # The HMO app lives under /hmo in every mode. Participants have the study
-    # link ("/"), and the stack is sometimes run in hmo mode for audit work —
-    # serving the tool UI at "/" would hand it to whoever arrived meanwhile.
-    hmo_static = REPO_ROOT / "frontend" / "dist"
-    if hmo_static.is_dir():
-        app.mount("/hmo", SPAStaticFiles(directory=str(hmo_static), html=True))
-        logger.info(f"HMO app served at /hmo from {hmo_static}")
+    @app.get("/hmo", include_in_schema=False)
+    @app.get("/hmo/{legacy_path:path}", include_in_schema=False)
+    async def redirect_legacy_hmo_url(request: Request, legacy_path: str = ""):
+        from fastapi.responses import RedirectResponse
 
-    if APP_MODE == "study":
-        # Serve static frontend files (with SPA fallback for client-side routes).
-        app.mount("/", SPAStaticFiles(directory=str(STATIC_PATH), html=True))
-    else:
-        @app.get("/{unused_path:path}", include_in_schema=False)
-        async def study_unavailable(unused_path: str):
-            return Response(STUDY_UNAVAILABLE_HTML, status_code=503,
-                            media_type="text/html")
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"/{query}", status_code=308)
+
+    # HMO and study are mutually exclusive launch modes. Whichever frontend was
+    # selected by APP_MODE is served at the normal origin URL (IP:port/) with
+    # SPA fallback for its client-side routes.
+    app.mount("/", SPAStaticFiles(directory=str(STATIC_PATH), html=True))
+    logger.info(f"{APP_MODE} app served at / from {STATIC_PATH}")
 
     return app
 

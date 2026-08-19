@@ -23,13 +23,12 @@ echo "=== Building $WS (APP_MODE=$APP_MODE) ==="
 # changed (catches newly-added deps on a git pull).
 if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ] || [ package.json -nt node_modules ]; then
   echo "Installing workspace dependencies..."
-  npm install
+  npm ci
 fi
 
-# The HMO app is always served under /hmo (never at "/", where participants
-# arrive), so its assets must be built with that base path.
+# Each selected app is served at the origin root in its own APP_MODE.
 if [ "$WS" = "frontend" ]; then
-  export VITE_BASE="/hmo/"
+  export VITE_BASE="/"
 fi
 
 npm run build -w "$WS"

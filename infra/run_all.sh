@@ -52,14 +52,24 @@ if [ -z "$APP_MODE" ]; then
 fi
 export APP_MODE
 
-# Frontend is the Vite build for the selected app; build it if missing.
+# Frontend is the Vite build for the selected app; build it if missing. Rebuild
+# an older HMO bundle that still points its assets at the retired /hmo/ prefix.
 if [ "$APP_MODE" = "study" ]; then
     FRONTEND_PATH="$HEARMEOUT_DIR/study-frontend/dist"
 else
     FRONTEND_PATH="$HEARMEOUT_DIR/frontend/dist"
 fi
+FRONTEND_NEEDS_BUILD=0
 if [ ! -d "$FRONTEND_PATH" ]; then
-    echo -e "  ${DIM}frontend${NC}   dist missing — building ($APP_MODE)..."
+    FRONTEND_NEEDS_BUILD=1
+elif [ ! -f "$FRONTEND_PATH/index.html" ]; then
+    FRONTEND_NEEDS_BUILD=1
+elif [ "$APP_MODE" = "hmo" ] && grep -q '/hmo/' "$FRONTEND_PATH/index.html" 2>/dev/null; then
+    echo -e "  ${DIM}frontend${NC}   old /hmo/ asset base detected — rebuilding..."
+    FRONTEND_NEEDS_BUILD=1
+fi
+if [ "$FRONTEND_NEEDS_BUILD" = "1" ]; then
+    echo -e "  ${DIM}frontend${NC}   building ($APP_MODE)..."
     APP_MODE="$APP_MODE" bash "$HEARMEOUT_DIR/infra/build-frontend.sh" || echo -e "  ${YELLOW}WARN:${NC} frontend build failed"
 fi
 # Fail clearly here rather than let app-api crash later on a missing static dir.
