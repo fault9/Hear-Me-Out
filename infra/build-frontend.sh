@@ -23,7 +23,7 @@ echo "=== Building $WS (APP_MODE=$APP_MODE) ==="
 # changed (catches newly-added deps on a git pull).
 if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ] || [ package.json -nt node_modules ]; then
   echo "Installing workspace dependencies..."
-  npm ci
+  npm install
 fi
 
 # Each selected app is served at the origin root in its own APP_MODE.
