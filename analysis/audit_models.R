@@ -3,27 +3,11 @@
 #   Rscript audit_models.R                      both complete script-mode runs
 #   Rscript audit_models.R a/audit_turns.csv …  named run tables instead
 #
-# The audit replays one frozen script per condition tag, cycling the tags so
-# condition is not confounded with time or server drift. Two complete runs of
-# the identical 120-replay plan were collected (2026-08-07 and 2026-08-08
-# evening); a third, aborted at 52 replays, is superseded and excluded, as is
-# the 9-arm voice-target probe, which answers a different question.
-#
-# WHY TWO PARTS. response_latency_ms is undefined exactly when the assistant
-# began speaking before the clip ended - blank latency and
-# premature_assistant_onset agree on 1,675 of 1,680 turns - so the missingness
-# is itself the premature-onset outcome. Modelling gap duration alone would
-# condition on the outcome: the conditioning set differs by condition, and the
-# turns it drops are systematically the fast ones. The effect is therefore
-# split into whether the assistant waited at all (every turn) and how long it
-# waited given that it did (the remainder), and the two are reported together.
-#
-# Playback-queue underruns are logged on every audit turn (median ~1,035 ms
-# cumulative). Assistant timing derives from scheduled packet boundaries in the
-# client playback timeline rather than from rendered audio, and within
-# condition no timing measure correlates with cumulative underrun in either
-# run (max |r| = 0.136 over 88 tests, signs reversing between runs), so the
-# underruns are a listening-side artifact and are not modelled here.
+# response_latency_ms is undefined exactly when the assistant began before the
+# clip ended, so the missingness is the premature-onset outcome. Modelling gap
+# duration alone would condition on it, and the turns it drops are the fast
+# ones, so the effect is split: whether the assistant waited, then how long it
+# waited given that it did. The aborted run and the 9-arm probe are excluded.
 
 suppressMessages({
   library(lme4)
@@ -40,8 +24,7 @@ if (length(missing)) {
   stop("run audit_postprocess first; no table at: ", paste(missing, collapse = ", "))
 }
 
-# Pooled here rather than by a separate preprocessing step, so the run label
-# always matches the directory the rows actually came from.
+# Pooled here so the run label always matches the directory rows came from.
 d <- do.call(rbind, lapply(paths, function(p) {
   rows <- read.csv(p, stringsAsFactors = FALSE)
   rows$audit_run <- basename(dirname(p))
@@ -57,11 +40,8 @@ d$premature      <- as_bool(d$premature_assistant_onset)
 d$manipulation   <- factor(d$manipulation)
 d$source_speaker <- factor(d$source_speaker)
 d$audit_run      <- factor(d$audit_run)
-# Turns share engine state within a replay, and the script positions are the
-# same utterances in every replay, so item variance belongs in a random
-# intercept rather than the residual. Run stays fixed: two levels cannot
-# support a variance estimate, and the runs differ enough to matter -
-# unconverted_m ran 53.8% premature in the first and 40.5% in the second.
+# Replay and script position carry random intercepts; run stays fixed, since
+# two levels cannot support a variance estimate.
 d$replay   <- factor(paste(d$audit_run, d$rep, sep = ":"))
 d$position <- factor(d$turn)
 
@@ -86,8 +66,7 @@ cat("\nodds ratios, 95% Wald CI\n")
 print(wald(m1))
 
 # ---- part 2: how long it waited, given it waited ----
-# Logged, so the condition terms read as multiplicative, matching how the
-# participant-study response gaps are reported.
+# Logged, so condition terms read as multiplicative.
 d$gap <- suppressWarnings(as.numeric(d$positive_response_gap_ms))
 w <- d[!d$premature & !is.na(d$gap) & d$gap > 0, ]
 cat("\n== part 2: response gap given the assistant waited (n =", nrow(w), ")\n")

@@ -1,32 +1,14 @@
-# The four confirmatory tests in glmmTMB and ordinal, as the reported fit.
+# The four confirmatory tests in glmmTMB and ordinal.
 #
 #   Rscript analysis/confirmatory_r.R <frames-dir> [out-dir]
 #
-# <frames-dir> is the frames/ directory inside a run archive from
-# analysis/run.sh. Writes confirmatory_r.csv (components and hypotheses) next
-# to it, or to out-dir.
-#
-# This reproduces the frozen analysis plan in established packages so the
-# manuscript can report standard software rather than a purpose-written
-# estimator. The specification is the plan's, transcribed from
-# voice-paper/analysis/confirmatory.py so the two are the same model and not
-# merely the same intention:
-#
-#   repair    repair_post_boundary ~ condition + scenario + position
-#             + (1 | participant); Poisson unless the prespecified LRT for
-#             alpha = 0 (50:50 chi2(0)/chi2(1) boundary mixture) rejects at .05
-#   uptake    attained ~ stage + condition + position + unit_identity
-#             + (1 | participant) + (1 | interaction), over unit x stage rows.
-#             The interaction intercept is not optional: condition varies at the
-#             interaction level, so without it the stage rows within a session
-#             count as independent and the condition standard error is too small
-#   H2a       the uptake model with the seven-point rating as a covariate
-#   H2b       cumulative-link mixed model, rating ~ repair_total + condition
-#             + scenario + position + (1 | participant)
-#
-# Reference levels are the plan's: stable_natural, acknowledgement, position 1.
-# Each hypothesis pairs two components and is intersection-union: its p is the
-# LARGER of the two, so both have to move. Holm adjusts across the four.
+# <frames-dir> is the frames/ directory in a run archive from analysis/run.sh.
+# Transcribed from the manuscript's estimator so the two fit the same model,
+# not merely the same intention: one uptake model over all unit x stage rows
+# with participant AND interaction intercepts (condition varies at interaction
+# level, so without the second the condition SE is too small), the frozen
+# Poisson/negative-binomial boundary LRT for counts, intersection-union at
+# hypothesis level, Holm over the four.
 
 suppressMessages({
   library(glmmTMB)
@@ -54,8 +36,7 @@ prep <- function(d, ref) {
   d
 }
 
-# Unit x stage rows. A gated stage carries no value and is unobservable rather
-# than a failure, so it is dropped and not read as zero.
+# A gated stage is unobservable, not a failure, so it is dropped.
 stacked <- do.call(rbind, lapply(STAGES, function(s) {
   keep <- !is.na(units[[s]]) & trimws(as.character(units[[s]])) != ""
   if (!any(keep)) return(NULL)
@@ -67,7 +48,7 @@ stacked <- do.call(rbind, lapply(STAGES, function(s) {
 stacked$stage <- relevel(factor(stacked$stage), ref = STAGE_REF)
 stacked$unit_identity <- factor(paste(stacked$scenario_title,
                                       stacked$unit_index, sep = "|"))
-# The seven-point ratings live at interaction level; H2a puts one on each row.
+# The seven-point ratings are interaction-level; H2a puts one on each row.
 for (col in c("post_trust", "post_outcome_confidence")) {
   stacked[[col]] <- scen[[col]][match(stacked$session_id, scen$session_id)]
 }
@@ -159,8 +140,7 @@ for (v in c("post_effort", "post_frustration")) {
 components <- do.call(rbind, rows)
 rownames(components) <- NULL
 
-# Intersection-union: a hypothesis needs both of its components, so its p is
-# the larger. Holm adjusts across the four, and the secondaries stay outside.
+# A hypothesis needs both components, so its p is the larger of the two.
 PAIRS <- list(H1a = c("h1a_repair", "h1a_uptake"),
               H1b = c("h1b_repair", "h1b_uptake"),
               H2a = c("h2a_trust", "h2a_outcome_confidence"),

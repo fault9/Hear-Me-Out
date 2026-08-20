@@ -2,24 +2,10 @@
 #
 #   Rscript analysis/profile_intervals.R <frames-dir> [out-dir]
 #
-# <frames-dir> is the frames/ directory inside a run archive written by
-# analysis/run.sh; out-dir defaults to it.
-#
-# WHY. The uptake models estimate the participant random-effect variance at
-# exactly zero on this data - every grounding fit reports a singular
-# convergence - and a Wald interval read off the curvature at a variance
-# boundary is the weakest inference in the results. Profile likelihood does not
-# assume the log-likelihood is quadratic there, so it is the interval to report
-# for those contrasts. The count models are well away from any boundary and
-# their Wald intervals are reported alongside as a check rather than replaced.
-#
-# WHAT IS FITTED. Two uptake specifications, because the manuscript and the
-# platform disagree about one term and the difference is prespecified:
-#   primary      stacked rows (unit x stage), stage fixed, participant intercept
-#   unit_re      the same plus a unit intercept - the planned sensitivity, since
-#                each unit contributes repeated stage observations
-# Both use the frozen covariate set (scenario title, analytical position), and
-# the count model is the same Poisson/negative-binomial rule as models.R.
+# The participant variance in the uptake models is estimated near zero, where a
+# Wald interval read off the curvature is least dependable. Fits the joint
+# specification the manuscript uses and the per-contrast one models.R uses,
+# with and without the unit intercept, and reports profile against Wald.
 
 suppressMessages({
   library(glmmTMB)
@@ -40,8 +26,7 @@ out_dir <- if (length(args) > 1) args[2] else frames
 units <- read.csv(file.path(frames, "unit_level.csv"), stringsAsFactors = FALSE)
 scen <- read.csv(file.path(frames, "scenario_level.csv"), stringsAsFactors = FALSE)
 
-# One row per observable unit-stage. A gated stage carries no value and is not
-# an observed failure, so it is dropped rather than read as zero.
+# A gated stage is unobservable, not a failure, so it is dropped.
 stack_units <- function(d) {
   out <- do.call(rbind, lapply(STAGES, function(s) {
     keep <- !is.na(d[[s]]) & trimws(as.character(d[[s]])) != ""
@@ -61,15 +46,13 @@ stack_units <- function(d) {
 
 stacked <- stack_units(units)
 
-# Profile intervals fail loudly rather than silently falling back to Wald: a
-# reported profile interval has to be one.
+# Returns NA rather than silently falling back to Wald.
 interval <- function(model, method, level = NULL) {
   ci <- tryCatch(
     confint(model, method = method, parm = "beta_"),
     error = function(e) NULL, warning = function(w) NULL)
   if (is.null(ci)) return(c(NA_real_, NA_real_))
-  # With more than two conditions in the model, name the one wanted; with two,
-  # the single cond term is unambiguous.
+  # Name the level wanted when the model holds more than two conditions.
   row <- if (is.null(level)) grep("^cond", rownames(ci)) else
     which(rownames(ci) == paste0("cond", level))
   if (!length(row)) return(c(NA_real_, NA_real_))
@@ -80,21 +63,11 @@ rows <- list()
 for (cc in CONTRASTS) {
   keep <- c(cc$reference, cc$treated)
 
-  # The manuscript fits ONE uptake model over every condition and reads the two
-  # contrasts off it; models.R fits a separate model per contrast on the two
-  # conditions involved. Both are fitted here, because the difference is a
-  # specification choice and not an artefact: the joint fit estimates stage,
-  # scenario, position and the participant variance from all 584 rows, the
-  # split fit from roughly half of them each time. Refitting with the reference
-  # level moved gives the contrast as a single coefficient, so the profile
-  # interval is the interval on the quantity of interest.
+  # Joint fit (the manuscript's) and split fit (models.R's). Moving the
+  # reference level gives each contrast as a single coefficient.
   joint <- stacked
   joint$cond <- relevel(factor(joint$condition), ref = cc$reference)
-  # unit_identity, not scenario title: the manuscript's design matrix carries a
-  # block for the specific critical unit (build_unit_design in
-  # confirmatory.py), which is finer than the scenario and costs more degrees
-  # of freedom. Matching it is what makes this a test of the estimator rather
-  # than of two different models.
+  # unit_identity, not scenario: finer, and what the manuscript matches.
   mj <- glmmTMB(grounding ~ cond + stage + analytical_position + unit_identity +
                   (1 | participant_id) + (1 | session_id),
                 data = joint, family = binomial)
